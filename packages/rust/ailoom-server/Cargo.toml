@@ -1,0 +1,23 @@
+[package]
+name = "ailoom-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ailoom-core = { path = "../crates/ailoom-core" }
+ailoom-fs = { path = "../crates/ailoom-fs" }
+ailoom-store = { path = "../crates/ailoom-store" }
+ailoom-stitch = { path = "../crates/ailoom-stitch" }
+axum = { version = "0.7", features = ["macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+clap = { version = "4", features = ["derive"] }
+urlencoding = "2"
+anyhow = "1"
+dirs = "5"
+nanoid = "0.4"
+time = { version = "0.3", features = ["formatting", "macros"] }

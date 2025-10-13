@@ -1,0 +1,13 @@
+[package]
+name = "generate_types"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+db = { path = "../db" }
+ts-rs = { workspace = true }
+
+[[bin]]
+name = "generate_types"
+path = "src/main.rs"

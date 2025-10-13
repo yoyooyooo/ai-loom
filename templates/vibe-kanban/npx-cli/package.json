@@ -1,0 +1,19 @@
+{
+  "name": "vibe-starter-cli",
+  "version": "0.1.0",
+  "description": "CLI package for vibe-starter",
+  "bin": {
+    "vibe-starter-cli": "./bin/cli.js"
+  },
+  "files": [
+    "bin/cli.js",
+    "dist/**"
+  ],
+  "keywords": [
+    "cli",
+    "rust",
+    "react",
+    "vibe-starter"
+  ],
+  "license": "MIT"
+}

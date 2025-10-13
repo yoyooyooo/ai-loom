@@ -1,0 +1,9 @@
+[workspace]
+members = [
+  "packages/rust/ailoom-server",
+  "packages/rust/crates/ailoom-core",
+  "packages/rust/crates/ailoom-fs",
+  "packages/rust/crates/ailoom-stitch",
+  "packages/rust/crates/ailoom-store",
+]
+resolver = "2"

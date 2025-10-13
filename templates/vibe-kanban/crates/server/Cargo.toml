@@ -1,0 +1,26 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+tower = { workspace = true }
+open = { workspace = true }
+chrono = { workspace = true }
+
+# Local dependencies
+db = { path = "../db" }
+services = { path = "../services" }
+local-deployment = { path = "../local-deployment" }
+
+[[bin]]
+name = "server"
+path = "src/main.rs"

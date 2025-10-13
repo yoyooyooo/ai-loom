@@ -1,0 +1,19 @@
+{
+  "name": "@ai-loom/server-linux-arm64-musl",
+  "version": "0.1.0",
+  "description": "AI Loom server binary for linux arm64 musl",
+  "license": "MIT",
+  "private": false,
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "libc": ["musl"],
+  "scripts": {
+    "postinstall": "chmod +x ./bin/ailoom-server || true"
+  },
+  "files": [
+    "bin/ailoom-server"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

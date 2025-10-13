@@ -1,0 +1,29 @@
+{
+  "name": "ai-loom",
+  "version": "0.1.0",
+  "description": "AI Loom CLI (bundles web UI) with platform-specific server binaries via optionalDependencies",
+  "license": "MIT",
+  "private": false,
+  "bin": {
+    "ai-loom": "bin/ai-loom.js"
+  },
+  "files": [
+    "bin",
+    "web"
+  ],
+  "optionalDependencies": {
+    "@ai-loom/server-darwin-arm64": "0.1.0",
+    "@ai-loom/server-darwin-x64": "0.1.0",
+    "@ai-loom/server-linux-x64-gnu": "0.1.0",
+    "@ai-loom/server-linux-x64-musl": "0.1.0",
+    "@ai-loom/server-linux-arm64-gnu": "0.1.0",
+    "@ai-loom/server-linux-arm64-musl": "0.1.0",
+    "@ai-loom/server-win32-x64-msvc": "0.1.0"
+  },
+  "dependencies": {
+    "detect-libc": "^2.0.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

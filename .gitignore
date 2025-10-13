@@ -1,0 +1,28 @@
+target
+node_modules
+dist
+
+# Local DB & runtime artifacts
+server.log
+server.pid
+server.out
+*.log
+
+# Release bundles
+release/
+
+# NPM pack artifacts (tgz) and staging
+packages/npm/**/*.tgz
+packages/npm/ai-loom/web/
+packages/npm/server-*/bin/
+
+# Temp test dirs
+tmp/
+
+# Docs specs (do not commit)
+docs/specs/
+
+# OS/editor noise
+.DS_Store
+.vscode/
+.ailoom/

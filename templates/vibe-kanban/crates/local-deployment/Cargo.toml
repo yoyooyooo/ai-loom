@@ -1,0 +1,10 @@
+[package]
+name = "local-deployment"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+db = { path = "../db" }
+services = { path = "../services" }
+anyhow = { workspace = true }
+tracing = { workspace = true }

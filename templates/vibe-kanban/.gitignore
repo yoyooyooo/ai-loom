@@ -1,0 +1,14 @@
+/target
+/frontend/dist
+/frontend/node_modules
+node_modules/
+*.log
+.env
+.DS_Store
+/npx-cli/dist
+*.db
+*.db-*
+.idea/
+.vscode/
+*.swp
+*.tmp

@@ -1,0 +1,95 @@
+name: Test and Build
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      sqlite:
+        image: keinos/sqlite3:latest
+        options: >-
+          --health-cmd "sqlite3 --version"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: rustfmt, clippy
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install SQLx CLI
+        run: cargo install sqlx-cli --features sqlite
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install frontend dependencies
+        run: cd frontend && npm install
+
+      - name: Run Rust tests
+        run: cargo test --workspace --verbose
+
+      - name: Run Rust clippy
+        run: cargo clippy --all --all-targets --all-features -- -D warnings
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Generate TypeScript types
+        run: npm run generate-types
+
+      - name: Check TypeScript types are up to date
+        run: |
+          if ! git diff --exit-code shared/types.ts; then
+            echo "❌ TypeScript types are out of date. Run 'npm run generate-types' and commit the changes."
+            exit 1
+          fi
+
+      - name: Run frontend checks
+        run: cd frontend && npm run check
+
+      - name: Build frontend
+        run: cd frontend && npm run build
+
+      - name: Build backend
+        run: cargo build --release
+
+  security-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/audit-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

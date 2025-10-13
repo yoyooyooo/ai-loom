@@ -1,0 +1,29 @@
+{
+  "name": "vibe-starter",
+  "version": "0.1.0",
+  "description": "Rust + React 全栈入门脚手架",
+  "private": true,
+  "bin": {
+    "vibe-starter": "npx-cli/bin/cli.js"
+  },
+  "files": [
+    "npx-cli/bin/cli.js",
+    "npx-cli/dist/**"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run backend:dev\" \"npm run frontend:dev\"",
+    "frontend:dev": "cd frontend && FRONTEND_PORT=3000 BACKEND_PORT=3333 npm run dev",
+    "backend:dev": "DATABASE_URL=sqlite://./vibe-starter.db BACKEND_PORT=3333 cargo watch -w crates -x 'run --bin server'",
+    "build": "bash local-build.sh",
+    "generate-types": "cargo run --bin generate_types",
+    "generate-types:check": "npm run generate-types && git diff --exit-code shared/types.ts",
+    "check": "cargo check && cd frontend && npm run check",
+    "test": "cargo test --workspace",
+    "lint": "cargo clippy --all --all-targets --all-features -- -D warnings",
+    "format": "cargo fmt --all",
+    "format:check": "cargo fmt --all -- --check"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
