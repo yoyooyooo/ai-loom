@@ -14,5 +14,5 @@ export default function SideAnnotationPanel() {
     setStartLine(Math.max(1, ann.startLine - Math.floor(safePage / 2)))
     setPendingJump({ startLine: ann.startLine, endLine: ann.endLine, id: ann.id, comment: ann.comment })
   }
-  return <AnnotationPanel onJump={onJump} />
+  return <AnnotationPanel onJump={onJump} currentFile={selectedPath} />
 }

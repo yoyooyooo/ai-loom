@@ -183,6 +183,18 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer({ pat
     }
   }, [])
 
+  // 面板尺寸变化时触发布局，避免在可调整分割下内容不可见
+  useEffect(() => {
+    const el = containerRef.current
+    const ed = editorRef.current
+    if (!el || !ed) return
+    const ro = new ResizeObserver(() => { try { ed.layout() } catch {} })
+    ro.observe(el)
+    // 初次也执行一次
+    setTimeout(() => { try { ed.layout() } catch {} }, 0)
+    return () => { ro.disconnect() }
+  }, [])
+
   useEffect(() => {
     if (!data || !editorRef.current) return
     // 正在拖拽选择时，延后应用初次内容，避免在拖拽过程中重置选择锚点
@@ -194,6 +206,7 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer({ pat
     model.setValue(data.content)
     monaco.editor.setModelLanguage(model, data.language || 'plaintext')
     editor.restoreViewState(st)
+    try { editor.layout() } catch {}
     endRef.current = data.endLine
     totalRef.current = data.totalLines
     initialStartRef.current = startLine

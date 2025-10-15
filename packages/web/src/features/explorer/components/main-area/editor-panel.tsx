@@ -5,9 +5,8 @@ import MonacoViewer, { ViewerHandle } from '@/components/editor/MonacoViewer'
 import MarkdownPreview, { PreviewHandle } from '@/components/editor/MarkdownPreview'
 import MonacoEditorFull, { EditorFullHandle } from '@/components/editor/MonacoEditorFull'
 import type { DirEntry } from '@/lib/api/types'
-import { createAnnotation, updateAnnotation, deleteAnnotation, exportAnnotations, importAnnotations, listAnnotations } from '@/features/explorer/api/annotations'
+import { createAnnotation, updateAnnotation, deleteAnnotation, listAnnotations } from '@/features/explorer/api/annotations'
 import { fetchFileFull, saveFile, fetchFileChunk } from '@/features/explorer/api/files'
-import { stitchGenerate } from '@/features/explorer/api/stitch'
 import type { Annotation, FileChunk } from '@/lib/api/types'
 import { useAppStore } from '@/stores/app'
 import { useExplorerStore } from '@/stores/explorer'
@@ -160,53 +159,12 @@ export default function EditorPanel() {
   const treeCached = qc.getQueryData(['tree', currentDir]) as DirEntry[] | undefined
 
   return (
-    <div className="flex-1 h-full flex flex-col overflow-hidden p-3">
-      <div className="shrink-0 flex items-center justify-between mb-2">
-        <div className="text-sm opacity-70">批注操作</div>
-        <div className="flex items-center gap-2">
-          <button className="px-2 py-1 text-xs border rounded" onClick={async ()=>{
-            const bundle = await exportAnnotations()
-            const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' })
-            const url = URL.createObjectURL(blob)
-            const a = document.createElement('a')
-            a.href = url
-            a.download = 'ailoom-annotations.json'
-            a.click()
-            URL.revokeObjectURL(url)
-          }}>导出</button>
-          <button className="px-2 py-1 text-xs border rounded" onClick={async ()=>{
-            try {
-              const r = await stitchGenerate({ templateId: 'concise', maxChars: 6000 })
-              await navigator.clipboard.writeText(r.prompt)
-              alert('已生成并复制到剪贴板')
-            } catch (e:any) {
-              alert('生成失败：' + (e?.message||''))
-            }
-          }}>生成并复制</button>
-          <label className="px-2 py-1 text-xs border rounded cursor-pointer">
-            导入
-            <input type="file" className="hidden" accept="application/json" onChange={async (e)=>{
-              const file = e.target.files?.[0]
-              if (!file) return
-              const text = await file.text()
-              try {
-                const payload = JSON.parse(text)
-                await importAnnotations(payload)
-                await qc.invalidateQueries({ queryKey: ['annotations'] })
-                alert('导入完成')
-              } catch(err) {
-                alert('导入失败: ' + (err as Error).message)
-              } finally {
-                e.currentTarget.value = ''
-              }
-            }} />
-          </label>
-        </div>
-      </div>
+    <div className="flex-1 h-full flex flex-col overflow-hidden">
+      {/* 批注操作块移除：导出/导入下线，“生成并复制”移动到批注面板标题行 */}
       {!selectedPath && <div className="text-sm opacity-70">选择左侧的文件以查看内容</div>}
       {selectedPath && (
         <>
-          <div className="shrink-0 flex items-center justify-between text-sm">
+          <div className="shrink-0 flex items-center justify-between text-sm px-2 py-1">
             <div>
               <span className="opacity-70 mr-2">文件:</span>
               <code className="px-1.5 py-0.5 bg-black/5 rounded">{selectedPath}</code>
