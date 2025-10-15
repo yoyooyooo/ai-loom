@@ -35,13 +35,14 @@
 - `just web-install` / `just web-build` / `just web-dev VITE_API_BASE=...`
 - `just server-build` / `just server-run [ROOT . WEB_DIST=packages/web/dist]`
 - `just server-dev [PORT=63000]` / `just dev`
+- 代码格式化：`just fmt`（一键 Rust + Web）/ `just fmt:check`，或分别使用 `just fmt-rust` / `just fmt-web`
 - API 调试：`just api-tree PORT=xxxx DIR=.`, `just api-file PORT=xxxx FILE=README.md START=1 MAX=2000`
 - 打包（Release 二进制 + 前端）：`just publish`（输出 `release/ailoom-<os>-<arch>`）
 
 ## 编码规范
 - Rust：`rustfmt`（4 空格）；类型 `PascalCase`，函数/模块 `snake_case`，常量 `SCREAMING_SNAKE_CASE`。
   - 开发建议：`cargo fmt && cargo clippy -W warnings`
-- Web（TypeScript/React）：2 空格缩进；组件 `PascalCase`；模块/文件小写短名（如 `app.tsx`）。
+- Web（TypeScript/React）：2 空格缩进；组件 `PascalCase`；模块/文件小写短名（如 `app.tsx`）。已启用 Prettier（单引号、无分号、printWidth=100），运行 `just fmt-web`。
 - shadcn/ui（强制）：
   - 初始化：`npx shadcn@canary init -c packages/web`
   - 添加组件：`npx shadcn@canary add <component> -c packages/web`

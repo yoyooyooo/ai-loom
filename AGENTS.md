@@ -23,7 +23,7 @@
 
 ## 编码风格与命名
 - Rust：遵循 `rustfmt`（4 空格）；类型 `PascalCase`，函数/模块 `snake_case`，常量 `SCREAMING_SNAKE_CASE`。建议本地运行 `cargo fmt && cargo clippy -W warnings`。
-- Web（TypeScript/React）：2 空格缩进；组件导出的标识符使用 `PascalCase`；文件与目录一律使用 `kebab-case`（a-b-c），例如：`explorer-page.tsx`、`file-tree-panel.tsx`、`annotation-toolbar.tsx`。暂未启用 ESLint/Prettier，请保持现有风格。
+- Web（TypeScript/React）：2 空格缩进；组件导出的标识符使用 `PascalCase`；文件与目录一律使用 `kebab-case`（a-b-c），例如：`explorer-page.tsx`、`file-tree-panel.tsx`、`annotation-toolbar.tsx`。已启用 Prettier（见 `packages/web/.prettierrc.json`；约定：单引号、无分号、printWidth=100）。
 
 ## 前端架构与目录规范（重要）
 - 完整规范参见：`docs/frontend-architecture.md`（强制遵循）。

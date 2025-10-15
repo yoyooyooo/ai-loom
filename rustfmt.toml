@@ -1,0 +1,3 @@
+# Rustfmt 配置（遵循项目指南：4 空格缩进）
+hard_tabs = false
+

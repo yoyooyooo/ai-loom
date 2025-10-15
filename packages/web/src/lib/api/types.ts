@@ -29,7 +29,7 @@ export type Annotation = {
   postContextHash?: string
   fileDigest?: string
   tags?: string[]
-  priority?: 'P0'|'P1'|'P2'
+  priority?: 'P0' | 'P1' | 'P2'
   createdAt: string
   updatedAt: string
 }
@@ -46,7 +46,7 @@ export type CreateAnnotation = {
   postContextHash?: string
   fileDigest?: string
   tags?: string[]
-  priority?: 'P0'|'P1'|'P2'
+  priority?: 'P0' | 'P1' | 'P2'
 }
 
 export type UpdateAnnotation = {
@@ -61,5 +61,5 @@ export type UpdateAnnotation = {
   postContextHash?: string
   fileDigest?: string
   tags?: string[]
-  priority?: 'P0'|'P1'|'P2'
+  priority?: 'P0' | 'P1' | 'P2'
 }

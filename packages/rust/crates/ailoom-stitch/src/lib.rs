@@ -1,25 +1,53 @@
 use ailoom_core::Annotation;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TemplateId { Concise, Detailed }
+pub enum TemplateId {
+    Concise,
+    Detailed,
+}
 
 impl TemplateId {
     pub fn parse(s: &str) -> Self {
-        match s.to_ascii_lowercase().as_str() { "detailed" => Self::Detailed, _ => Self::Concise }
+        match s.to_ascii_lowercase().as_str() {
+            "detailed" => Self::Detailed,
+            _ => Self::Concise,
+        }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct StitchStats { pub total: usize, pub used: usize, pub truncated: bool, pub chars: usize }
+pub struct StitchStats {
+    pub total: usize,
+    pub used: usize,
+    pub truncated: bool,
+    pub chars: usize,
+}
 
-pub struct StitchResult { pub prompt: String, pub stats: StitchStats }
+pub struct StitchResult {
+    pub prompt: String,
+    pub stats: StitchStats,
+}
 
-pub fn generate_prompt(template: TemplateId, max_chars: usize, mut anns: Vec<Annotation>) -> StitchResult {
+pub fn generate_prompt(
+    template: TemplateId,
+    max_chars: usize,
+    mut anns: Vec<Annotation>,
+) -> StitchResult {
     // sort: priority -> file_path -> start_line
-    fn prio_rank(p: &Option<String>) -> i32 { match p.as_deref() { Some("P0") => 0, Some("P1") => 1, Some("P2") => 2, _ => 3 } }
-    anns.sort_by(|a,b| prio_rank(&a.priority).cmp(&prio_rank(&b.priority))
-        .then(a.file_path.cmp(&b.file_path))
-        .then(a.start_line.cmp(&b.start_line)));
+    fn prio_rank(p: &Option<String>) -> i32 {
+        match p.as_deref() {
+            Some("P0") => 0,
+            Some("P1") => 1,
+            Some("P2") => 2,
+            _ => 3,
+        }
+    }
+    anns.sort_by(|a, b| {
+        prio_rank(&a.priority)
+            .cmp(&prio_rank(&b.priority))
+            .then(a.file_path.cmp(&b.file_path))
+            .then(a.start_line.cmp(&b.start_line))
+    });
 
     let mut out = String::new();
     match template {
@@ -46,7 +74,11 @@ pub fn generate_prompt(template: TemplateId, max_chars: usize, mut anns: Vec<Ann
         };
 
         // 若片段内含有三反引号，则用四反引号包裹，避免围栏冲突
-        let fence = if snippet.contains("```") { "````" } else { "```" };
+        let fence = if snippet.contains("```") {
+            "````"
+        } else {
+            "```"
+        };
 
         let item = match template {
             TemplateId::Concise => format!(
@@ -66,10 +98,21 @@ pub fn generate_prompt(template: TemplateId, max_chars: usize, mut anns: Vec<Ann
             ),
         };
         // budget check
-        if out.len() + item.len() > max_chars && used > 0 { break; }
-        if out.len() + item.len() > max_chars { // single item larger than budget: hard cut
+        if out.len() + item.len() > max_chars && used > 0 {
+            break;
+        }
+        if out.len() + item.len() > max_chars {
+            // single item larger than budget: hard cut
             let remain = max_chars.saturating_sub(out.len());
-            out.push_str(&item[..item.char_indices().take_while(|(i,_)| *i < remain).map(|(_,c)| c).collect::<String>().len().min(item.len())]);
+            out.push_str(
+                &item[..item
+                    .char_indices()
+                    .take_while(|(i, _)| *i < remain)
+                    .map(|(_, c)| c)
+                    .collect::<String>()
+                    .len()
+                    .min(item.len())],
+            );
             used += 1;
             break;
         }
@@ -78,10 +121,20 @@ pub fn generate_prompt(template: TemplateId, max_chars: usize, mut anns: Vec<Ann
     }
     let truncated = used < anns.len();
     let chars = out.len();
-    StitchResult { prompt: out, stats: StitchStats { total: anns.len(), used, truncated, chars } }
+    StitchResult {
+        prompt: out,
+        stats: StitchStats {
+            total: anns.len(),
+            used,
+            truncated,
+            chars,
+        },
+    }
 }
 
-pub fn version() -> &'static str { "0.1.0" }
+pub fn version() -> &'static str {
+    "0.1.0"
+}
 
 // --- helpers: middle-ellipsis collapse ---
 

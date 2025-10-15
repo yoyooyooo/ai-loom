@@ -20,7 +20,7 @@ struct Args {
     #[arg(long, default_value = ".")]
     root: PathBuf,
     /// Static web dist directory (will be served at "/")
-    #[arg(long, default_value = "packages/web/dist")] 
+    #[arg(long, default_value = "packages/web/dist")]
     web_dist: PathBuf,
     /// Disable serving static files (API only; for dev with Vite)
     #[arg(long, default_value_t = false)]
@@ -110,9 +110,7 @@ async fn main() -> anyhow::Result<()> {
 
     // static files (optional)
     let app = if args.no_static {
-        Router::new()
-            .merge(api)
-            .layer(TraceLayer::new_for_http())
+        Router::new().merge(api).layer(TraceLayer::new_for_http())
     } else {
         Router::new()
             .nest_service("/", ServeDir::new(args.web_dist))

@@ -11,7 +11,10 @@ type Props = {
   onSave?: (value: string) => void
 }
 
-const MonacoEditorFull = forwardRef<EditorFullHandle, Props>(function MonacoEditorFull({ content, language, editable, onSave }, ref) {
+const MonacoEditorFull = forwardRef<EditorFullHandle, Props>(function MonacoEditorFull(
+  { content, language, editable, onSave },
+  ref
+) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const modelRef = useRef<monaco.editor.ITextModel | null>(null)
@@ -29,19 +32,23 @@ const MonacoEditorFull = forwardRef<EditorFullHandle, Props>(function MonacoEdit
         minimap: { enabled: false },
         scrollBeyondLastLine: false,
         lineNumbers: 'on',
-        wordWrap: 'off',
+        wordWrap: 'off'
       })
       // 捕获 Ctrl/⌘+S，并阻止浏览器默认行为
       editorRef.current.onKeyDown((e) => {
         if ((e.ctrlKey || e.metaKey) && e.keyCode === monaco.KeyCode.KeyS) {
-          try { (e as any).stopPropagation?.() } catch {}
+          try {
+            ;(e as any).stopPropagation?.()
+          } catch {}
           e.preventDefault()
           if (savingRef.current) return
           savingRef.current = true
           const val = modelRef.current?.getValue() ?? ''
           onSave?.(val)
           // 简单节流，避免重复触发（onKeyDown + 可能的浏览器层快捷）
-          setTimeout(()=>{ savingRef.current = false }, 300)
+          setTimeout(() => {
+            savingRef.current = false
+          }, 300)
         }
       })
     }
@@ -57,7 +64,9 @@ const MonacoEditorFull = forwardRef<EditorFullHandle, Props>(function MonacoEdit
 
   useImperativeHandle(ref, () => ({
     getValue: () => modelRef.current?.getValue() ?? '',
-    setValue: (v: string) => { modelRef.current?.setValue(v) }
+    setValue: (v: string) => {
+      modelRef.current?.setValue(v)
+    }
   }))
 
   return (

@@ -10,7 +10,12 @@ export type Selection = {
 
 export type ChunkInfo = { start: number; end: number; total: number } | null
 
-export type PendingJump = { startLine: number; endLine: number; id?: string; comment?: string } | null
+export type PendingJump = {
+  startLine: number
+  endLine: number
+  id?: string
+  comment?: string
+} | null
 
 export type FullEdit = { content: string; language: string; digest: string } | null
 
@@ -61,6 +66,15 @@ export const useExplorerStore = create<ExplorerState>()((set, get) => ({
     set({ pendingJump: null })
     return pj
   },
-  resetOnPathChange: () => set({ startLine: 1, selection: null, showToolbar: false, full: null, chunkInfo: null, comment: '', activeAnnId: null, pendingJump: null }),
+  resetOnPathChange: () =>
+    set({
+      startLine: 1,
+      selection: null,
+      showToolbar: false,
+      full: null,
+      chunkInfo: null,
+      comment: '',
+      activeAnnId: null,
+      pendingJump: null
+    })
 }))
-

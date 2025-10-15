@@ -8,14 +8,18 @@ import tailwindcss from '@tailwindcss/vite'
 const monaco = (monacoEditorPlugin as any).default ?? (monacoEditorPlugin as any)
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), monaco({
-    languageWorkers: ['editorWorkerService','typescript','json','css','html'],
-  })],
+  plugins: [
+    react(),
+    tailwindcss(),
+    monaco({
+      languageWorkers: ['editorWorkerService', 'typescript', 'json', 'css', 'html']
+    })
+  ],
   server: { port: 5173 },
   build: { outDir: 'dist', sourcemap: false },
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'),
-    },
-  },
+      '@': path.resolve(__dirname, './src')
+    }
+  }
 })

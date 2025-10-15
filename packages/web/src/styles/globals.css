@@ -1,5 +1,5 @@
-@import "tailwindcss";
-@import "tw-animate-css";
+@import 'tailwindcss';
+@import 'tw-animate-css';
 @plugin "@tailwindcss/typography";
 
 @custom-variant dark (&:is(.dark *));
@@ -37,32 +37,55 @@
   --sidebar-accent: oklch(0.967 0.001 286.375);
   --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
   --sidebar-border: oklch(0.92 0.004 286.32);
-  --sidebar-ring: oklch(0.705 0.015 286.067)
+  --sidebar-ring: oklch(0.705 0.015 286.067);
 }
 
-html, body, #root { height: 100%; }
-html, body { overflow: hidden; }
+html,
+body,
+#root {
+  height: 100%;
+}
+html,
+body {
+  overflow: hidden;
+}
 
 /* VSCode 风格：侧栏顶部循环进度指示器 */
 @keyframes ailoom-indeterminate {
-  0% { transform: translateX(-35%); opacity: .0; }
-  10% { opacity: 1; }
-  50% { transform: translateX(55%); opacity: 1; }
-  90% { opacity: 1; }
-  100% { transform: translateX(135%); opacity: .0; }
+  0% {
+    transform: translateX(-35%);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  50% {
+    transform: translateX(55%);
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(135%);
+    opacity: 0;
+  }
 }
 
 /* Monaco decorations */
-.monaco-editor .ailoom-anno { background: rgba(255,214,102,.18); }
-.monaco-editor .ailoom-anno-gutter { border-left: 3px solid #FFD666; }
+.monaco-editor .ailoom-anno {
+  background: rgba(255, 214, 102, 0.18);
+}
+.monaco-editor .ailoom-anno-gutter {
+  border-left: 3px solid #ffd666;
+}
 
 /* 预览模式下的批注高亮（与 Monaco 内联高亮一致） */
 .ailoom-anno-inline {
-  background-color: rgba(255,214,102,0.35);
+  background-color: rgba(255, 214, 102, 0.35);
   border-radius: 2px;
   cursor: pointer;
 }
-
 
 /* Map CSS variables to Tailwind v4 color tokens */
 @theme inline {

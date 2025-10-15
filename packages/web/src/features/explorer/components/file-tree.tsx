@@ -23,11 +23,13 @@ export default function FileTree({ root, onOpenFile, selectedPath }: Props) {
       const raw = localStorage.getItem(storageKey)
       if (!raw) return new Set()
       return new Set(JSON.parse(raw) as string[])
-    } catch { }
+    } catch {}
     return new Set()
   }
   function saveExpandedSet(setx: Set<string>) {
-    try { localStorage.setItem(storageKey, JSON.stringify(Array.from(setx))) } catch {}
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(Array.from(setx)))
+    } catch {}
   }
 
   useEffect(() => {
@@ -35,9 +37,7 @@ export default function FileTree({ root, onOpenFile, selectedPath }: Props) {
     ;(async () => {
       if (expandedRef.current.size === 0) {
         const top = await fetchTree(root)
-        const topList: Node[] = top
-          .sort(compareEntry)
-          .map(c => ({ ...c, depth: 0 }))
+        const topList: Node[] = top.sort(compareEntry).map((c) => ({ ...c, depth: 0 }))
         setNodes(topList)
         return
       }
@@ -51,13 +51,13 @@ export default function FileTree({ root, onOpenFile, selectedPath }: Props) {
       queryKey: ['tree', root, dir],
       queryFn: () => fetchTree(dir),
       staleTime: TREE_CACHE_STALE_MS,
-      gcTime: TREE_CACHE_GC_MS,
+      gcTime: TREE_CACHE_GC_MS
     })
     const list: Node[] = children
-      .filter(c => true)
+      .filter((c) => true)
       .sort(compareEntry)
-      .map(c => ({ ...c, depth }))
-    setNodes(prev => {
+      .map((c) => ({ ...c, depth }))
+    setNodes((prev) => {
       if (insertIndex == null) return list
       const next = prev.slice()
       next.splice(insertIndex, 0, ...list)
@@ -65,19 +65,26 @@ export default function FileTree({ root, onOpenFile, selectedPath }: Props) {
     })
   }
 
-  async function buildNodes(dir: string, depth: number, expandSet: Set<string>, defaultDepth: number): Promise<Node[]> {
+  async function buildNodes(
+    dir: string,
+    depth: number,
+    expandSet: Set<string>,
+    defaultDepth: number
+  ): Promise<Node[]> {
     const children = await qc.ensureQueryData({
       queryKey: ['tree', root, dir],
       queryFn: () => fetchTree(dir),
       staleTime: TREE_CACHE_STALE_MS,
-      gcTime: TREE_CACHE_GC_MS,
+      gcTime: TREE_CACHE_GC_MS
     })
-    const sorted = children
-      .sort(compareEntry)
+    const sorted = children.sort(compareEntry)
     const out: Node[] = []
     for (const c of sorted) {
       const isDir = c.type === 'dir' || c.type === 'Dir'
-      if (!isDir) { out.push({ ...c, depth }) ; continue }
+      if (!isDir) {
+        out.push({ ...c, depth })
+        continue
+      }
       const expanded = expandSet.has(c.path) || (defaultDepth > 0 && depth < defaultDepth)
       out.push({ ...c, depth, expanded })
       if (expanded) {
@@ -90,46 +97,51 @@ export default function FileTree({ root, onOpenFile, selectedPath }: Props) {
 
   async function expandPath(path: string) {
     const children = await fetchTree(path)
-    setNodes(prev => {
-      const idx = prev.findIndex(nn => nn.path === path)
+    setNodes((prev) => {
+      const idx = prev.findIndex((nn) => nn.path === path)
       if (idx < 0) return prev
       const n = prev[idx]
       const isDir = n.type === 'dir' || n.type === 'Dir'
       if (!isDir || n.expanded) return prev
       const depth = n.depth + 1
-      const list: Node[] = children
-        .sort(compareEntry)
-        .map(c => ({ ...c, depth }))
+      const list: Node[] = children.sort(compareEntry).map((c) => ({ ...c, depth }))
       const next = prev.slice()
       next[idx] = { ...n, expanded: true }
-      next.splice(idx+1, 0, ...list)
+      next.splice(idx + 1, 0, ...list)
       return next
     })
   }
 
-  const findIndexByPath = (p: string) => nodes.findIndex(nn => nn.path === p)
+  const findIndexByPath = (p: string) => nodes.findIndex((nn) => nn.path === p)
 
   const toggle = async (idx: number) => {
     const n = nodes[idx]
     if (!n) return
     const isDir = n.type === 'dir' || n.type === 'Dir'
-    if (!isDir) { onOpenFile(n.path); return }
+    if (!isDir) {
+      onOpenFile(n.path)
+      return
+    }
     if (n.expanded) {
       const depth = n.depth
       let end = idx + 1
       while (end < nodes.length && nodes[end].depth > depth) end++
-      const removed = nodes.slice(idx+1, end)
+      const removed = nodes.slice(idx + 1, end)
       const next = nodes.slice()
-      next.splice(idx+1, end - (idx+1))
+      next.splice(idx + 1, end - (idx + 1))
       next[idx] = { ...n, expanded: false }
       setNodes(next)
       const setx = expandedRef.current
       setx.delete(n.path)
-      for (const r of removed) { setx.delete(r.path) }
+      for (const r of removed) {
+        setx.delete(r.path)
+      }
       saveExpandedSet(setx)
     } else {
       await expandPath(n.path)
-      const setx = expandedRef.current; setx.add(n.path); saveExpandedSet(setx)
+      const setx = expandedRef.current
+      setx.add(n.path)
+      saveExpandedSet(setx)
     }
   }
   return (
@@ -138,17 +150,29 @@ export default function FileTree({ root, onOpenFile, selectedPath }: Props) {
         {nodes.map((n, i) => {
           const isDir = n.type === 'dir' || n.type === 'Dir'
           return (
-            <li key={n.path} className={`flex items-center gap-1 rounded px-1 ${selectedPath === n.path ? 'bg-black/10' : 'hover:bg-black/5'}`}>
-              <button className="text-left flex-1 flex items-center gap-1 py-1 w-full" onClick={()=>toggle(i)}>
+            <li
+              key={n.path}
+              className={`flex items-center gap-1 rounded px-1 ${selectedPath === n.path ? 'bg-black/10' : 'hover:bg-black/5'}`}
+            >
+              <button
+                className="text-left flex-1 flex items-center gap-1 py-1 w-full"
+                onClick={() => toggle(i)}
+              >
                 <span className="inline-block" style={{ width: n.depth * 12 }} />
                 {isDir ? (
                   <span className="inline-block w-4 text-center">{n.expanded ? '▾' : '▸'}</span>
                 ) : (
                   <span className="inline-block w-4" />
                 )}
-                <span className={`${isDir ? 'font-medium' : ''} ${selectedPath === n.path ? 'text-blue-600' : ''}`}>{n.name}</span>
+                <span
+                  className={`${isDir ? 'font-medium' : ''} ${selectedPath === n.path ? 'text-blue-600' : ''}`}
+                >
+                  {n.name}
+                </span>
               </button>
-              {n.size != null && !isDir && <span className="text-xs opacity-50">{formatSize(n.size)}</span>}
+              {n.size != null && !isDir && (
+                <span className="text-xs opacity-50">{formatSize(n.size)}</span>
+              )}
             </li>
           )
         })}
@@ -159,8 +183,8 @@ export default function FileTree({ root, onOpenFile, selectedPath }: Props) {
 
 function formatSize(n: number) {
   if (n < 1024) return n + 'B'
-  if (n < 1024*1024) return (n/1024).toFixed(1)+'KB'
-  return (n/1024/1024).toFixed(1)+'MB'
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + 'KB'
+  return (n / 1024 / 1024).toFixed(1) + 'MB'
 }
 
 function isDirEntry(e: DirEntry) {

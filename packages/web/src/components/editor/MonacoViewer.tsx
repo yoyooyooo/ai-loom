@@ -16,17 +16,45 @@ type Props = {
   maxLines: number
   fetchChunk: (args: { path: string; startLine: number; maxLines: number }) => Promise<FileChunk>
   onLoaded?: (chunk: FileChunk) => void
-  onSelectionChange?: (sel: { startLine: number; endLine: number; startColumn?: number; endColumn?: number; selectedText: string } | null) => void
-  marks?: { id?: string; startLine: number; endLine: number; startColumn?: number; endColumn?: number }[]
-  onOpenMark?: (mark: { id?: string; startLine: number; endLine: number; startColumn?: number; endColumn?: number }) => void
+  onSelectionChange?: (
+    sel: {
+      startLine: number
+      endLine: number
+      startColumn?: number
+      endColumn?: number
+      selectedText: string
+    } | null
+  ) => void
+  marks?: {
+    id?: string
+    startLine: number
+    endLine: number
+    startColumn?: number
+    endColumn?: number
+  }[]
+  onOpenMark?: (mark: {
+    id?: string
+    startLine: number
+    endLine: number
+    startColumn?: number
+    endColumn?: number
+  }) => void
   wrap?: boolean
 }
 
-const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer({ path, startLine, maxLines, fetchChunk, onLoaded, onSelectionChange, marks, onOpenMark, wrap }, fref) {
+const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
+  { path, startLine, maxLines, fetchChunk, onLoaded, onSelectionChange, marks, onOpenMark, wrap },
+  fref
+) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const decoRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null)
-  const decoMapRef = useRef<Map<string, { id?: string; startLine: number; endLine: number; startColumn?: number; endColumn?: number }>>(new Map())
+  const decoMapRef = useRef<
+    Map<
+      string,
+      { id?: string; startLine: number; endLine: number; startColumn?: number; endColumn?: number }
+    >
+  >(new Map())
   const endRef = useRef(0)
   const totalRef = useRef(0)
   const loadingMoreRef = useRef(false)
@@ -42,7 +70,7 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer({ pat
     queryFn: () => fetchChunk({ path, startLine: safeStart, maxLines: safeMax }),
     staleTime: 0,
     refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
+    refetchOnReconnect: false
   })
 
   const draggingRef = useRef(false)
@@ -50,9 +78,15 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer({ pat
   const onOpenMarkRef = useRef<typeof onOpenMark | undefined>(onOpenMark)
   const onLoadedRef = useRef<typeof onLoaded | undefined>(onLoaded)
 
-  useEffect(() => { onSelRef.current = onSelectionChange }, [onSelectionChange])
-  useEffect(() => { onOpenMarkRef.current = onOpenMark }, [onOpenMark])
-  useEffect(() => { onLoadedRef.current = onLoaded }, [onLoaded])
+  useEffect(() => {
+    onSelRef.current = onSelectionChange
+  }, [onSelectionChange])
+  useEffect(() => {
+    onOpenMarkRef.current = onOpenMark
+  }, [onOpenMark])
+  useEffect(() => {
+    onLoadedRef.current = onLoaded
+  }, [onLoaded])
   const suppressSelectionOnceRef = useRef(false)
   const suppressSelectionUntilRef = useRef(0)
   const blockHitRef = useRef(false)
@@ -74,7 +108,7 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer({ pat
         selectionHighlight: false,
         matchBrackets: 'never',
         bracketPairColorization: { enabled: false } as any,
-        guides: { bracketPairs: false } as any,
+        guides: { bracketPairs: false } as any
       })
       // 在按下时命中注解则拦截默认行为，只弹出浮层且不改变光标
       editorRef.current.onMouseDown((e) => {
@@ -87,18 +121,24 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer({ pat
           const tgt = be ? (ed as any).getTargetAtClientPoint?.(be.clientX, be.clientY) : null
           const pos = e?.target?.position || tgt?.position || ed.getPosition()
           if (pos) {
-            const hits = model.getDecorationsInRange(new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column)) || []
+            const hits =
+              model.getDecorationsInRange(
+                new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column)
+              ) || []
             for (const d of hits) {
               const m = (decoMapRef.current as any)?.get?.(d.id)
               if (m) {
-                try { (e as any)?.event?.preventDefault?.(); (e as any)?.event?.stopPropagation?.() } catch {}
+                try {
+                  ;(e as any)?.event?.preventDefault?.()
+                  ;(e as any)?.event?.stopPropagation?.()
+                } catch {}
                 suppressSelectionOnceRef.current = true
                 suppressSelectionUntilRef.current = Date.now() + 1000
                 blockHitRef.current = true
                 draggingRef.current = false
-            onOpenMarkRef.current?.(m)
-            return
-          }
+                onOpenMarkRef.current?.(m)
+                return
+              }
             }
           }
         }
@@ -108,7 +148,10 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer({ pat
         const ed = editorRef.current!
         const model = ed.getModel()
         if (blockHitRef.current) {
-          try { (e as any)?.event?.preventDefault?.(); (e as any)?.event?.stopPropagation?.() } catch {}
+          try {
+            ;(e as any)?.event?.preventDefault?.()
+            ;(e as any)?.event?.stopPropagation?.()
+          } catch {}
           blockHitRef.current = false
           return
         }
@@ -119,7 +162,10 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer({ pat
           const pos = e?.target?.position || tgt?.position || ed.getPosition()
           const offset = initialStartRef.current
           if (pos && model) {
-            const hits = model.getDecorationsInRange(new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column)) || []
+            const hits =
+              model.getDecorationsInRange(
+                new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column)
+              ) || []
             for (const d of hits) {
               const m = (decoMapRef.current as any)?.get?.(d.id)
               if (m) {
@@ -135,13 +181,22 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer({ pat
         // 2) 常规选择回调
         if (Date.now() < suppressSelectionUntilRef.current) return
         const sel = ed.getSelection()
-        if (!sel || sel.isEmpty() || !model) { onSelectionChange?.(null); return }
+        if (!sel || sel.isEmpty() || !model) {
+          onSelectionChange?.(null)
+          return
+        }
         const start = Math.min(sel.startLineNumber, sel.endLineNumber)
         const end = Math.max(sel.startLineNumber, sel.endLineNumber)
         const startCol = sel.startLineNumber <= sel.endLineNumber ? sel.startColumn : sel.endColumn
         const endCol = sel.startLineNumber <= sel.endLineNumber ? sel.endColumn : sel.startColumn
         const text = model.getValueInRange(sel)
-        onSelRef.current?.({ startLine: start, endLine: end, startColumn: startCol, endColumn: endCol, selectedText: text })
+        onSelRef.current?.({
+          startLine: start,
+          endLine: end,
+          startColumn: startCol,
+          endColumn: endCol,
+          selectedText: text
+        })
         // 若有延迟的初次数据待应用，则在鼠标释放后再应用，避免中断选择
         if (pendingInitialRef.current) {
           const pending = pendingInitialRef.current
@@ -160,20 +215,32 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer({ pat
       })
       // 键盘选区也需要回调
       editorRef.current.onDidChangeCursorSelection((e) => {
-        if (suppressSelectionOnceRef.current) { suppressSelectionOnceRef.current = false; return }
+        if (suppressSelectionOnceRef.current) {
+          suppressSelectionOnceRef.current = false
+          return
+        }
         if (Date.now() < suppressSelectionUntilRef.current) return
         if (draggingRef.current) return
         const ed = editorRef.current!
         if (ed.hasTextFocus && !ed.hasTextFocus()) return
         const sel = ed.getSelection()
         const model = ed.getModel()
-        if (!sel || sel.isEmpty() || !model) { onSelectionChange?.(null); return }
+        if (!sel || sel.isEmpty() || !model) {
+          onSelectionChange?.(null)
+          return
+        }
         const start = Math.min(sel.startLineNumber, sel.endLineNumber)
         const end = Math.max(sel.startLineNumber, sel.endLineNumber)
         const startCol = sel.startLineNumber <= sel.endLineNumber ? sel.startColumn : sel.endColumn
         const endCol = sel.startLineNumber <= sel.endLineNumber ? sel.endColumn : sel.startColumn
         const text = model.getValueInRange(sel)
-        onSelRef.current?.({ startLine: start, endLine: end, startColumn: startCol, endColumn: endCol, selectedText: text })
+        onSelRef.current?.({
+          startLine: start,
+          endLine: end,
+          startColumn: startCol,
+          endColumn: endCol,
+          selectedText: text
+        })
       })
 
       // 去掉 mousedown 命中逻辑，统一在 mouseup 里处理（避免与“空选择关闭浮层”的竞争）
@@ -188,17 +255,30 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer({ pat
     const el = containerRef.current
     const ed = editorRef.current
     if (!el || !ed) return
-    const ro = new ResizeObserver(() => { try { ed.layout() } catch {} })
+    const ro = new ResizeObserver(() => {
+      try {
+        ed.layout()
+      } catch {}
+    })
     ro.observe(el)
     // 初次也执行一次
-    setTimeout(() => { try { ed.layout() } catch {} }, 0)
-    return () => { ro.disconnect() }
+    setTimeout(() => {
+      try {
+        ed.layout()
+      } catch {}
+    }, 0)
+    return () => {
+      ro.disconnect()
+    }
   }, [])
 
   useEffect(() => {
     if (!data || !editorRef.current) return
     // 正在拖拽选择时，延后应用初次内容，避免在拖拽过程中重置选择锚点
-    if (draggingRef.current) { pendingInitialRef.current = data; return }
+    if (draggingRef.current) {
+      pendingInitialRef.current = data
+      return
+    }
     const editor = editorRef.current
     const model = editor.getModel() ?? monaco.editor.createModel('', data.language)
     if (editor.getModel() == null) editor.setModel(model)
@@ -206,7 +286,9 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer({ pat
     model.setValue(data.content)
     monaco.editor.setModelLanguage(model, data.language || 'plaintext')
     editor.restoreViewState(st)
-    try { editor.layout() } catch {}
+    try {
+      editor.layout()
+    } catch {}
     endRef.current = data.endLine
     totalRef.current = data.totalLines
     initialStartRef.current = startLine
@@ -248,7 +330,12 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer({ pat
               initialStartRef.current = chunk.startLine
               totalRef.current = chunk.totalLines
               // 汇总回调
-              const agg = { ...chunk, startLine: initialStartRef.current, endLine: endRef.current, totalLines: totalRef.current }
+              const agg = {
+                ...chunk,
+                startLine: initialStartRef.current,
+                endLine: endRef.current,
+                totalLines: totalRef.current
+              }
               onLoadedRef.current?.(agg as any)
             }
           } finally {
@@ -276,14 +363,21 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer({ pat
           endRef.current = chunk.endLine
           totalRef.current = chunk.totalLines
           // 汇总后的信息回调给上层用于显示行数
-          const agg = { ...chunk, startLine: initialStartRef.current, endLine: endRef.current, totalLines: totalRef.current }
+          const agg = {
+            ...chunk,
+            startLine: initialStartRef.current,
+            endLine: endRef.current,
+            totalLines: totalRef.current
+          }
           onLoadedRef.current?.(agg as any)
         }
       } finally {
         loadingMoreRef.current = false
       }
     })
-    return () => { dispose.dispose() }
+    return () => {
+      dispose.dispose()
+    }
   }, [path, maxLines])
 
   useImperativeHandle(fref, () => ({
@@ -319,8 +413,17 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer({ pat
     if (!model) return
     const offset = initialStartRef.current
     const maxLine = model.getLineCount()
-    const visible: { mark: { id?: string; startLine: number; endLine: number; startColumn?: number; endColumn?: number }, deco: monaco.editor.IModelDeltaDecoration }[] = []
-    for (const m of (marks ?? [])) {
+    const visible: {
+      mark: {
+        id?: string
+        startLine: number
+        endLine: number
+        startColumn?: number
+        endColumn?: number
+      }
+      deco: monaco.editor.IModelDeltaDecoration
+    }[] = []
+    for (const m of marks ?? []) {
       const sRelL = m.startLine - offset + 1
       const eRelL = m.endLine - offset + 1
       if (eRelL < 1 || sRelL > maxLine) continue
@@ -337,17 +440,24 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer({ pat
             inlineClassName: 'ailoom-anno-inline',
             className: '',
             linesDecorationsClassName: 'ailoom-anno-gutter',
-            overviewRuler: { color: 'rgba(255,214,102,.6)', position: monaco.editor.OverviewRulerLane.Right },
-            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+            overviewRuler: {
+              color: 'rgba(255,214,102,.6)',
+              position: monaco.editor.OverviewRulerLane.Right
+            },
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
           }
         }
       })
     }
-    const decos = visible.map(v => v.deco)
+    const decos = visible.map((v) => v.deco)
     const ids = decoRef.current.set(decos)
     decoMapRef.current.clear()
-    ids.forEach((id, i) => { if (id && visible[i]) decoMapRef.current.set(id, visible[i].mark) })
-    return () => { /* keep decorations */ }
+    ids.forEach((id, i) => {
+      if (id && visible[i]) decoMapRef.current.set(id, visible[i].mark)
+    })
+    return () => {
+      /* keep decorations */
+    }
   }, [marks])
 
   // update wrap option when prop changes
@@ -375,21 +485,33 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer({ pat
       const pos = tgt?.position || ed.getPosition()
       const model = ed.getModel()
       if (pos && model) {
-        const hits = model.getDecorationsInRange(new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column)) || []
+        const hits =
+          model.getDecorationsInRange(
+            new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column)
+          ) || []
         for (const d of hits) {
           const m = (decoMapRef.current as any)?.get?.(d.id)
-          if (m) { onOpenMark?.(m); return }
+          if (m) {
+            onOpenMark?.(m)
+            return
+          }
         }
       }
     }
     el.addEventListener('mousedown', onMouseDownCapture, true)
-    return () => { el.removeEventListener('mousedown', onMouseDownCapture, true) }
+    return () => {
+      el.removeEventListener('mousedown', onMouseDownCapture, true)
+    }
   }, [onOpenMark, marks])
 
   if (error) {
     const msg = String((error as any)?.message || '')
     if (msg.startsWith('NON_TEXT:') || msg.startsWith('HTTP_415') || msg.includes('NON_TEXT')) {
-      return <div className="p-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded">该文件看起来不是文本（或非 UTF-8），无法预览。</div>
+      return (
+        <div className="p-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded">
+          该文件看起来不是文本（或非 UTF-8），无法预览。
+        </div>
+      )
     }
     return <div className="text-red-600">加载失败</div>
   }

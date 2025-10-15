@@ -29,9 +29,9 @@ pub struct FileChunk {
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
-    #[error("invalid path")] 
+    #[error("invalid path")]
     InvalidPath,
-    #[error("not found")] 
+    #[error("not found")]
     NotFound,
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -136,4 +136,3 @@ pub struct UpdateAnnotation {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,
 }
-

@@ -6,7 +6,7 @@ const API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
 
 export const http = axios.create({
   baseURL: API_BASE || undefined,
-  headers: { 'content-type': 'application/json' },
+  headers: { 'content-type': 'application/json' }
   // 可按需添加超时：
   // timeout: 15000,
 })

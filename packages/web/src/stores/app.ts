@@ -32,7 +32,7 @@ export const useAppStore = create<AppState>()(
       setPageSize: (n) => set({ pageSize: n }),
       setActivePane: (p) => set({ activePane: p }),
       toggleWrap: () => set({ wrap: !get().wrap }),
-      toggleMdPreview: () => set({ mdPreview: !get().mdPreview }),
+      toggleMdPreview: () => set({ mdPreview: !get().mdPreview })
     }),
     { name: 'ailoom.app' }
   )

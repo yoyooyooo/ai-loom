@@ -10,6 +10,9 @@
   - just web-install
   - just web-build
   - just web-dev VITE_API_BASE=http://127.0.0.1:PORT
+  - 代码格式化（Prettier）：
+    - just fmt-web（写入修复）
+    - just fmt-web:check（仅检查）
   
 - 热更新开发（前后端）
   - 需要安装：cargo install cargo-watch
@@ -33,3 +36,8 @@
   - 运行（安装后）：`npx ai-loom` 或 `npm i -g ai-loom && ai-loom`
 
 更多参与与发布细节，请参见 `CONTRIBUTING.md`。
+
+代码格式化（总览）
+- Rust：`just fmt-rust` / `just fmt-rust:check`（基于 rustfmt）
+- Web：`just fmt-web` / `just fmt-web:check`（基于 Prettier，需要先执行 `just web-install` 安装依赖）
+- 一键（Rust + Web）：`just fmt` / `just fmt:check`

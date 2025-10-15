@@ -13,7 +13,11 @@ export default function ExplorerPage() {
   // 预热目录树缓存
   useQuery({ queryKey: ['tree', currentDir], queryFn: () => fetchTree(currentDir) })
 
-  const fetchingTree = useIsFetching({ predicate: (q)=> Array.isArray(q.queryKey) && q.queryKey[0]==='tree' && q.queryKey[1]===currentDir }) > 0
+  const fetchingTree =
+    useIsFetching({
+      predicate: (q) =>
+        Array.isArray(q.queryKey) && q.queryKey[0] === 'tree' && q.queryKey[1] === currentDir
+    }) > 0
 
   return (
     <div className="h-full overflow-hidden flex">
@@ -30,7 +34,8 @@ export default function ExplorerPage() {
                     width: '22%',
                     background: 'currentColor',
                     clipPath: 'polygon(0% 50%, 6% 0%, 94% 0%, 100% 50%, 94% 100%, 6% 100%)',
-                    animation: 'ailoom-indeterminate 1.6s cubic-bezier(0.2, 0.0, 0.8, 1.0) infinite',
+                    animation:
+                      'ailoom-indeterminate 1.6s cubic-bezier(0.2, 0.0, 0.8, 1.0) infinite',
                     willChange: 'transform'
                   }}
                 />

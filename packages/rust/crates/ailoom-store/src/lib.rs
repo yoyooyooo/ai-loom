@@ -1,11 +1,12 @@
 use ailoom_core as core;
-use thiserror::Error;
-use std::path::Path;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
+use std::path::Path;
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
-    #[error("sqlx error: {0}")] Sqlx(#[from] sqlx::Error),
+    #[error("sqlx error: {0}")]
+    Sqlx(#[from] sqlx::Error),
 }
 
 #[derive(Clone)]
@@ -41,9 +42,15 @@ impl Store {
 
     async fn migrate(&self) -> Result<(), StoreError> {
         // Pragmas
-        sqlx::query("PRAGMA journal_mode=WAL;").execute(&self.pool).await?;
-        sqlx::query("PRAGMA synchronous=NORMAL;").execute(&self.pool).await?;
-        sqlx::query("PRAGMA busy_timeout=3000;").execute(&self.pool).await?;
+        sqlx::query("PRAGMA journal_mode=WAL;")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("PRAGMA synchronous=NORMAL;")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("PRAGMA busy_timeout=3000;")
+            .execute(&self.pool)
+            .await?;
 
         // Schema
         sqlx::query(
@@ -70,12 +77,16 @@ impl Store {
         .execute(&self.pool)
         .await?;
 
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_annotations_file_path ON annotations(file_path);")
-            .execute(&self.pool)
-            .await?;
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_annotations_created_at ON annotations(created_at);")
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_annotations_file_path ON annotations(file_path);",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_annotations_created_at ON annotations(created_at);",
+        )
+        .execute(&self.pool)
+        .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_annotations_file_span_created ON annotations(file_path, start_line, end_line, created_at);")
             .execute(&self.pool)
             .await?;
@@ -172,16 +183,25 @@ impl Store {
         self.list_annotations().await
     }
 
-    pub async fn import_annotations(&self, anns: &[core::Annotation]) -> Result<(u64,u64,u64), StoreError> {
-        let mut added = 0u64; let mut updated = 0u64; let mut skipped = 0u64;
+    pub async fn import_annotations(
+        &self,
+        anns: &[core::Annotation],
+    ) -> Result<(u64, u64, u64), StoreError> {
+        let mut added = 0u64;
+        let mut updated = 0u64;
+        let mut skipped = 0u64;
         for a in anns {
             let existing = self.get_annotation(&a.id).await?;
             if let Some(old) = existing {
                 if a.updated_at > old.updated_at {
-                    self.update_annotation(a).await?; updated += 1;
-                } else { skipped += 1; }
+                    self.update_annotation(a).await?;
+                    updated += 1;
+                } else {
+                    skipped += 1;
+                }
             } else {
-                self.insert_annotation(a).await?; added += 1;
+                self.insert_annotation(a).await?;
+                added += 1;
             }
         }
         Ok((added, updated, skipped))
@@ -189,14 +209,27 @@ impl Store {
 }
 
 impl Store {
-    pub async fn list_annotations_by_ids(&self, ids: &[String]) -> Result<Vec<core::Annotation>, StoreError> {
-        if ids.is_empty() { return self.list_annotations().await; }
+    pub async fn list_annotations_by_ids(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<core::Annotation>, StoreError> {
+        if ids.is_empty() {
+            return self.list_annotations().await;
+        }
         // Dynamically build IN clause
         let mut q = String::from("SELECT id, file_path, start_line, end_line, start_column, end_column, selected_text, comment, pre_context_hash, post_context_hash, file_digest, tags, priority, created_at, updated_at FROM annotations WHERE id IN (");
-        for i in 0..ids.len() { if i>0 { q.push(','); } q.push('?'); q.push_str(&(i+1).to_string()); }
+        for i in 0..ids.len() {
+            if i > 0 {
+                q.push(',');
+            }
+            q.push('?');
+            q.push_str(&(i + 1).to_string());
+        }
         q.push(')');
         let mut query = sqlx::query_as::<_, AnnotationRow>(&q);
-        for id in ids { query = query.bind(id); }
+        for id in ids {
+            query = query.bind(id);
+        }
         let rows = query.fetch_all(&self.pool).await?;
         Ok(rows.into_iter().map(AnnotationRow::into_core).collect())
     }

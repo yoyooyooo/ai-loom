@@ -31,6 +31,34 @@ web-dev:
 web-clean:
   rm -rf {{WEB_DIST}}
 
+# --- Format ---
+
+# Rust 代码格式化
+fmt-rust:
+  cargo fmt --all
+
+# Rust 代码格式检查（不修改文件）
+fmt-rust-check:
+  cargo fmt --all -- --check
+
+# 前端代码格式化（需要先在 packages/web 安装依赖：just web-install）
+fmt-web:
+  pnpm -C {{WEB_DIR}} exec prettier --write "**/*.{ts,tsx,js,jsx,css,md,html}"
+
+# 前端代码格式检查（不修改文件）
+fmt-web-check:
+  pnpm -C {{WEB_DIR}} exec prettier --check "**/*.{ts,tsx,js,jsx,css,md,html}"
+
+# 一键格式化（Rust + Web）
+fmt:
+  just fmt-rust
+  just fmt-web
+
+# 一键格式检查（Rust + Web）
+fmt-check:
+  just fmt-rust-check
+  just fmt-web-check
+
 # --- Server ---
 
 # 构建后端（Rust Workspace）

@@ -4,7 +4,10 @@ import { useAppStore } from '@/stores/app'
 export default function FileTreePanel() {
   const { currentDir, selectedPath, setSelectedPath } = useAppStore()
   return (
-    <FileTree root={currentDir} selectedPath={selectedPath} onOpenFile={(p)=> setSelectedPath(p)} />
+    <FileTree
+      root={currentDir}
+      selectedPath={selectedPath}
+      onOpenFile={(p) => setSelectedPath(p)}
+    />
   )
 }
-

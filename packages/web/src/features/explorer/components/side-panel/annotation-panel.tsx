@@ -12,7 +12,12 @@ export default function SideAnnotationPanel() {
     }
     const safePage = Number.isFinite(pageSize) && pageSize > 0 ? pageSize : 1000
     setStartLine(Math.max(1, ann.startLine - Math.floor(safePage / 2)))
-    setPendingJump({ startLine: ann.startLine, endLine: ann.endLine, id: ann.id, comment: ann.comment })
+    setPendingJump({
+      startLine: ann.startLine,
+      endLine: ann.endLine,
+      id: ann.id,
+      comment: ann.comment
+    })
   }
   return <AnnotationPanel onJump={onJump} currentFile={selectedPath} />
 }
