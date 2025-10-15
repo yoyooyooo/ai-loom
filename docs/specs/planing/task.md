@@ -24,8 +24,9 @@
 3. 前端（packages/web）
    - Vite + React + Tailwind + shadcn 初始化；Monaco 只读查看器；基础路由与布局
    - Explorer：目录树懒加载、文件分页渲染、Loading/空态/错误态
-4. CLI（packages/cli）
-   - Node 启动器：解压/定位 server 二进制 + web/dist；参数 `--port --db --no-open`；环境 `AILOOM_DB_PATH`
+4. CLI（npm 元包）
+   - 入口：`packages/npm/ai-loom/bin/ai-loom.js`（选择平台二进制子包，注入 `--root --web-dist` 默认值）
+   - 能力：透传 `--port --db-path --no-open`；支持 `AILOOM_SERVER_BIN` 覆盖二进制路径
 
 DoD
 
@@ -171,8 +172,8 @@ DoD
 
 ### P2（发布与平台）
 
-- [ ] CLI 发布与预编译
-  - 落点：`packages/cli` 打包与 npm 发布；多平台预编译（可先纯 Node 版）；支持位置参数 `ai-loom <dir>` 等价 `--root`。
+- [ ] NPM 元包发布与预编译
+  - 落点：`packages/npm/ai-loom`（元包）与 `packages/npm/server-*`（平台子包）；多平台预编译；支持位置参数 `ai-loom <dir>` 等价 `--root`。
   - 验收：`npx ai-loom <dir>` 即可启动；Windows/macOS/Linux 运行通过。
 
 - [ ] Windows 深入验证与修复

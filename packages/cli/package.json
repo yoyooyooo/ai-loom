@@ -1,8 +1,0 @@
-{
-  "name": "ai-loom-cli",
-  "version": "0.1.0",
-  "private": true,
-  "bin": {
-    "ai-loom": "bin/ai-loom.mjs"
-  }
-}

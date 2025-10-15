@@ -12,7 +12,6 @@
 - 后端：`packages/rust/ailoom-server`（Axum，静态托管前端并提供 `/api/*`）
 - 领域库：`packages/rust/crates/*`（`ailoom-core/fs/store/stitch`）
 - 前端：`packages/web`（React + Vite，构建产物在 `packages/web/dist`）
-- CLI（仓库内本地开发器）：`packages/cli`（仅用于仓库内本地开发，不对外发布）
 - npm 元包（对外发布）：`packages/npm/ai-loom`（`bin/ai-loom.js` + `web/`）
 - npm 平台二进制子包：示例 `packages/npm/server-darwin-arm64`（包名：`@ai-loom/server-darwin-arm64`）
 

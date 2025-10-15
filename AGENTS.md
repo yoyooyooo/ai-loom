@@ -4,7 +4,6 @@
 - `packages/rust/ailoom-server`：Axum 服务，静态托管前端并提供 `/api/*`。
 - `packages/rust/crates/*`：领域库：`ailoom-core`（类型与错误）、`ailoom-fs`（受根目录沙箱的文件读写，支持 `.ailoomignore` 与 `.gitignore`）、`ailoom-store`（SQLite 持久化）。
 - `packages/web`：React + Vite 前端，构建产物位于 `packages/web/dist`。
-- `packages/cli`：Node CLI 启动器 `ai-loom`。
 - `docs/`、`templates/`、`.ailoom/`：文档、样例与本地数据（默认 DB `~/ailoom/ailoom.db`，失败回退到项目根 `.ailoom/ailoom.db`）。
 
 ## 构建、测试与本地开发
