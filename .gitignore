@@ -19,9 +19,6 @@ packages/npm/server-*/bin/
 # Temp test dirs
 tmp/
 
-# Docs specs (do not commit)
-docs/specs/
-
 # OS/editor noise
 .DS_Store
 .vscode/
