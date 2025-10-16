@@ -245,6 +245,33 @@ npm-bump VERSION='' TYPE='':
     echo "用法：just npm-bump VERSION=x.y.z | TYPE=patch|minor|major"; exit 1; \
   fi
 
+# 基于最新 Tag 自动 bump（changeset 风格，一键：改版本 -> 提交 -> 打 Tag -> 可选推送）
+# 用法：
+#   just npm-bump-auto TYPE=patch [PUSH=1] [DRY_RUN=1]
+# 说明：
+# - 从仓库最后一个形如 vX.Y.Z 的 Tag 读取基线；若不存在则从 0.0.0 开始。
+# - 计算新版本，调用 bump 脚本写回 packages/npm/*/package.json 与元包 optionalDependencies。
+# - 自动 commit 并创建注释 Tag vX.Y.Z；PUSH=1 时推送当前分支与该 Tag（--follow-tags）。
+npm-bump-auto:
+  bash scripts/npm-bump-auto.sh
+
+# 一键创建发布分支 + 版本对齐 + 打 Tag（可选推送）
+# 用法：
+#   just npm-release-start                # 默认 patch，基于 origin/main，新建 release/vX.Y.Z，写版本并打 release-vX.Y.Z
+#   TYPE=minor just npm-release-start
+#   TYPE=patch PUSH=1 just npm-release-start   # 同时推送分支与 Tag
+#   DRY_RUN=1 just npm-release-start           # 仅演练
+npm-release-start:
+  bash scripts/npm-release-start.sh
+
+# 本地首次发布（当前平台子包 + 元包），一键构建并发布
+# 用法：
+#   just npm-first-publish-local           # 实发
+#   DRY_RUN=1 just npm-first-publish-local # 演练（不写注册表）
+#   NPM_OTP=xxxxxx just npm-first-publish-local # 启用 2FA 的一次性验证码
+npm-first-publish-local:
+  bash scripts/npm-first-publish-local.sh
+
 # --- API 便捷调试 ---
 
 # 需要传入 PORT，例如：just api-tree PORT=63944 DIR=.

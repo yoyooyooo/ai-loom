@@ -1,11 +1,15 @@
 {
   "name": "@ai-loom/server-darwin-arm64",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "description": "AI Loom server binary for darwin arm64",
   "license": "MIT",
   "private": false,
-  "os": ["darwin"],
-  "cpu": ["arm64"],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
   "scripts": {
     "postinstall": "chmod +x ./bin/ailoom-server || true"
   },

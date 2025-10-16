@@ -1,6 +1,6 @@
 [package]
 name = "ailoom-store"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2021"
 
 [lib]
@@ -9,6 +9,7 @@ path = "src/lib.rs"
 [dependencies]
 ailoom-core = { path = "../ailoom-core" }
 sqlx = { version = "0.7", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "macros"] }
+libsqlite3-sys = { version = "0.26", features = ["bundled"] }
 tokio = { version = "1", features = ["rt", "macros"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "1"

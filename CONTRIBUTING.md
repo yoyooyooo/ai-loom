@@ -70,12 +70,57 @@
 - 预检查（dry-run）：`just npm-publish-dry-run`
 - 正式发布：`just npm-publish`（或 `NPM_OTP=xxxxxx just npm-publish`）
 
+#### 本地首次发布（单命令）
+- 一键构建并发布“当前平台子包 + 元包”：
+  - 实发：`just npm-first-publish-local`
+  - 演练：`DRY_RUN=1 just npm-first-publish-local`
+  - 2FA：`NPM_OTP=xxxxxx just npm-first-publish-local`
+- 行为：
+  - 自动选择本机平台子包（如 `server-darwin-arm64`）并构建二进制
+  - 复制前端构建产物到元包 `web/`
+  - 先发布子包，再发布元包 `ai-loom`
+  - 适用于首次在 npm 上创建包与作用域
+
+### 基于 Tag 的自动发布（推荐）
+- 工作流：`.github/workflows/release-npm.yml`（推送 `release-vX.Y.Z` Tag 自动发布 npm）。
+- 版本一致性检查：`scripts/check-npm-versions.mjs` 会在 CI 中校验 Tag、元包与所有平台子包版本一致，且 `optionalDependencies` 完整且版本对齐。
+- 建议流程：
+  1) 从 `main` 拉发布分支（`main` 长期为 `0.0.0`）
+  2) 在发布分支上对齐版本：`just npm-bump VERSION=x.y.z` 或 `just npm-bump TYPE=...`
+  3) 提交并打 Tag：`git tag -a release-vx.y.z -m "release-vx.y.z" && git push origin release-vx.y.z`
+  4) GitHub Actions 自动构建并发布各平台子包，最后发布元包 `ai-loom`
+  5) 如组织开启 2FA，请使用具备“自动化发布”权限的 `NPM_TOKEN`（2FA 模式需设为 Authorization-only）
+
+#### Trusted Publishing（免 Token，推荐长期方案）
+- 背景：使用 GitHub OIDC 与 npm 的 Trusted Publisher 绑定，无需在仓库保存 `NPM_TOKEN`。
+- 配置步骤：
+  1) 在 npm（组织或个人作用域）Settings → Packages → Trusted Publishing，添加 GitHub Publisher，选择本仓库与分支/工作流
+  2) 确保包的 `repository` 字段指向本仓库（可选但推荐），并已在 npm 上存在对应作用域/包名（首次可本地发布创建）
+  3) GitHub Actions workflow 顶层需：
+     - `permissions: id-token: write, contents: read`
+     - 发布命令使用 `npm publish --provenance --access public`
+  4) 不再需要 `NPM_TOKEN`；如仍保留，将回退为 token 模式
+  5) 验证：在 Actions 日志中应看到 provenance 签名；npm 包页面显示 provenance 信息
+
 ### 版本对齐工具（npm 包）
 - 一键对齐元包与所有平台子包版本：
   - 指定版本：`just npm-bump VERSION=0.1.1`
   - 自增规则：`just npm-bump TYPE=patch|minor|major`
 - 脚本位置：`scripts/bump-npm-version.mjs`
 - 行为：统一更新 `version` 并重建元包的 `optionalDependencies`（把扫描到的 `@ai-loom/server-*` 或 `ai-loom-server-*` 都指向目标版本）。
+
+#### changeset 风格一键 bump + 打 Tag（推荐）
+- 命令：
+  - 默认 patch：`just npm-bump-auto`
+  - 指定级别：`TYPE=minor just npm-bump-auto` 或 `TYPE=major just npm-bump-auto`
+  - 推送与演练：`PUSH=1 just npm-bump-auto`、`DRY_RUN=1 just npm-bump-auto`
+- 行为：
+  - 在执行前默认 `git fetch --tags --prune origin` 同步远端标签（离线失败时继续）
+  - 基于最新 `vX.Y.Z` Tag 计算下一个版本（无 Tag 时从 `0.0.0` 起）
+  - 调用 bump 脚本写回所有 npm 包版本与 `optionalDependencies`
+  - 自动 `git commit` 与创建注释 Tag `vX.Y.Z`；`PUSH=1` 时推送当前分支与 Tag（`--follow-tags`）
+  - `DRY_RUN=1` 时仅展示计划操作，不写文件
+  - 适用场景：在发布分支执行，以配合 GitHub Actions 的基于 Tag 自动发布
 
 注意：
 - 404 Scope not found：`@ai-loom` 需在 npm 上创建组织并授予发布权限；或临时改为无 scope 包（例如 `ai-loom-server-darwin-arm64`），并同步更新元包 `optionalDependencies` 与二进制选择逻辑。
