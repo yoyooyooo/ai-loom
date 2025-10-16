@@ -96,6 +96,9 @@ jobs:
             bin_src: target/x86_64-pc-windows-msvc/release/ailoom-server.exe
 
     runs-on: ${{ matrix.os }}
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      HAS_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
     steps:
       - name: Set NPM publish flags (dry-run)
         shell: bash
@@ -148,14 +151,28 @@ jobs:
         run: |
           (npm whoami && npm ping) || true
 
+      - name: Decide publish mode (OIDC or token)
+        shell: bash
+        run: |
+          if [ "${HAS_TOKEN}" = "true" ]; then
+            echo "使用 NPM_TOKEN 进行发布（不启用 provenance）"
+            echo "NPM_PROVENANCE=" >> $GITHUB_ENV
+          else
+            echo "使用 OIDC Trusted Publishing（启用 provenance）"
+            echo "NPM_PROVENANCE=--provenance" >> $GITHUB_ENV
+          fi
+
       - name: Publish subpackage to npm (OIDC or token)
         working-directory: ${{ matrix.pkg_dir }}
-        run: npm publish --provenance --access public ${NPM_FLAGS}
+        run: npm publish ${NPM_PROVENANCE} --access public ${NPM_FLAGS}
 
   publish-meta:
     name: Publish meta package ai-loom
     needs: publish-platforms
     runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      HAS_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
     steps:
       - name: Set NPM publish flags (dry-run)
         shell: bash
@@ -191,6 +208,17 @@ jobs:
         run: |
           (npm whoami && npm ping) || true
 
+      - name: Decide publish mode (OIDC or token)
+        shell: bash
+        run: |
+          if [ "${HAS_TOKEN}" = "true" ]; then
+            echo "使用 NPM_TOKEN 进行发布（不启用 provenance）"
+            echo "NPM_PROVENANCE=" >> $GITHUB_ENV
+          else
+            echo "使用 OIDC Trusted Publishing（启用 provenance）"
+            echo "NPM_PROVENANCE=--provenance" >> $GITHUB_ENV
+          fi
+
       - name: Publish ai-loom (OIDC or token)
         working-directory: packages/npm/ai-loom
-        run: npm publish --provenance --access public ${NPM_FLAGS}
+        run: npm publish ${NPM_PROVENANCE} --access public ${NPM_FLAGS}
