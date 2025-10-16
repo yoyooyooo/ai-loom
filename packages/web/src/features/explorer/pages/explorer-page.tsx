@@ -13,10 +13,17 @@ export default function ExplorerPage() {
   // 预热目录树缓存
   useQuery({ queryKey: ['tree', currentDir], queryFn: () => fetchTree(currentDir) })
 
+  // 各面板独立 loading：
+  // - 文件树：当前 root 相关的 tree 查询
+  // - 批注：annotations 查询
   const fetchingTree =
     useIsFetching({
       predicate: (q) =>
         Array.isArray(q.queryKey) && q.queryKey[0] === 'tree' && q.queryKey[1] === currentDir
+    }) > 0
+  const fetchingAnns =
+    useIsFetching({
+      predicate: (q) => Array.isArray(q.queryKey) && q.queryKey[0] === 'annotations'
     }) > 0
 
   return (
@@ -24,9 +31,9 @@ export default function ExplorerPage() {
       <ActivityBar />
       <ResizablePanelGroup direction="horizontal" className="flex-1 min-w-0">
         <ResizablePanel defaultSize={28} minSize={18} maxSize={60} className="min-w-[220px]">
-          <div className="h-full overflow-hidden">
-            {fetchingTree && (
-              <div className="relative h-[3px] w-full mb-2 overflow-hidden">
+          <div className="h-full overflow-hidden relative">
+            {(activePane === 'files' ? fetchingTree : activePane === 'annotations' ? fetchingAnns : false) && (
+              <div className="absolute top-0 left-0 right-0 h-[3px] overflow-hidden pointer-events-none">
                 <div className="absolute inset-0 bg-black/5 dark:bg-white/10" />
                 <div
                   className="absolute top-0 left-0 h-full text-primary dark:text-white"
@@ -41,13 +48,12 @@ export default function ExplorerPage() {
                 />
               </div>
             )}
-            <div className="h-[calc(100%-4px)] overflow-auto">
-              <div className={activePane === 'files' ? 'block' : 'hidden'}>
+            <div className="h-full overflow-auto">
+              {activePane === 'files' ? (
                 <FileTreePanel />
-              </div>
-              <div className={activePane === 'annotations' ? 'block' : 'hidden'}>
+              ) : activePane === 'annotations' ? (
                 <SideAnnotationPanel />
-              </div>
+              ) : null}
             </div>
           </div>
         </ResizablePanel>
