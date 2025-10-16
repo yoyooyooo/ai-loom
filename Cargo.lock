@@ -41,7 +41,7 @@ dependencies = [
 
 [[package]]
 name = "ailoom-core"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -51,7 +51,7 @@ dependencies = [
 
 [[package]]
 name = "ailoom-fs"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "ailoom-core",
  "hex",
@@ -64,7 +64,7 @@ dependencies = [
 
 [[package]]
 name = "ailoom-server"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "ailoom-core",
  "ailoom-fs",
@@ -87,14 +87,14 @@ dependencies = [
 
 [[package]]
 name = "ailoom-stitch"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "ailoom-core",
 ]
 
 [[package]]
 name = "ailoom-store"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "ailoom-core",
  "serde",

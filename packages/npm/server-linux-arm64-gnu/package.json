@@ -1,12 +1,18 @@
 {
   "name": "@ai-loom/server-linux-arm64-gnu",
-  "version": "0.1.0",
+  "version": "0.0.2",
   "description": "AI Loom server binary for linux arm64 glibc",
   "license": "MIT",
   "private": false,
-  "os": ["linux"],
-  "cpu": ["arm64"],
-  "libc": ["glibc"],
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "libc": [
+    "glibc"
+  ],
   "scripts": {
     "postinstall": "chmod +x ./bin/ailoom-server || true"
   },
