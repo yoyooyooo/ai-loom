@@ -39,6 +39,12 @@ async fn main() -> anyhow::Result<()> {
     fmt().with_env_filter(filter).init();
 
     let args = Args::parse();
+    // 版本与构建信息（由 build.rs 注入；main=0.0.0 时可通过 tag/sha 辅助定位）
+    let app_version = env!("APP_VERSION");
+    let app_git_tag = env!("APP_GIT_TAG");
+    let app_git_sha = env!("APP_GIT_SHA");
+    let app_build_ts = env!("APP_BUILD_TS");
+    tracing::info!("ailoom-server version={} tag={} sha={} built={}", app_version, app_git_tag, app_git_sha, app_build_ts);
     let root = args.root.canonicalize()?;
     let fs_cfg = FsConfig::new(root.clone());
 

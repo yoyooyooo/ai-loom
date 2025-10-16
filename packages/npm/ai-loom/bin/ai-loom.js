@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /* eslint-disable no-console */
-const { spawn } = require('node:child_process')
+const { spawn, execSync } = require('node:child_process')
 const path = require('node:path')
 const fs = require('node:fs')
 let familySync = null, MUSL = 'musl'
@@ -39,6 +39,29 @@ function resolveBin(pkg) {
 }
 
 async function main() {
+  // 支持 --version 输出：优先用包版本；如为 0.0.0 尝试读取 git 信息
+  if (process.argv.includes('--version') || process.argv.includes('-v')) {
+    try {
+      const pkg = require('../package.json')
+      const v = pkg.version || '0.0.0'
+      let extra = ''
+      const t = process.env.AILOOM_GIT_TAG || ''
+      const s = process.env.AILOOM_GIT_SHA || ''
+      if (t || s) extra = ` (tag ${t || 'unknown'}, sha ${s || 'unknown'})`
+      else if (v === '0.0.0') {
+        try {
+          const tag = execSync('git describe --tags --always --dirty', { stdio: ['ignore','pipe','ignore'] }).toString().trim()
+          const sha = execSync('git rev-parse --short HEAD', { stdio: ['ignore','pipe','ignore'] }).toString().trim()
+          extra = ` (tag ${tag || 'unknown'}, sha ${sha || 'unknown'})`
+        } catch (_) {}
+      }
+      console.log(`ai-loom ${v}${extra}`)
+    } catch (e) {
+      console.log('ai-loom')
+    }
+    process.exit(0)
+  }
+
   const override = process.env.AILOOM_SERVER_BIN
   const bin = override || resolveBin(pickPackage())
   const web = path.join(__dirname, '..', 'web')
