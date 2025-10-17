@@ -506,7 +506,7 @@ export default function EditorPanel() {
           <div className="shrink-0 flex items-center justify-between text-sm px-2 py-1">
             <div>
               <span className="opacity-70 mr-2">文件:</span>
-              <code className="px-1.5 py-0.5 bg-black/5 rounded">{selectedPath}</code>
+              <code className="px-1.5 py-0.5 bg-black/5 dark:bg-white/5 rounded">{selectedPath}</code>
               {chunkInfo && (
                 <span className="ml-2 opacity-60">
                   L{chunkInfo.start}-{chunkInfo.end}/{chunkInfo.total}

@@ -10,12 +10,15 @@ type AppState = {
   activePane: ActivePane
   wrap: boolean
   mdPreview: boolean
+  theme: 'light' | 'dark'
   setCurrentDir: (dir: string) => void
   setSelectedPath: (p: string | null) => void
   setPageSize: (n: number) => void
   setActivePane: (p: ActivePane) => void
   toggleWrap: () => void
   toggleMdPreview: () => void
+  setTheme: (t: 'light' | 'dark') => void
+  toggleTheme: () => void
 }
 
 export const useAppStore = create<AppState>()(
@@ -27,12 +30,15 @@ export const useAppStore = create<AppState>()(
       activePane: 'files',
       wrap: false,
       mdPreview: false,
+      theme: 'light',
       setCurrentDir: (dir) => set({ currentDir: dir }),
       setSelectedPath: (p) => set({ selectedPath: p }),
       setPageSize: (n) => set({ pageSize: n }),
       setActivePane: (p) => set({ activePane: p }),
       toggleWrap: () => set({ wrap: !get().wrap }),
-      toggleMdPreview: () => set({ mdPreview: !get().mdPreview })
+      toggleMdPreview: () => set({ mdPreview: !get().mdPreview }),
+      setTheme: (t) => set({ theme: t }),
+      toggleTheme: () => set({ theme: get().theme === 'dark' ? 'light' : 'dark' })
     }),
     { name: 'ailoom.app' }
   )

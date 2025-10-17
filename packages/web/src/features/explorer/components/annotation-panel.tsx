@@ -213,7 +213,9 @@ export default function AnnotationPanel({ onJump, currentFile }: Props) {
             <li key={filePath}>
               <div
                 className={`flex items-center gap-2 px-2 py-1 ${
-                  isActive ? 'bg-black/5' : 'hover:bg-black/5'
+                  isActive
+                    ? 'bg-black/5 dark:bg-white/10'
+                    : 'hover:bg-black/5 dark:hover:bg-white/5'
                 }`}
               >
                 <button
@@ -222,7 +224,7 @@ export default function AnnotationPanel({ onJump, currentFile }: Props) {
                 >
                   <span className="inline-block w-4 text-center">{isExpanded ? '▾' : '▸'}</span>
                   <span
-                    className={`font-medium truncate flex-1 w-0 ${isActive ? 'text-blue-600' : ''}`}
+                    className={`font-medium truncate flex-1 w-0 ${isActive ? 'text-primary dark:text-white' : ''}`}
                   >
                     {baseName(filePath)}
                   </span>
@@ -235,7 +237,7 @@ export default function AnnotationPanel({ onJump, currentFile }: Props) {
                   {anns.map((a) => (
                     <li
                       key={a.id}
-                      className="pl-10 group flex items-center justify-between gap-2 px-2 py-1 hover:bg-black/5 cursor-pointer"
+                      className="pl-10 group flex items-center justify-between gap-2 px-2 py-1 hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer"
                       onClick={() => onJump?.(a)}
                       title={`L${a.startLine}-${a.endLine}`}
                     >
@@ -247,7 +249,7 @@ export default function AnnotationPanel({ onJump, currentFile }: Props) {
                       </div>
                       <div className="shrink-0 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button
-                          className="h-6 w-6 grid place-items-center rounded hover:bg-black/10"
+                          className="h-6 w-6 grid place-items-center rounded hover:bg-black/10 dark:hover:bg-white/10"
                           onClick={(e) => {
                             e.stopPropagation()
                             setEditing(a)
@@ -259,7 +261,7 @@ export default function AnnotationPanel({ onJump, currentFile }: Props) {
                           <Pencil className="h-4 w-4" />
                         </button>
                         <button
-                          className="h-6 w-6 grid place-items-center rounded hover:bg-black/10 text-red-600"
+                          className="h-6 w-6 grid place-items-center rounded hover:bg-black/10 dark:hover:bg-white/10 text-red-600"
                           onClick={(e) => {
                             e.stopPropagation()
                             onDelete(a.id)

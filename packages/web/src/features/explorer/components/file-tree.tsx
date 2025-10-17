@@ -152,7 +152,11 @@ export default function FileTree({ root, onOpenFile, selectedPath }: Props) {
           return (
             <li
               key={n.path}
-              className={`flex items-center gap-1 rounded px-1 ${selectedPath === n.path ? 'bg-black/10' : 'hover:bg-black/5'}`}
+              className={`flex items-center gap-1 rounded px-1 ${
+                selectedPath === n.path
+                  ? 'bg-black/10 dark:bg-white/10'
+                  : 'hover:bg-black/5 dark:hover:bg-white/5'
+              }`}
             >
               <button
                 className="text-left flex-1 flex items-center gap-1 py-1 w-full"
@@ -164,9 +168,7 @@ export default function FileTree({ root, onOpenFile, selectedPath }: Props) {
                 ) : (
                   <span className="inline-block w-4" />
                 )}
-                <span
-                  className={`${isDir ? 'font-medium' : ''} ${selectedPath === n.path ? 'text-blue-600' : ''}`}
-                >
+                <span className={`${isDir ? 'font-medium' : ''} ${selectedPath === n.path ? 'text-primary dark:text-white' : ''}`}>
                   {n.name}
                 </span>
               </button>

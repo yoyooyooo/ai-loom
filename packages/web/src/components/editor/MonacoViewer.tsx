@@ -154,11 +154,12 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
   useEffect(() => {
     if (!containerRef.current) return
     if (!editorRef.current) {
+      const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
       editorRef.current = monaco.editor.create(containerRef.current, {
         value: '',
         language: 'plaintext',
         readOnly: true,
-        theme: 'vs',
+        theme: isDark ? 'vs-dark' : 'vs',
         minimap: { enabled: false },
         scrollBeyondLastLine: false,
         lineNumbers: 'on',
@@ -748,7 +749,7 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
     const msg = String((error as any)?.message || '')
     if (msg.startsWith('NON_TEXT:') || msg.startsWith('HTTP_415') || msg.includes('NON_TEXT')) {
       return (
-        <div className="p-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded">
+        <div className="p-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded dark:text-amber-300 dark:bg-amber-950/30 dark:border-amber-900">
           该文件看起来不是文本（或非 UTF-8），无法预览。
         </div>
       )
