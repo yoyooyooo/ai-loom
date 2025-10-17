@@ -1,6 +1,6 @@
 {
   "name": "@ai-loom/server-darwin-x64",
-  "version": "0.0.0",
+  "version": "0.0.12",
   "description": "AI Loom server binary for darwin x64",
   "license": "MIT",
   "private": false,
