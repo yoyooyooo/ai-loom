@@ -189,6 +189,13 @@ pub fn read_file_full(cfg: &FsConfig, rel_path: &str) -> std::io::Result<FullFil
         return Err(std::io::Error::new(std::io::ErrorKind::Other, "NOT_FILE"));
     }
     let size = meta.len();
+    // 兜底限制：超过硬阈值直接拒绝全量读取，由上层返回 413
+    if size > HARD_SIZE_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "OVER_LIMIT",
+        ));
+    }
     // 先整体读取字节，再判断是否为文本（UTF-8 且不含 NUL）
     let bytes = fs::read(&abs)?;
     if bytes.contains(&0) || std::str::from_utf8(&bytes).is_err() {

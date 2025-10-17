@@ -15,6 +15,7 @@ import { fetchFileFull, saveFile, fetchFileChunk } from '@/features/explorer/api
 import type { Annotation, FileChunk } from '@/lib/api/types'
 import { useAppStore } from '@/stores/app'
 import { useExplorerStore } from '@/stores/explorer'
+import { toast } from 'sonner'
 
 export default function EditorPanel() {
   const qc = useQueryClient()
@@ -48,6 +49,7 @@ export default function EditorPanel() {
   const toolbarRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const [mdContent, setMdContent] = useState<string | null>(null)
+  const [mdError, setMdError] = useState<string | null>(null)
   const lastEditedRef = useRef<Map<string, Annotation>>(new Map())
 
   // 预览内容加载
@@ -55,17 +57,28 @@ export default function EditorPanel() {
     const run = async () => {
       if (!mdPreview) {
         setMdContent(null)
+        setMdError(null)
         return
       }
       if (!selectedPath || !selectedPath.toLowerCase().endsWith('.md')) {
         setMdContent(null)
+        setMdError(null)
         return
       }
       try {
         const f = await fetchFileFull(selectedPath)
         setMdContent(f.content)
-      } catch {
+        setMdError(null)
+      } catch (e: any) {
         setMdContent(null)
+        const msg = String(e?.message || '')
+        if (msg.startsWith('OVER_LIMIT') || msg.startsWith('HTTP_413')) {
+          setMdError('预览不可用：文件过大，无法全量读取')
+        } else if (msg.includes('NON_TEXT') || msg.startsWith('HTTP_415')) {
+          setMdError('预览不可用：该文件不是文本')
+        } else {
+          setMdError('预览加载失败')
+        }
       }
     }
     run()
@@ -250,9 +263,20 @@ export default function EditorPanel() {
                 <button
                   className="px-2 py-1 border rounded"
                   onClick={async () => {
-                    const f = await fetchFileFull(selectedPath)
-                    enterFull({ content: f.content, language: f.language, digest: f.digest })
-                    setSelection(null)
+                    try {
+                      const f = await fetchFileFull(selectedPath)
+                      enterFull({ content: f.content, language: f.language, digest: f.digest })
+                      setSelection(null)
+                    } catch (err: any) {
+                      const msg = String(err?.message || '')
+                      if (msg.startsWith('OVER_LIMIT') || msg.startsWith('HTTP_413')) {
+                        toast.error('文件过大，无法全量读取')
+                      } else if (msg.includes('NON_TEXT') || msg.startsWith('HTTP_415')) {
+                        toast.error('该文件不是可预览的文本')
+                      } else {
+                        toast.error('进入编辑失败：' + msg)
+                      }
+                    }
                   }}
                 >
                   进入编辑
@@ -351,7 +375,7 @@ export default function EditorPanel() {
                       }}
                     />
                   ) : (
-                    <div className="p-2 text-sm opacity-60">预览加载中...</div>
+                    <div className="p-2 text-sm opacity-60">{mdError || '预览加载中...'}</div>
                   )
                 ) : (
                   <MonacoViewer
@@ -411,8 +435,8 @@ export default function EditorPanel() {
                       } catch (err: any) {
                         const msg = String(err?.message || '')
                         if (msg.startsWith('CONFLICT:'))
-                          alert('保存冲突：文件已被外部修改，请刷新内容后再试')
-                        else alert('保存失败：' + msg)
+                          toast.error('保存冲突：文件已被外部修改，请刷新内容后再试')
+                        else toast.error('保存失败：' + msg)
                       }
                     }}
                   >
@@ -441,8 +465,8 @@ export default function EditorPanel() {
                     } catch (err: any) {
                       const msg = String(err?.message || '')
                       if (msg.startsWith('CONFLICT:'))
-                        alert('保存冲突：文件已被外部修改，请刷新内容后再试')
-                      else alert('保存失败：' + msg)
+                        toast.error('保存冲突：文件已被外部修改，请刷新内容后再试')
+                      else toast.error('保存失败：' + msg)
                     }
                   }}
                 />

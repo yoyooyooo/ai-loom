@@ -16,6 +16,7 @@ pub enum EntryType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileChunk {
     pub path: String,
     pub language: String,

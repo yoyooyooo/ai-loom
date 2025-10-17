@@ -194,8 +194,13 @@ async fn api_file_full(Query(q): Query<FileFullQuery>, fs: FsConfig) -> impl Int
         })).into_response(),
         Err(e) => {
             let msg = e.to_string();
-            if msg == "NON_TEXT" { (StatusCode::UNSUPPORTED_MEDIA_TYPE, Json(error("NON_TEXT", "non-text file"))).into_response() }
-            else { (StatusCode::BAD_REQUEST, Json(error("INVALID_PATH", &msg))).into_response() }
+            if msg == "NON_TEXT" {
+                (StatusCode::UNSUPPORTED_MEDIA_TYPE, Json(error("NON_TEXT", "non-text file"))).into_response()
+            } else if msg == "OVER_LIMIT" {
+                (StatusCode::PAYLOAD_TOO_LARGE, Json(error("OVER_LIMIT", "file too large for full read"))).into_response()
+            } else {
+                (StatusCode::BAD_REQUEST, Json(error("INVALID_PATH", &msg))).into_response()
+            }
         },
     }
 }
