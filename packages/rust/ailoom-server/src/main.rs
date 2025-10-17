@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr, path::{Path as StdPath, PathBuf}};
 
 use ailoom_core::{Annotation, CreateAnnotation, DirEntry, FileChunk, UpdateAnnotation};
 use ailoom_fs::{list_dir, read_file_chunk, FsConfig};
@@ -46,6 +46,9 @@ async fn main() -> anyhow::Result<()> {
     let app_build_ts = env!("APP_BUILD_TS");
     tracing::info!("ailoom-server version={} tag={} sha={} built={}", app_version, app_git_tag, app_git_sha, app_build_ts);
     let root = args.root.canonicalize()?;
+    // Discover workspace root (git repo root if found by walking up to first `.git` dir)
+    let workspace_root = discover_workspace_root(&root).unwrap_or_else(|| root.clone());
+    let workspace_key = normalize_path_for_key(&workspace_root);
     let fs_cfg = FsConfig::new(root.clone());
 
     // Prepare DB path
@@ -58,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some(dir) = db_path.parent() {
         std::fs::create_dir_all(dir).ok();
     }
-    let store = match Store::connect_path(&db_path).await {
+    let store = match Store::connect_path(&db_path, &workspace_key).await {
         Ok(s) => s,
         Err(e) => {
             // fallback to project root .ailoom/ailoom.db
@@ -72,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
                 fallback.display(),
                 e
             );
-            Store::connect_path(&fallback).await?
+            Store::connect_path(&fallback, &workspace_key).await?
         }
     };
 
@@ -104,6 +107,8 @@ async fn main() -> anyhow::Result<()> {
         .with_state(AppState {
             fs: fs_cfg.clone(),
             store: store,
+            root: root.clone(),
+            workspace_root: workspace_root.clone(),
         })
         // Enable permissive CORS for API routes to support Vite dev server during local development.
         // Static files are served under `/` without CORS needs.
@@ -249,13 +254,18 @@ fn error(code: &str, message: &str) -> serde_json::Value {
 struct AppState {
     fs: FsConfig,
     store: Store,
+    root: PathBuf,
+    workspace_root: PathBuf,
 }
 
 // --- annotations handlers ---
 
 async fn list_annotations(State(state): State<AppState>) -> impl IntoResponse {
     match state.store.list_annotations().await {
-        Ok(v) => Json(v).into_response(),
+        Ok(v) => {
+            let scoped = map_and_filter_annotations(&state, v);
+            Json(scoped).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(error("INTERNAL", &e.to_string())),
@@ -272,13 +282,14 @@ async fn create_annotation(
     State(state): State<AppState>,
     Json(body): Json<CreateAnnotation>,
 ) -> impl IntoResponse {
-    let id = nanoid::nanoid!();
+    let id = uuid::Uuid::new_v4().to_string();
     let now = time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_else(|_| "".into());
+    let ws_rel_path = to_workspace_relative(&state, &body.file_path);
     let ann = Annotation {
         id,
-        file_path: body.file_path,
+        file_path: ws_rel_path.clone(),
         start_line: body.start_line,
         end_line: body.end_line,
         start_column: body.start_column,
@@ -294,7 +305,11 @@ async fn create_annotation(
         updated_at: now,
     };
     match state.store.insert_annotation(&ann).await {
-        Ok(_) => Json(ann).into_response(),
+        Ok(_) => {
+            let mut out = ann.clone();
+            out.file_path = from_workspace_to_root(&state, &ws_rel_path);
+            Json(out).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(error("INTERNAL", &e.to_string())),
@@ -311,7 +326,7 @@ async fn update_annotation(
     match state.store.get_annotation(&id).await {
         Ok(Some(mut ex)) => {
             if let Some(v) = body.file_path {
-                ex.file_path = v;
+                ex.file_path = to_workspace_relative(&state, &v);
             }
             if let Some(v) = body.start_line {
                 ex.start_line = v;
@@ -350,7 +365,11 @@ async fn update_annotation(
                 .format(&time::format_description::well_known::Rfc3339)
                 .unwrap_or_else(|_| ex.updated_at);
             match state.store.update_annotation(&ex).await {
-                Ok(_) => Json(ex).into_response(),
+                Ok(_) => {
+                    let mut out = ex.clone();
+                    out.file_path = from_workspace_to_root(&state, &out.file_path);
+                    Json(out).into_response()
+                }
                 Err(e) => (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(error("INTERNAL", &e.to_string())),
@@ -401,11 +420,17 @@ async fn import_annotations(
     State(state): State<AppState>,
     Json(payload): Json<ImportPayload>,
 ) -> impl IntoResponse {
-    let anns = match payload {
+    let anns_ws: Vec<Annotation> = match payload {
         ImportPayload::Bundle { annotations, .. } => annotations,
         ImportPayload::Direct { annotations } => annotations,
-    };
-    match state.store.import_annotations(&anns).await {
+    }
+    .into_iter()
+    .map(|mut a| {
+        a.file_path = to_workspace_relative(&state, &a.file_path);
+        a
+    })
+    .collect();
+    match state.store.import_annotations(&anns_ws).await {
         Ok((added, updated, skipped)) => {
             Json(serde_json::json!({"added": added, "updated": updated, "skipped": skipped}))
                 .into_response()
@@ -420,10 +445,11 @@ async fn import_annotations(
 
 async fn export_annotations(State(state): State<AppState>) -> impl IntoResponse {
     match state.store.export_all().await {
-        Ok(anns) => {
+        Ok(anns_raw) => {
             let exported_at = time::OffsetDateTime::now_utc()
                 .format(&time::format_description::well_known::Rfc3339)
                 .unwrap_or_else(|_| "".into());
+            let anns = map_and_filter_annotations(&state, anns_raw);
             Json(serde_json::json!({"schemaVersion": "1", "annotations": anns, "exportedAt": exported_at})).into_response()
         }
         Err(e) => (
@@ -452,7 +478,7 @@ async fn stitch_endpoint(
     Json(body): Json<StitchBody>,
 ) -> impl IntoResponse {
     let ids = body.annotation_ids.unwrap_or_default();
-    let anns = match state.store.list_annotations_by_ids(&ids).await {
+    let anns_raw = match state.store.list_annotations_by_ids(&ids).await {
         Ok(v) => v,
         Err(e) => {
             return (
@@ -462,6 +488,7 @@ async fn stitch_endpoint(
                 .into_response()
         }
     };
+    let anns: Vec<Annotation> = map_and_filter_annotations(&state, anns_raw);
     let tpl = stitch::TemplateId::parse(q.template_id.as_deref().unwrap_or("concise"));
     let max_chars = q.max_chars.unwrap_or(4000).max(200).min(200_000);
     let r = stitch::generate_prompt(tpl, max_chars, anns);
@@ -469,4 +496,95 @@ async fn stitch_endpoint(
         "prompt": r.prompt,
         "stats": {"total": r.stats.total, "used": r.stats.used, "truncated": r.stats.truncated, "chars": r.stats.chars}
     })).into_response()
+}
+
+// --- workspace discovery and path mapping helpers ---
+
+fn discover_workspace_root(start: &StdPath) -> Option<PathBuf> {
+    let mut cur = start.to_path_buf();
+    loop {
+        if cur.join(".git").exists() {
+            return Some(cur);
+        }
+        if let Some(parent) = cur.parent() {
+            cur = parent.to_path_buf();
+        } else {
+            return None;
+        }
+    }
+}
+
+fn normalize_path_for_key(p: &StdPath) -> String {
+    // Align with macOS /private path aliases for stability
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(s) = p.to_str() {
+            if s == "/private/var" {
+                return "/var".to_string();
+            }
+            if let Some(rest) = s.strip_prefix("/private/var/") {
+                return format!("/var/{rest}");
+            }
+            if s == "/private/tmp" {
+                return "/tmp".to_string();
+            }
+            if let Some(rest) = s.strip_prefix("/private/tmp/") {
+                return format!("/tmp/{rest}");
+            }
+        }
+    }
+    p.to_string_lossy().to_string()
+}
+
+fn to_workspace_relative(state: &AppState, root_rel: &str) -> String {
+    let abs = state.root.join(root_rel);
+    let abs_can = abs.canonicalize().unwrap_or(abs);
+    match abs_can.strip_prefix(&state.workspace_root) {
+        Ok(rel) => {
+            let s = rel.to_string_lossy().to_string();
+            if s.is_empty() { ".".into() } else { s }
+        }
+        Err(_) => root_rel.to_string(),
+    }
+}
+
+fn from_workspace_to_root(state: &AppState, ws_rel: &str) -> String {
+    // root may be a subdir of workspace_root; map back by stripping prefix
+    if let Ok(prefix) = state.root.strip_prefix(&state.workspace_root) {
+        let prefix_str = prefix.to_string_lossy();
+        if prefix_str.is_empty() {
+            return ws_rel.to_string();
+        }
+        // If ws_rel starts with prefix/ ... strip it
+        let pre = format!("{}{}", prefix_str, if prefix_str.ends_with('/') { "" } else { "/" });
+        if ws_rel == prefix_str {
+            return ".".into();
+        }
+        if let Some(rest) = ws_rel.strip_prefix(&pre) {
+            return rest.to_string();
+        }
+    }
+    ws_rel.to_string()
+}
+
+fn map_and_filter_annotations(state: &AppState, v: Vec<Annotation>) -> Vec<Annotation> {
+    // Only include records under current root subtree (root relative to workspace_root)
+    let scope_prefix = state.root.strip_prefix(&state.workspace_root).ok();
+    let prefix_str = scope_prefix.map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+    let want_all = prefix_str.is_empty();
+    v.into_iter()
+        .filter(|a| {
+            if want_all {
+                true
+            } else if a.file_path == prefix_str {
+                true
+            } else {
+                a.file_path.starts_with(&(prefix_str.clone() + "/"))
+            }
+        })
+        .map(|mut a| {
+            a.file_path = from_workspace_to_root(state, &a.file_path);
+            a
+        })
+        .collect()
 }

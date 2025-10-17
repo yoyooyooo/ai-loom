@@ -19,5 +19,5 @@ clap = { version = "4", features = ["derive"] }
 urlencoding = "2"
 anyhow = "1"
 dirs = "5"
-nanoid = "0.4"
+uuid = { version = "1", features = ["v4"] }
 time = { version = "0.3", features = ["formatting", "macros"] }

@@ -4,6 +4,7 @@ set -euo pipefail
 # Usage: scripts/dev-all.sh <port>
 PORT="${1:-63000}"
 ROOT="${ROOT:-.}"
+DB_PATH="${DB_PATH:-}"
 WEB_DIR="${WEB_DIR:-packages/web}"
 WEB_DIST="${WEB_DIST:-packages/web/dist}"
 SERVER_BIN="${SERVER_BIN:-ailoom-server}"
@@ -35,7 +36,7 @@ cargo watch -q -c \
   -i packages/web \
   -i packages/npm \
   -i packages/web/dist \
-  -s "RUSTFLAGS=\"\${RUSTFLAGS:-} -Awarnings\" cargo run -p ${SERVER_BIN} -- --root \"${ROOT}\" --db-path \"${ROOT}/.ailoom/ailoom.db\" --port ${PORT} --no-static 2>&1 | awk '/^AILOOM_PORT=/{ split(\$0,a,\"=\"); printf(\"[dev-all] 前端访问: http://localhost:5173 (API: http://127.0.0.1:%s)\\n\", a[2]); fflush() } { print }'" &
+  -s "RUSTFLAGS=\"\${RUSTFLAGS:-} -Awarnings\" cargo run -p ${SERVER_BIN} -- --root \"${ROOT}\" --db-path \"${DB_PATH:-${ROOT}/.ailoom/ailoom.db}\" --port ${PORT} --no-static 2>&1 | awk '/^AILOOM_PORT=/{ split(\$0,a,\"=\"); printf(\"[dev-all] 前端访问: http://localhost:5173 (API: http://127.0.0.1:%s)\\n\", a[2]); fflush() } { print }'" &
 WATCH_PID=$!
 
 # 前端 Dev，指向后端端口

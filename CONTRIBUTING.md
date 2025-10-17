@@ -27,8 +27,8 @@
 - CORS：后端已对 `/api/*` 启用宽松 CORS，便于 Vite 跨源联调。
 - 端口：后端支持 `--port`，开发推荐固定端口（默认 63000）。
 - DB 路径：
-  - 开发（`server-dev`）：固定使用项目内 `--db-path "<ROOT>/.ailoom/ailoom.db"`
-  - 生产/同源：默认 `~/ailoom/ailoom.db`，失败回退到项目内 `.ailoom/ailoom.db`
+  - 开发（`server-dev`/`dev-all`）：默认使用项目内 `--db-path "<ROOT>/.ailoom/ailoom.db"`；可通过环境变量 `DB_PATH=/abs/path/to/ailoom.db` 覆盖，便于验证全局 DB 隔离。
+  - 生产/同源：默认 `~/ailoom/ailoom.db`，失败回退到项目内 `.ailoom/ailoom.db`。
 
 ## 常用 just 任务
 - `just web-install` / `just web-build` / `just web-dev VITE_API_BASE=...`

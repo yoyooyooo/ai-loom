@@ -68,7 +68,7 @@ server-build:
 # 运行后端，静态托管前端 dist。
 # 用法：just server-run ROOT=. WEB_DIST=packages/web/dist
 server-run:
-  RUSTFLAGS="${RUSTFLAGS:-} -Awarnings" cargo run -p {{SERVER_BIN}} -- --root "${ROOT:-.}" --web-dist "${WEB_DIST:-packages/web/dist}"
+  RUSTFLAGS="${RUSTFLAGS:-} -Awarnings" cargo run -p {{SERVER_BIN}} -- --root "${ROOT:-.}" --web-dist "${WEB_DIST:-packages/web/dist}" ${DB_PATH:+--db-path "$DB_PATH"}
 
 # 一键构建前端并启动后端（最常用）
 serve:
@@ -86,7 +86,7 @@ server-dev PORT='63000':
     -i packages/web \
     -i packages/npm \
     -i packages/web/dist \
-    -s "RUSTFLAGS=\"\${RUSTFLAGS:-} -Awarnings\" cargo run -p {{SERVER_BIN}} -- --root \"\${ROOT:-.}\" --web-dist \"\${WEB_DIST:-packages/web/dist}\" --db-path \"\${ROOT:-.}/.ailoom/ailoom.db\" --port {{PORT}} 2>&1 | awk '{ print } /^AILOOM_PORT=/{ split(\$0,a,\"=\"); port=a[2]; printf(\"[server-dev] API: http://127.0.0.1:%s\\n\", port); fflush(); }'" 
+    -s "RUSTFLAGS=\"\${RUSTFLAGS:-} -Awarnings\" cargo run -p {{SERVER_BIN}} -- --root \"\${ROOT:-.}\" --web-dist \"\${WEB_DIST:-packages/web/dist}\" --db-path \"\${DB_PATH:-\${ROOT:-.}/.ailoom/ailoom.db}\" --port {{PORT}} 2>&1 | awk '{ print } /^AILOOM_PORT=/{ split(\$0,a,\"=\"); port=a[2]; printf(\"[server-dev] API: http://127.0.0.1:%s\\n\", port); fflush(); }'" 
 
 # 前后端联调热更新（需要另开一个终端）
 # 终端A：just server-dev [PORT=63000]
