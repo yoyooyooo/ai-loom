@@ -4,6 +4,8 @@ import 'monaco-editor/min/vs/editor/editor.main.css'
 import '@/styles/monaco-overrides.css'
 import { useQuery } from '@tanstack/react-query'
 import type { FileChunk } from '@/lib/api/types'
+import type { AnchorRect, ViewerSelection } from '@/components/editor/types'
+import { ANCHOR_LEFT_TWEAK } from '@/components/editor/constants'
 
 export type ViewerHandle = {
   // 以“文件绝对行号”定位
@@ -30,15 +32,7 @@ type Props = {
   reloadToken?: number
   fetchChunk: (args: { path: string; startLine: number; maxLines: number }) => Promise<FileChunk>
   onLoaded?: (chunk: FileChunk) => void
-  onSelectionChange?: (
-    sel: {
-      startLine: number
-      endLine: number
-      startColumn?: number
-      endColumn?: number
-      selectedText: string
-    } | null
-  ) => void
+  onSelectionChange?: (sel: ViewerSelection | null) => void
   marks?: {
     id?: string
     startLine: number
@@ -52,9 +46,10 @@ type Props = {
     endLine: number
     startColumn?: number
     endColumn?: number
-  }) => void
+  }, anchorRect?: AnchorRect) => void
   wrap?: boolean
   topPadLines?: number
+  onAnchorChange?: (rect: AnchorRect | null) => void
 }
 
 const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
@@ -69,7 +64,8 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
     marks,
     onOpenMark,
     wrap,
-    topPadLines = 3
+    topPadLines = 3,
+    onAnchorChange
   },
   fref
 ) {
@@ -108,7 +104,9 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
   const draggingRef = useRef(false)
   const onSelRef = useRef<typeof onSelectionChange | undefined>(onSelectionChange)
   const onOpenMarkRef = useRef<typeof onOpenMark | undefined>(onOpenMark)
+  const onAnchorChangeRef = useRef<typeof onAnchorChange | undefined>(onAnchorChange)
   const onLoadedRef = useRef<typeof onLoaded | undefined>(onLoaded)
+  const lastMarkRangeRef = useRef<monaco.Range | null>(null)
 
   useEffect(() => {
     onSelRef.current = onSelectionChange
@@ -119,9 +117,39 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
   useEffect(() => {
     onLoadedRef.current = onLoaded
   }, [onLoaded])
+  useEffect(() => {
+    onAnchorChangeRef.current = onAnchorChange
+  }, [onAnchorChange])
   const suppressSelectionOnceRef = useRef(false)
   const suppressSelectionUntilRef = useRef(0)
   const blockHitRef = useRef(false)
+  const lastAnchorFromMarkRef = useRef<
+    | { lineNumber: number; column: number; height: number }
+    | null
+  >(null)
+
+  const computeAnchorForRange = (
+    ed: monaco.editor.IStandaloneCodeEditor,
+    rng: monaco.Range
+  ): AnchorRect | null => {
+    try {
+      const host = containerRef.current
+      const rect = host?.getBoundingClientRect()
+      if (!rect) return null
+      const pStart = ed.getScrolledVisiblePosition({ lineNumber: rng.startLineNumber, column: rng.startColumn } as any)
+      const pEnd = ed.getScrolledVisiblePosition({ lineNumber: rng.endLineNumber, column: rng.endColumn } as any)
+      const li = ed.getLayoutInfo?.()
+      const contentLeft = (li && (li as any).contentLeft) || 0
+      if (!pStart) return null
+      const top = rect.top + pStart.top
+      const left = rect.left + contentLeft + ANCHOR_LEFT_TWEAK
+      const bottom = pEnd ? rect.top + pEnd.top + (pEnd.height || 0) : top + (pStart.height || 18)
+      const height = Math.max(1, bottom - top)
+      return { x: left, y: top, width: 1, height }
+    } catch {
+      return null
+    }
+  }
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -168,7 +196,13 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
                 suppressSelectionUntilRef.current = Date.now() + 1000
                 blockHitRef.current = true
                 draggingRef.current = false
-                onOpenMarkRef.current?.(m)
+                // 基于命中装饰的首行作为锚点，避免被浮层遮挡
+                const anchor = computeAnchorForRange(ed, d.range)
+                if (anchor) {
+                  onAnchorChangeRef.current?.(anchor)
+                  lastMarkRangeRef.current = d.range
+                }
+                onOpenMarkRef.current?.(m, anchor || undefined)
                 return
               }
             }
@@ -204,7 +238,13 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
                 // 稳定回显
                 suppressSelectionOnceRef.current = true
                 suppressSelectionUntilRef.current = Date.now() + 1000
-                onOpenMarkRef.current?.(m)
+                // 使用装饰范围首行定位
+                const anchor = computeAnchorForRange(ed, d.range)
+                if (anchor) {
+                  onAnchorChangeRef.current?.(anchor)
+                  lastMarkRangeRef.current = d.range
+                }
+                onOpenMarkRef.current?.(m, anchor || undefined)
                 return
               }
             }
@@ -222,12 +262,16 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
         const startCol = sel.startLineNumber <= sel.endLineNumber ? sel.startColumn : sel.endColumn
         const endCol = sel.startLineNumber <= sel.endLineNumber ? sel.endColumn : sel.startColumn
         const text = model.getValueInRange(sel)
+        const rng = new monaco.Range(start, startCol, end, endCol)
+        const anchor = computeAnchorForRange(ed, rng)
+        if (anchor) onAnchorChangeRef.current?.(anchor)
         onSelRef.current?.({
           startLine: start,
           endLine: end,
           startColumn: startCol,
           endColumn: endCol,
-          selectedText: text
+          selectedText: text,
+          anchorRect: anchor || undefined
         })
         // 若有延迟的初次数据待应用，则在鼠标释放后再应用，避免中断选择
         if (pendingInitialRef.current) {
@@ -267,12 +311,16 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
         const startCol = sel.startLineNumber <= sel.endLineNumber ? sel.startColumn : sel.endColumn
         const endCol = sel.startLineNumber <= sel.endLineNumber ? sel.endColumn : sel.startColumn
         const text = model.getValueInRange(sel)
+        const rng = new monaco.Range(start, startCol, end, endCol)
+        const anchor = computeAnchorForRange(ed, rng)
+        if (anchor) onAnchorChangeRef.current?.(anchor)
         onSelRef.current?.({
           startLine: start,
           endLine: end,
           startColumn: startCol,
           endColumn: endCol,
-          selectedText: text
+          selectedText: text,
+          anchorRect: anchor || undefined
         })
       })
 
@@ -281,6 +329,32 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
     return () => {
       // keep editor across renders; dispose only on unmount
     }
+  }, [])
+
+  // 滚动时更新锚点，保证浮层跟随
+  useEffect(() => {
+    const ed = editorRef.current
+    if (!ed) return
+    const disp = ed.onDidScrollChange(() => {
+      const sel = ed.getSelection()
+      if (sel && !sel.isEmpty()) {
+        const rng = new monaco.Range(
+          Math.min(sel.startLineNumber, sel.endLineNumber),
+          sel.startColumn,
+          Math.max(sel.startLineNumber, sel.endLineNumber),
+          sel.endColumn
+        )
+        const anchor = computeAnchorForRange(ed, rng)
+        if (anchor) onAnchorChangeRef.current?.(anchor)
+        return
+      }
+      const mr = lastMarkRangeRef.current
+      if (mr) {
+        const anchor = computeAnchorForRange(ed, mr)
+        if (anchor) onAnchorChangeRef.current?.(anchor)
+      }
+    })
+    return () => { try { disp.dispose() } catch {} }
   }, [])
 
   // 面板尺寸变化时触发布局，避免在可调整分割下内容不可见

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Annotation } from '@/lib/api/types'
 import {
@@ -34,6 +34,7 @@ export default function AnnotationPanel({ onJump, currentFile }: Props) {
   const [editing, setEditing] = useState<Annotation | null>(null)
   const [editValue, setEditValue] = useState('')
   const [confirmClear, setConfirmClear] = useState(false)
+  const editInputRef = useRef<HTMLTextAreaElement | null>(null)
 
   // 初始化展开状态：优先读取本地存储；若传入 currentFile 则确保该分组展开
   useEffect(() => {
@@ -97,6 +98,21 @@ export default function AnnotationPanel({ onJump, currentFile }: Props) {
       setConfirmClear(false)
     }
   }
+
+  // 打开“编辑批注”对话框时自动聚焦输入框，并将光标移到末尾
+  useEffect(() => {
+    if (editing) {
+      setTimeout(() => {
+        const el = editInputRef.current
+        if (!el) return
+        el.focus()
+        try {
+          const len = el.value?.length ?? 0
+          el.setSelectionRange(len, len)
+        } catch {}
+      }, 0)
+    }
+  }, [editing])
 
   // 按文件分组与排序（确保 hooks 在所有早退 return 之前调用）
   const groups = useMemo(() => {
@@ -280,7 +296,19 @@ export default function AnnotationPanel({ onJump, currentFile }: Props) {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div>
-            <Textarea rows={4} value={editValue} onChange={(e) => setEditValue(e.target.value)} />
+            <Textarea
+              ref={editInputRef}
+              rows={5}
+              className="field-sizing-fixed !min-h-[120px]"
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault()
+                  onSaveEdit()
+                }
+              }}
+            />
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel

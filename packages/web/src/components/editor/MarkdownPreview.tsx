@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm'
 import remarkRehype from 'remark-rehype'
 import rehypeStringify from 'rehype-stringify'
 import { visit } from 'unist-util-visit'
+import type { AnchorRect, ViewerSelection } from '@/components/editor/types'
 
 type Mark = {
   id?: string
@@ -17,25 +18,31 @@ type Mark = {
 type Props = {
   content: string
   annotations?: Mark[]
-  onSelectionChange?: (
-    sel: {
-      startLine: number
-      endLine: number
-      startColumn?: number
-      endColumn?: number
-      selectedText: string
-    } | null
-  ) => void
-  onOpenMark?: (mark: Mark) => void
+  onSelectionChange?: (sel: ViewerSelection | null) => void
+  onOpenMark?: (mark: Mark, anchorRect?: AnchorRect) => void
+  // 浮层锚点变化（滚动/尺寸变更时回调）
+  onAnchorChange?: (rect: AnchorRect | null) => void
+  // 当锚点来源是具体元素（如命中高亮 span）时，暴露该元素，便于上层用 floating-ui 自动跟随
+  onAnchorElChange?: (el: HTMLElement | null) => void
+  // 当锚点来源是 Range（备份）时，暴露该 Range，便于上层在元素短暂不可测量时复算
+  onAnchorRangeChange?: (range: Range | null) => void
+  // 暴露预览容器元素，便于上层在虚拟锚点中计算多段高亮的联合边界
+  onContainerElChange?: (el: HTMLElement | null) => void
+  // 暴露滚动容器元素，使 floating-ui 能在其滚动时 autoUpdate
+  onScrollElChange?: (el: HTMLElement | null) => void
+  // 暴露 overlay 层元素，便于将浮层 Portal 到该节点
+  onOverlayElChange?: (el: HTMLElement | null) => void
 }
 
 export type PreviewHandle = { reveal: (startLine: number, endLine: number) => void }
 
 const MarkdownPreview = forwardRef<PreviewHandle, Props>(function MarkdownPreview(
-  { content, annotations = [], onSelectionChange, onOpenMark },
+  { content, annotations = [], onSelectionChange, onOpenMark, onAnchorChange, onAnchorElChange, onAnchorRangeChange, onContainerElChange, onScrollElChange, onOverlayElChange },
   ref
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const overlayRef = useRef<HTMLDivElement | null>(null)
 
   // rehype 插件：把节点位置信息写入 data-sourcepos
   function withSourcePos() {
@@ -169,31 +176,51 @@ const MarkdownPreview = forwardRef<PreviewHandle, Props>(function MarkdownPrevie
       const sel = window.getSelection()
       if (!sel || sel.isCollapsed || !sel.toString().trim()) {
         onSelectionChange(null)
+        onAnchorChange?.(null)
         return
       }
-      const a = sel.anchorNode as Node | null
-      const f = sel.focusNode as Node | null
-      const startEl = a ? closestWithSourcePos(a) : null
-      const endEl = f ? closestWithSourcePos(f) : null
-      const s1 = startEl ? parseSourcePos(startEl.getAttribute('data-sourcepos') || '') : null
-      const s2 = endEl ? parseSourcePos(endEl.getAttribute('data-sourcepos') || '') : null
-      if (!s1 || !s2) {
+      // 计算精准行列：使用 Range 起止点在所属 span[data-sourcepos] 内的字符偏移推进行列
+      const rng = (() => {
+        try { return sel.getRangeAt(0) } catch { return null }
+      })()
+      if (!rng) return
+      try { onAnchorRangeChange?.(rng.cloneRange()) } catch {}
+      const startPos = posFromDomPoint(rng.startContainer, rng.startOffset)
+      const endPos = posFromDomPoint(rng.endContainer, rng.endOffset)
+      if (!startPos || !endPos) {
         onSelectionChange(null)
+        onAnchorChange?.(null)
         return
       }
-      const startLine = Math.min(s1.startLine, s2.startLine)
-      const endLine = Math.max(s1.endLine, s2.endLine)
-      // 列精度暂取端点列，跨节点时近似
-      const startColumn = s1.startLine <= s2.startLine ? s1.startColumn : s2.startColumn
-      const endColumn = s2.endLine >= s1.endLine ? s2.endColumn : s1.endColumn
+      // 规范化顺序
+      const aFirst = comparePos(startPos, endPos) <= 0
+      const sPos = aFirst ? startPos : endPos
+      const ePos = aFirst ? endPos : startPos
       const selectedText = sel.toString()
-      onSelectionChange({ startLine, endLine, startColumn, endColumn, selectedText })
+      // 计算选择范围的 bounding rect 作为锚点
+      let anchorRect: AnchorRect | undefined
+      try {
+        const rectList = rng.getClientRects()
+        const r = rectList && rectList.length > 0 ? rectList[0] : rng.getBoundingClientRect()
+        anchorRect = { x: r.left, y: r.top, width: r.width, height: r.height }
+      } catch {}
+      onSelectionChange({
+        startLine: sPos.line,
+        endLine: ePos.line,
+        startColumn: sPos.column,
+        endColumn: ePos.column,
+        selectedText,
+        anchorRect
+      })
+      if (anchorRect) onAnchorChange?.(anchorRect)
+      // 选区为锚点来源：清空元素锚点
+      onAnchorElChange?.(null)
     }
     el.addEventListener('mouseup', onMouseUp)
     return () => {
       el.removeEventListener('mouseup', onMouseUp)
     }
-  }, [onSelectionChange])
+  }, [onSelectionChange, onAnchorChange])
 
   // 命中标注时打开编辑浮层
   useEffect(() => {
@@ -206,22 +233,51 @@ const MarkdownPreview = forwardRef<PreviewHandle, Props>(function MarkdownPrevie
       if (!hit) return
       ev.preventDefault()
       ev.stopPropagation()
+      // 计算锚点矩形（命中元素）
+      const rect = hit.getBoundingClientRect()
+      const anchorRect = { x: rect.left, y: rect.top, width: rect.width, height: rect.height }
       const id = hit.getAttribute('data-mark-id') || undefined
       const sp = parseSourcePos(hit.getAttribute('data-sourcepos') || '')
-      if (sp)
-        onOpenMark({
-          id,
-          startLine: sp.startLine,
-          endLine: sp.endLine,
-          startColumn: sp.startColumn,
-          endColumn: sp.endColumn
-        })
+      // 备份一个基于命中元素的 Range，作为滚动/重渲时的兜底锚点
+      try {
+        const r = document.createRange()
+        r.selectNodeContents(hit)
+        onAnchorRangeChange?.(r)
+      } catch { onAnchorRangeChange?.(null) }
+      if (sp) {
+        onOpenMark(
+          {
+            id,
+            startLine: sp.startLine,
+            endLine: sp.endLine,
+            startColumn: sp.startColumn,
+            endColumn: sp.endColumn
+          },
+          anchorRect
+        )
+        onAnchorChange?.(anchorRect)
+        onAnchorElChange?.(hit)
+      }
     }
     el.addEventListener('mousedown', onClick, true)
     return () => {
       el.removeEventListener('mousedown', onClick, true)
     }
-  }, [onOpenMark, annotations])
+  }, [onOpenMark, annotations, onAnchorChange])
+
+  // 滚动/尺寸跟随交由 floating-ui 的 autoUpdate 处理（父组件设置了 contextElement）
+  useEffect(() => {
+    onContainerElChange?.(containerRef.current)
+    return () => onContainerElChange?.(null)
+  }, [onContainerElChange])
+  useEffect(() => {
+    onScrollElChange?.(scrollRef.current)
+    return () => onScrollElChange?.(null)
+  }, [onScrollElChange])
+  useEffect(() => {
+    onOverlayElChange?.(overlayRef.current)
+    return () => onOverlayElChange?.(null)
+  }, [onOverlayElChange])
 
   useImperativeHandle(ref, () => ({
     reveal: (startLine: number, endLine: number) => {
@@ -245,12 +301,15 @@ const MarkdownPreview = forwardRef<PreviewHandle, Props>(function MarkdownPrevie
   }))
 
   return (
-    <div className="w-full h-full border rounded overflow-auto">
-      <div
-        ref={containerRef}
-        className="prose prose-sm dark:prose-invert max-w-none p-3"
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
+    <div ref={scrollRef} className="w-full h-full border rounded overflow-auto">
+      <div className="relative min-h-full">
+        <div
+          ref={containerRef}
+          className="prose prose-sm dark:prose-invert max-w-none p-3"
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+        <div ref={overlayRef} className="absolute inset-0 pointer-events-none" />
+      </div>
     </div>
   )
 })
@@ -266,6 +325,29 @@ function parseSourcePos(s: string | null) {
     startColumn: parseInt(m[2]),
     endLine: parseInt(m[3]),
     endColumn: parseInt(m[4])
+  }
+}
+
+function comparePos(a: { line: number; column: number }, b: { line: number; column: number }) {
+  if (a.line !== b.line) return a.line - b.line
+  return a.column - b.column
+}
+
+function posFromDomPoint(node: Node, offset: number): { line: number; column: number } | null {
+  const host = closestWithSourcePos(node)
+  if (!host) return null
+  const sp = parseSourcePos(host.getAttribute('data-sourcepos'))
+  if (!sp) return null
+  try {
+    const r = document.createRange()
+    r.selectNodeContents(host)
+    // 将 range 结束点设为当前点，从而获取前缀文本长度
+    r.setEnd(node, offset)
+    const prefix = r.toString()
+    const cur = advancePos({ line: sp.startLine, column: sp.startColumn }, prefix)
+    return { line: cur.line, column: cur.column }
+  } catch {
+    return { line: sp.startLine, column: sp.startColumn }
   }
 }
 
