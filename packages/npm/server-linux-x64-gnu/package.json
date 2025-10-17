@@ -1,6 +1,6 @@
 {
   "name": "@ai-loom/server-linux-x64-gnu",
-  "version": "0.0.0",
+  "version": "0.0.11",
   "description": "AI Loom server binary for linux x64 glibc",
   "license": "MIT",
   "private": false,
