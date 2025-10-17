@@ -9,7 +9,8 @@ import {
   createAnnotation,
   updateAnnotation,
   deleteAnnotation,
-  listAnnotations
+  listAnnotations,
+  verifyAnnotations
 } from '@/features/explorer/api/annotations'
 import { fetchFileFull, saveFile, fetchFileChunk } from '@/features/explorer/api/files'
 import type { Annotation, FileChunk } from '@/lib/api/types'
@@ -101,6 +102,8 @@ export default function EditorPanel() {
     if (showToolbar) setTimeout(() => inputRef.current?.focus(), 0)
   }, [showToolbar])
 
+  const lastVerifiedAtRef = useRef<Map<string, number>>(new Map())
+
   const onLoaded = (chunk: FileChunk) => {
     setChunkInfo({ start: chunk.startLine, end: chunk.endLine, total: chunk.totalLines })
     const pj = consumePendingJump()
@@ -118,6 +121,20 @@ export default function EditorPanel() {
       if (pj.comment) setComment(pj.comment)
       // 不自动打开浮层：仅定位与高亮
     }
+
+    // 交给后端进行权威校验与修正/清理；做一次简单节流，避免频繁分页时重复调用
+    if (!selectedPath) return
+    const lastAt = lastVerifiedAtRef.current.get(selectedPath) || 0
+    if (Date.now() - lastAt < 1000) return
+    lastVerifiedAtRef.current.set(selectedPath, Date.now())
+    void (async () => {
+      try {
+        await verifyAnnotations({ filePath: selectedPath, window: 40, fullLimitBytes: 5 * 1024 * 1024, removeBroken: true })
+        await qc.invalidateQueries({ queryKey: ['annotations'] })
+      } catch {
+        // 静默失败，不影响查看体验
+      }
+    })()
   }
 
   // 处理批注跳转：

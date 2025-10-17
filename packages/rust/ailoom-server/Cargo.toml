@@ -21,3 +21,4 @@ anyhow = "1"
 dirs = "5"
 uuid = { version = "1", features = ["v4"] }
 time = { version = "0.3", features = ["formatting", "macros"] }
+bytecount = "0.6"

@@ -56,3 +56,25 @@ export async function importAnnotations(
     throw toHttpError(e, 'Failed to import annotations')
   }
 }
+
+export async function verifyAnnotations(params: {
+  filePath: string
+  window?: number
+  fullLimitBytes?: number
+  removeBroken?: boolean
+}): Promise<{
+  checked: number
+  updated: number
+  deleted: number
+  skipped: number
+  updatedIds: string[]
+  deletedIds: string[]
+  skippedIds: string[]
+}> {
+  try {
+    const res = await http.post('/api/annotations/verify', params)
+    return res.data as any
+  } catch (e: any) {
+    throw toHttpError(e, 'Failed to verify annotations')
+  }
+}

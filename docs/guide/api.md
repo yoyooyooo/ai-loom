@@ -52,6 +52,25 @@
   - 返回：`{ added: number, updated: number, skipped: number }`
   - 合并规则：按 `id` 去重；若 `id` 相同取 `updatedAt` 新者覆盖；否则插入
 
+批注校验/修正（后端为主）
+- POST `/api/annotations/verify`
+  - Body：`{ filePath: string, window?: number = 40, fullLimitBytes?: number = 5*1024*1024, removeBroken?: boolean = true }`
+  - 作用：对指定文件的批注执行“就近窗口搜索 → 边界锚定（多行）→ 全文（不超过阈值）搜索”，命中则更新行/列，否则按 `removeBroken` 决策删除；`selectedText` 为空将视为无法锚定，删除（当 `removeBroken=true`）
+  - 返回：`{ checked, updated, deleted, skipped, updatedIds: string[], deletedIds: string[], skippedIds: string[] }`
+  - 触发时机：
+    - 后端在 `PUT /api/file` 成功后会自动对该 `filePath` 触发一次校验（后台执行，不影响响应）
+  - 路径与作用域：
+    - 入参 `filePath` 使用“root 相对路径”；服务端内部会映射为“workspace 相对路径”以查询与更新 DB；响应/列表会再映射回 root 相对路径
+    - 仅当前工作区（workspace）且位于当前 `root` 子树下的批注会被返回/处理
+  - 算法细节（实现约定）：
+    - 窗口搜索：以原 `startLine..endLine` 为中心的 ±`window` 行内，查找 `selectedText`，多候选时取“起始行距离原位置最近”者
+    - 边界锚定（多行选区）：在窗口内同时匹配“首行片段”“末行片段”（去除两侧空白后搜索），顺序一致时生成新的 `[startLine..endLine]`
+    - 全文搜索：当文件大小 ≤ `fullLimitBytes` 时启用全文匹配，仍按“距离原位置最近”选取
+    - 列语义：行内列号计算按“字符数（非字节）”计数，避免多字节 UTF‑8 字符导致切片越界；与部分编辑器（UTF‑16 列）可能存在 1 单位差异，不影响定位与更新
+    - 删除策略：若窗口/边界/全文皆未命中且 `removeBroken=true`，则删除该批注；大文件（> `fullLimitBytes`）不进行全文搜索，仍按上述策略处理
+  - 幂等性与稳定性：
+    - 结果依赖 `selectedText` 的唯一性与上下文；当文本重复或变化较大时，可能更新到“最近的”候选；如需更稳健匹配，可在创建时同时填充 `preContextHash/postContextHash/fileDigest`
+
 Stitch 生成与预算
 - POST `/api/stitch?templateId=concise&maxChars=4000`
 - Body：`{ annotationIds?: string[] }`（缺省为全部批注）
