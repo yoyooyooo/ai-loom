@@ -40,7 +40,9 @@ export default function EditorPanel() {
     exitFull,
     chunkInfo,
     setChunkInfo,
-    consumePendingJump
+    consumePendingJump,
+    revealNonce,
+    pendingJump
   } = useExplorerStore()
 
   const viewerRef = useRef<ViewerHandle | null>(null)
@@ -84,10 +86,10 @@ export default function EditorPanel() {
     run()
   }, [mdPreview, selectedPath])
 
-  // 选中文件变化时复位页面态
+  // 选中文件变化时复位页面态：若存在 pendingJump（来自批注跳转），避免把 startLine 重置为 1
   useEffect(() => {
-    setStartLine(1)
-  }, [selectedPath])
+    if (!pendingJump) setStartLine(1)
+  }, [selectedPath, pendingJump])
   useEffect(() => {
     closeToolbar()
     setComment('')
@@ -104,19 +106,66 @@ export default function EditorPanel() {
     const pj = consumePendingJump()
     if (pj && selectedPath) {
       if (mdPreview) previewRef.current?.reveal?.(pj.startLine, pj.endLine)
-      else viewerRef.current?.reveal?.(pj.startLine, pj.endLine)
+      else viewerRef.current?.reveal?.(pj.startLine, pj.endLine, pj.startColumn, pj.endColumn)
       setSelection({
         startLine: pj.startLine,
         endLine: pj.endLine,
         selectedText: '',
-        startColumn: undefined,
-        endColumn: undefined
+        startColumn: pj.startColumn,
+        endColumn: pj.endColumn
       })
       if (pj.id) setActiveAnnId(pj.id)
       if (pj.comment) setComment(pj.comment)
-      openToolbar()
+      // 不自动打开浮层：仅定位与高亮
     }
   }
+
+  // 处理批注跳转：
+  // - 若目标行在当前分片内：直接 reveal 并置顶
+  // - 若不在当前分片或暂未有分片信息：调整 startLine 触发加载，onLoaded 中会 reveal
+  useEffect(() => {
+    if (!pendingJump || !selectedPath) return
+    const { startLine: s, endLine: e } = pendingJump
+    const inCurrentChunk = chunkInfo ? s >= chunkInfo.start && e <= chunkInfo.end : false
+
+    // 若当前为全文编辑模式，先退出以使用只读查看器进行定位
+    if (full) {
+      exitFull()
+    }
+
+    if (inCurrentChunk) {
+      // 直接 reveal
+      if (mdPreview) {
+        previewRef.current?.reveal?.(s, e)
+      } else {
+        const startRel = Math.max(1, s - (chunkInfo?.start || 1) + 1)
+        const endRel = Math.max(1, e - (chunkInfo?.start || 1) + 1)
+        viewerRef.current?.revealModel?.(
+          startRel,
+          endRel,
+          pendingJump.startColumn,
+          pendingJump.endColumn
+        )
+      }
+      setSelection({
+        startLine: s,
+        endLine: e,
+        selectedText: '',
+        startColumn: pendingJump.startColumn,
+        endColumn: pendingJump.endColumn
+      })
+      if (pendingJump.id) setActiveAnnId(pendingJump.id)
+      if (pendingJump.comment) setComment(pendingJump.comment)
+      // 不自动打开浮层：仅定位与高亮
+      consumePendingJump()
+      return
+    }
+
+    // 不在当前分片或暂未加载：调整 startLine 触发加载（onLoaded 会处理 reveal）
+    const safePage = Number.isFinite(pageSize) && pageSize > 0 ? pageSize : 1000
+    setStartLine(Math.max(1, s - Math.floor(safePage / 2)))
+    // 不在这里 consume，等待 onLoaded 使用最新的起始偏移 reveal
+  }, [pendingJump, chunkInfo, selectedPath, mdPreview, full, pageSize])
 
   const onSelectionChange = (s: typeof selection) => {
     if (showToolbar) return
@@ -383,6 +432,8 @@ export default function EditorPanel() {
                     path={selectedPath}
                     startLine={startLine}
                     maxLines={pageSize}
+                    reloadToken={revealNonce}
+                    topPadLines={3}
                     fetchChunk={fetchFileChunk}
                     onLoaded={onLoaded}
                     onSelectionChange={onSelectionChange}

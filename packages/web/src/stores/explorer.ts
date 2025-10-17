@@ -13,6 +13,8 @@ export type ChunkInfo = { start: number; end: number; total: number } | null
 export type PendingJump = {
   startLine: number
   endLine: number
+  startColumn?: number
+  endColumn?: number
   id?: string
   comment?: string
 } | null
@@ -28,6 +30,7 @@ type ExplorerState = {
   full: FullEdit
   chunkInfo: ChunkInfo
   pendingJump: PendingJump
+  revealNonce: number
   setStartLine: (n: number) => void
   setSelection: (s: Selection) => void
   openToolbar: () => void
@@ -39,6 +42,7 @@ type ExplorerState = {
   setChunkInfo: (c: NonNullable<ChunkInfo>) => void
   setPendingJump: (p: NonNullable<PendingJump>) => void
   consumePendingJump: () => PendingJump
+  bumpReveal: () => void
   resetOnPathChange: () => void
 }
 
@@ -51,6 +55,7 @@ export const useExplorerStore = create<ExplorerState>()((set, get) => ({
   full: null,
   chunkInfo: null,
   pendingJump: null,
+  revealNonce: 0,
   setStartLine: (n) => set({ startLine: n }),
   setSelection: (s) => set({ selection: s }),
   openToolbar: () => set({ showToolbar: true }),
@@ -66,6 +71,7 @@ export const useExplorerStore = create<ExplorerState>()((set, get) => ({
     set({ pendingJump: null })
     return pj
   },
+  bumpReveal: () => set((s) => ({ revealNonce: s.revealNonce + 1 })),
   resetOnPathChange: () =>
     set({
       startLine: 1,
@@ -75,6 +81,7 @@ export const useExplorerStore = create<ExplorerState>()((set, get) => ({
       chunkInfo: null,
       comment: '',
       activeAnnId: null,
-      pendingJump: null
+      pendingJump: null,
+      revealNonce: 0
     })
 }))

@@ -238,7 +238,8 @@ const MarkdownPreview = forwardRef<PreviewHandle, Props>(function MarkdownPrevie
         }
       }
       if (best) {
-        best.scrollIntoView({ block: 'center', behavior: 'auto' })
+        // 将匹配元素滚动到容器顶部
+        best.scrollIntoView({ block: 'start', behavior: 'auto' })
       }
     }
   }))

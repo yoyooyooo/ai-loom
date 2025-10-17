@@ -9,6 +9,7 @@
 - 文件系统与阈值：见 `fs-and-limits.md`
 - Stitch 拼接与预算：见 `stitching.md`
 - 前端结构与流程：见 `frontend.md`
+- 代码查看器标注跳转（Monaco）：见 `annotation-jump.md`
 - 存储层与迁移：见 `storage.md`
 - CLI 分发与运行：见 `cli.md`
 - 安全与配置：见 `security.md`

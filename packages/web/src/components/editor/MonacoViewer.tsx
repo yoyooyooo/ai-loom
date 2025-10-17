@@ -6,7 +6,20 @@ import { useQuery } from '@tanstack/react-query'
 import type { FileChunk } from '@/lib/api/types'
 
 export type ViewerHandle = {
-  reveal: (startLine: number, endLine: number) => void
+  // 以“文件绝对行号”定位
+  reveal: (
+    startLine: number,
+    endLine: number,
+    startColumn?: number,
+    endColumn?: number
+  ) => void
+  // 以“当前模型行号”（1-based）定位（避免偏移不同步问题）
+  revealModel: (
+    startLineRel: number,
+    endLineRel: number,
+    startColumn?: number,
+    endColumn?: number
+  ) => void
   clearSelection: () => void
 }
 
@@ -14,6 +27,7 @@ type Props = {
   path: string
   startLine: number
   maxLines: number
+  reloadToken?: number
   fetchChunk: (args: { path: string; startLine: number; maxLines: number }) => Promise<FileChunk>
   onLoaded?: (chunk: FileChunk) => void
   onSelectionChange?: (
@@ -40,10 +54,23 @@ type Props = {
     endColumn?: number
   }) => void
   wrap?: boolean
+  topPadLines?: number
 }
 
 const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
-  { path, startLine, maxLines, fetchChunk, onLoaded, onSelectionChange, marks, onOpenMark, wrap },
+  {
+    path,
+    startLine,
+    maxLines,
+    reloadToken,
+    fetchChunk,
+    onLoaded,
+    onSelectionChange,
+    marks,
+    onOpenMark,
+    wrap,
+    topPadLines = 3
+  },
   fref
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -59,12 +86,17 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
   const totalRef = useRef(0)
   const loadingMoreRef = useRef(false)
   const loadingEarlierRef = useRef(false)
+  const suppressAutoLoadUntilRef = useRef(0)
+  const isJumpingRef = useRef(false)
   const initialStartRef = useRef(startLine)
   const pendingInitialRef = useRef<FileChunk | null>(null)
 
   const safeStart = Number.isFinite(startLine) && startLine > 0 ? Math.floor(startLine) : 1
   const safeMax = Number.isFinite(maxLines) && maxLines > 0 ? Math.floor(maxLines) : 1000
-  const queryKey = useMemo(() => ['file', path, safeStart, safeMax], [path, safeStart, safeMax])
+  const queryKey = useMemo(
+    () => ['file', path, safeStart, safeMax, reloadToken ?? 0],
+    [path, safeStart, safeMax, reloadToken]
+  )
   const { data, isLoading, error } = useQuery({
     queryKey,
     queryFn: () => fetchChunk({ path, startLine: safeStart, maxLines: safeMax }),
@@ -209,7 +241,8 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
           ed.restoreViewState(st2)
           endRef.current = pending.endLine
           totalRef.current = pending.totalLines
-          initialStartRef.current = startLine
+          // 使用真实数据的起始行，避免服务端裁剪/纠正导致的偏移不一致
+          initialStartRef.current = pending.startLine
           onLoadedRef.current?.(pending)
         }
       })
@@ -291,7 +324,8 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
     } catch {}
     endRef.current = data.endLine
     totalRef.current = data.totalLines
-    initialStartRef.current = startLine
+    // 使用返回的真实 startLine，而非请求参数，避免小文件/边界裁剪场景下的错位
+    initialStartRef.current = data.startLine
     onLoadedRef.current?.(data)
   }, [data, startLine])
 
@@ -300,6 +334,10 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
     const ed = editorRef.current
     if (!ed) return
     const dispose = ed.onDidScrollChange(async () => {
+      // 跳转定位期间禁止自动拼接
+      if (isJumpingRef.current) return
+      // 定位后的短时间内抑制自动拼接，避免插段导致滚动跳动
+      if (Date.now() < suppressAutoLoadUntilRef.current) return
       if (loadingMoreRef.current) return
       // 拖拽选择期间不做拼接，避免打断选择起点
       if (draggingRef.current) return
@@ -380,20 +418,148 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
     }
   }, [path, maxLines])
 
+  const lastRevealRef = useRef<{ s: number; e: number; top: number } | null>(null)
+  const lastJumpKeyRef = useRef<string | null>(null)
+
   useImperativeHandle(fref, () => ({
-    reveal: (s, e) => {
+    reveal: (s, e, sColOpt, eColOpt) => {
       const ed = editorRef.current
       if (!ed) return
-      if (draggingRef.current) return
+      // 即使处于拖拽标志，也允许侧栏触发的程序化跳转；
+      // 避免因上一次 mouseup 未在编辑器内触发而卡住不滚动
+      draggingRef.current = false
       const model = ed.getModel()
       if (!model) return
       const offset = initialStartRef.current
-      const sRel = Math.max(1, s - offset + 1)
-      const eRel = Math.max(1, e - offset + 1)
-      const endCap = Math.min(model.getLineCount(), eRel)
-      const range = new monaco.Range(sRel, 1, endCap, model.getLineMaxColumn(endCap))
-      ed.revealRangeInCenter(range)
-      ed.setSelection(range)
+      const maxLine = model.getLineCount()
+      const sRelRaw = s - offset + 1
+      const eRelRaw = e - offset + 1
+      // 顶部预留若干行，避免被浮层遮挡
+      const rawRel = Math.min(Math.max(1, sRelRaw), maxLine)
+      const sRel = Math.max(1, rawRel - topPadLines)
+      const eRel = Math.min(Math.max(1, eRelRaw), maxLine)
+      const endCap = Math.min(maxLine, eRel)
+      const sCol = sColOpt ?? 1
+      const eCol = eColOpt ?? model.getLineMaxColumn(endCap)
+      const selRange = new monaco.Range(Math.min(rawRel, endCap), sCol, endCap, eCol)
+      const revRange = new monaco.Range(sRel, 1, sRel, 1)
+      // 若与上次相同且仍在视图内，跳过滚动避免闪烁
+      try {
+        const key = `${s}-${e}-${sCol}-${eCol}`
+        const vis = ed.getVisibleRanges() || []
+        const inView = vis.some((r) => !(r.endLineNumber < selRange.startLineNumber || r.startLineNumber > selRange.endLineNumber))
+        if (lastJumpKeyRef.current === key && inView) {
+          ed.setSelection(selRange)
+          return
+        }
+        lastJumpKeyRef.current = key
+      } catch {}
+      // 先滚后选，减少内部光标可见性逻辑对滚动的干扰
+      isJumpingRef.current = true
+      suppressAutoLoadUntilRef.current = Date.now() + 400
+      const revealTop = () => {
+        try {
+          const anyEd: any = ed as any
+          // 尽量使用 monaco 的 nearTop API，退化到 setScrollTop
+          if (typeof anyEd.revealLineNearTop === 'function') {
+            anyEd.revealLineNearTop(sRel, monaco.editor.ScrollType.Immediate)
+          }
+          if (typeof anyEd.revealRangeNearTop === 'function') {
+            anyEd.revealRangeNearTop(revRange, monaco.editor.ScrollType.Immediate)
+          }
+          const top = ed.getTopForLineNumber(sRel)
+          // 若当前位置已接近目标顶部，避免重复设置引发闪烁
+          try {
+            const curTop = ed.getScrollTop()
+            if (Math.abs(curTop - top) <= 2 && lastRevealRef.current?.s === sRel && lastRevealRef.current?.e === eRel) {
+              return
+            }
+          } catch {}
+          ed.setScrollTop(top)
+          lastRevealRef.current = { s: sRel, e: eRel, top }
+        } catch {}
+      }
+      revealTop()
+      // 下一帧设置选区，并抑制一次选择变更回调，避免外层误开浮层
+      try { (suppressSelectionOnceRef as any).current = true } catch {}
+      setTimeout(() => { try { ed.setSelection(selRange) } catch {} }, 0)
+      // 40ms 后校验是否可见，若仍不可见，使用居中兜底
+      setTimeout(() => {
+        try {
+          const vis = ed.getVisibleRanges()
+          const inView = Array.isArray(vis)
+            ? vis.some((r) => !(r.endLineNumber < sRel || r.startLineNumber > endCap))
+            : false
+          if (!inView) {
+            ed.revealRangeInCenter(selRange, monaco.editor.ScrollType.Immediate)
+          }
+        } catch {}
+        isJumpingRef.current = false
+      }, 40)
+    },
+    revealModel: (sRelRaw, eRelRaw, sColOpt, eColOpt) => {
+      const ed = editorRef.current
+      if (!ed) return
+      draggingRef.current = false
+      const model = ed.getModel()
+      if (!model) return
+      const maxLine = model.getLineCount()
+      const rawRel = Math.min(Math.max(1, sRelRaw), maxLine)
+      const sRel = Math.max(1, rawRel - topPadLines)
+      const eRel = Math.min(Math.max(1, eRelRaw), maxLine)
+      const endCap = Math.min(maxLine, eRel)
+      const sCol = sColOpt ?? 1
+      const eCol = eColOpt ?? model.getLineMaxColumn(endCap)
+      const selRange = new monaco.Range(Math.min(rawRel, endCap), sCol, endCap, eCol)
+      const revRange = new monaco.Range(sRel, 1, sRel, 1)
+      // 若与上次相同且仍在视图内，跳过滚动避免闪烁
+      try {
+        const key = `rel:${sRelRaw}-${eRelRaw}-${sCol}-${eCol}`
+        const vis = ed.getVisibleRanges() || []
+        const inView = vis.some((r) => !(r.endLineNumber < selRange.startLineNumber || r.startLineNumber > selRange.endLineNumber))
+        if (lastJumpKeyRef.current === key && inView) {
+          ed.setSelection(selRange)
+          return
+        }
+        lastJumpKeyRef.current = key
+      } catch {}
+      isJumpingRef.current = true
+      suppressAutoLoadUntilRef.current = Date.now() + 400
+      const revealTop = () => {
+        try {
+          const anyEd: any = ed as any
+          if (typeof anyEd.revealLineNearTop === 'function') {
+            anyEd.revealLineNearTop(sRel, monaco.editor.ScrollType.Immediate)
+          }
+          if (typeof anyEd.revealRangeNearTop === 'function') {
+            anyEd.revealRangeNearTop(revRange, monaco.editor.ScrollType.Immediate)
+          }
+          const top = ed.getTopForLineNumber(sRel)
+          try {
+            const curTop = ed.getScrollTop()
+            if (Math.abs(curTop - top) <= 2 && lastRevealRef.current?.s === sRel && lastRevealRef.current?.e === eRel) {
+              return
+            }
+          } catch {}
+          ed.setScrollTop(top)
+          lastRevealRef.current = { s: sRel, e: eRel, top }
+        } catch {}
+      }
+      revealTop()
+      try { (suppressSelectionOnceRef as any).current = true } catch {}
+      setTimeout(() => { try { ed.setSelection(selRange) } catch {} }, 0)
+      setTimeout(() => {
+        try {
+          const vis = ed.getVisibleRanges()
+          const inView = Array.isArray(vis)
+            ? vis.some((r) => !(r.endLineNumber < sRel || r.startLineNumber > endCap))
+            : false
+          if (!inView) {
+            ed.revealRangeInCenter(selRange, monaco.editor.ScrollType.Immediate)
+          }
+        } catch {}
+        isJumpingRef.current = false
+      }, 40)
     },
     clearSelection: () => {
       const ed = editorRef.current
