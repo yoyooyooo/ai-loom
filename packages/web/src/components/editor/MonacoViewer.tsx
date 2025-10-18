@@ -733,7 +733,11 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
         for (const d of hits) {
           const m = (decoMapRef.current as any)?.get?.(d.id)
           if (m) {
-            onOpenMark?.(m)
+            // 计算锚点，确保首帧就绪，避免先落到错误位置再跳回
+            const anchor = computeAnchorForRange(ed, d.range)
+            if (anchor) onAnchorChangeRef.current?.(anchor)
+            if (anchor) lastMarkRangeRef.current = d.range
+            onOpenMark?.(m, anchor || undefined)
             return
           }
         }

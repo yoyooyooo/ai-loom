@@ -283,7 +283,11 @@ const MarkdownPreview = forwardRef<PreviewHandle, Props>(function MarkdownPrevie
     reveal: (startLine: number, endLine: number) => {
       const el = containerRef.current
       if (!el) return
-      const nodes = Array.from(el.querySelectorAll<HTMLElement>('[data-sourcepos]'))
+      // 优先命中内联高亮 span（更贴近目标），否则退化到任意含 sourcepos 的节点
+      const pref = Array.from(el.querySelectorAll<HTMLElement>('span.ailoom-anno-inline[data-sourcepos]'))
+      const nodes = pref.length > 0
+        ? pref
+        : Array.from(el.querySelectorAll<HTMLElement>('[data-sourcepos]'))
       let best: HTMLElement | null = null
       for (const n of nodes) {
         const sp = parseSourcePos(n.getAttribute('data-sourcepos'))
@@ -294,8 +298,23 @@ const MarkdownPreview = forwardRef<PreviewHandle, Props>(function MarkdownPrevie
         }
       }
       if (best) {
-        // 将匹配元素滚动到容器顶部
-        best.scrollIntoView({ block: 'start', behavior: 'auto' })
+        // 精准对齐：计算相对滚动容器的目标 top，避免 scrollIntoView 的浏览器差异导致“落在中间”
+        const sc = scrollRef.current
+        if (sc) {
+          try {
+            const scRect = sc.getBoundingClientRect()
+            const tRect = best.getBoundingClientRect()
+            const gap = 8
+            const desiredTop = sc.scrollTop + (tRect.top - scRect.top) - gap
+            const maxTop = Math.max(0, sc.scrollHeight - sc.clientHeight)
+            const top = Math.max(0, Math.min(desiredTop, maxTop))
+            sc.scrollTo({ top, behavior: 'auto' })
+          } catch {
+            try { best.scrollIntoView({ block: 'start', behavior: 'auto' }) } catch {}
+          }
+        } else {
+          try { best.scrollIntoView({ block: 'start', behavior: 'auto' }) } catch {}
+        }
       }
     }
   }))
