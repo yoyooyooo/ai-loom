@@ -39,6 +39,27 @@ export default function EditorPanelMarkdown() {
   const previewOverlayRef = useRef<HTMLElement | null>(null)
   const anchorElRef = useRef<HTMLElement | null>(null)
   const lastEditedRef = useRef<Map<string, Annotation>>(new Map())
+  // Markdown 绝对定位放置方向与抖动抑制
+  const mdPlacementRef = useRef<'above' | 'below' | null>(null)
+  const mdStableRectRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null)
+  const MD_STICKY_PX = 3
+  const MD_STABLE_MIN_FRAMES = 2
+  // 首帧门控：仅在进入一帧 rAF 后再允许显示，避免首帧跳动可见
+  const mdFirstFrameReadyRef = useRef(false)
+  const [mdGateTick, setMdGateTick] = useState(0)
+  const mdStableStateRef = useRef<{ lastX: number; lastY: number; place: 'above' | 'below' | null; consecutive: number }>({ lastX: 0, lastY: 0, place: null, consecutive: 0 })
+
+  useEffect(() => {
+    if (!showToolbar) {
+      mdPlacementRef.current = null
+      mdStableRectRef.current = null
+      mdStableStateRef.current = { lastX: 0, lastY: 0, place: null, consecutive: 0 }
+      mdFirstFrameReadyRef.current = false
+    }
+  }, [showToolbar])
+
+  // 首帧仅延后一帧再显示，避免初始测量/翻转尚未稳定导致的可见闪烁
+  // 注意：依赖 floating.hasAnchor，必须在 floating 定义之后声明此 effect
 
   const [containerEl, setContainerEl] = useState<HTMLElement | null>(null)
   useEffect(() => { setContainerEl(containerRef.current) }, [])
@@ -50,6 +71,19 @@ export default function EditorPanelMarkdown() {
     show: showToolbar,
     activeMarkId: activeAnnId
   })
+
+  // 首帧仅延后一帧再显示，避免初始测量/翻转尚未稳定导致的可见闪烁
+  useEffect(() => {
+    if (!showToolbar) return
+    if (!floating.hasAnchor) return
+    mdFirstFrameReadyRef.current = false
+    try {
+      requestAnimationFrame(() => {
+        mdFirstFrameReadyRef.current = true
+        setMdGateTick((v) => v + 1)
+      })
+    } catch {}
+  }, [showToolbar, floating.hasAnchor])
 
   const [mdContent, setMdContent] = useState<string | null>(null)
   const [mdError, setMdError] = useState<string | null>(null)
@@ -100,6 +134,28 @@ export default function EditorPanelMarkdown() {
       } catch {}
     }, 0)
   }, [showToolbar, floating.x, floating.y])
+
+  // 首帧定位健壮性：在打开浮层且拿到锚点后，主动触发两次 update，避免首帧落在 (0,0)
+  useEffect(() => {
+    if (!showToolbar) return
+    if (!floating.hasAnchor) return
+    try {
+      setTimeout(() => {
+        try {
+          if ((window as any)?.localStorage?.getItem('AILOOM_DEBUG_MD_FLOAT')) console.log('[md-float] panel: setTimeout update')
+          floating.update()
+        } catch {}
+      }, 0)
+    } catch {}
+    try {
+      requestAnimationFrame(() => {
+        try {
+          if ((window as any)?.localStorage?.getItem('AILOOM_DEBUG_MD_FLOAT')) console.log('[md-float] panel: rAF update')
+          floating.update()
+        } catch {}
+      })
+    } catch {}
+  }, [showToolbar, floating.hasAnchor])
 
   // Markdown 模式：启用严格判定的“点击外部关闭”
   useEffect(() => {
@@ -183,6 +239,7 @@ export default function EditorPanelMarkdown() {
   const onSelectionChange = (s: ViewerSelection | null) => {
     if (showToolbar) return
     if (!s) return
+    try { if ((window as any)?.localStorage?.getItem('AILOOM_DEBUG_MD_FLOAT')) console.log('[md-float] panel:onSelectionChange', s) } catch {}
     if (s.anchorRect) floating.setAnchorRect(s.anchorRect)
     setSelection({
       startLine: s.startLine,
@@ -313,10 +370,83 @@ export default function EditorPanelMarkdown() {
             className={'z-50 w-[360px] max-w-[80vw] rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl ring-1 ring-black/5 dark:ring-white/10 backdrop-blur-md p-3 pointer-events-auto'}
             style={{
               position: floating.strategy,
-              top: floating.coordsReady ? (floating.y ?? 0) : -10000,
-              left: floating.coordsReady ? (floating.x ?? 0) : -10000,
-              opacity: floating.coordsReady ? 1 : 0,
-              pointerEvents: floating.coordsReady ? 'auto' : 'none'
+              top: (() => {
+                if (floating.strategy === 'absolute') {
+                  const overlay = previewOverlayRef.current?.getBoundingClientRect()
+                  const viewport = previewScrollRef.current?.getBoundingClientRect()
+                  const cur = floating.rect
+                  const h = toolbarRef.current?.offsetHeight || 0
+                  const gap = 8
+                  if (!overlay || !viewport || !cur || h <= 0) return -10000
+                  // 抖动抑制：小范围变化保持上一帧
+                  const prev = mdStableRectRef.current
+                  let r = prev || cur
+                  if (prev) {
+                    const dx = Math.abs(cur.x - prev.x)
+                    const dy = Math.abs(cur.y - prev.y)
+                    if (dx > MD_STICKY_PX || dy > MD_STICKY_PX) {
+                      mdStableRectRef.current = cur
+                      r = cur
+                    }
+                  } else {
+                    mdStableRectRef.current = cur
+                  }
+                  // 翻转依据“视口”空间
+                  const spaceAbove = r.y - viewport.top
+                  const spaceBelow = viewport.bottom - (r.y + (r.height || 0))
+                  const needAbove = spaceAbove >= h + gap + 12
+                  const needBelow = spaceBelow >= h + gap + 12
+                  ;(mdPlacementRef.current == null) && (mdPlacementRef.current = needAbove ? 'above' : 'below')
+                  if (mdPlacementRef.current === 'above') {
+                    if (!needAbove && needBelow) mdPlacementRef.current = 'below'
+                    else if (!needAbove && !needBelow) mdPlacementRef.current = spaceBelow > spaceAbove ? 'below' : 'above'
+                  } else {
+                    if (!needBelow && needAbove) mdPlacementRef.current = 'above'
+                    else if (!needBelow && !needAbove) mdPlacementRef.current = spaceAbove > spaceBelow ? 'above' : 'below'
+                  }
+                  const place = mdPlacementRef.current
+                  // 首帧稳定：需要连续两帧得到相同的 place 与近似坐标后再显示
+                  try {
+                    const st = mdStableStateRef.current
+                    if (st.place === place && Math.abs(st.lastX - r.x) < 1 && Math.abs(st.lastY - r.y) < 1) st.consecutive += 1
+                    else st.consecutive = 1
+                    st.place = place
+                    st.lastX = r.x
+                    st.lastY = r.y
+                  } catch {}
+                  // 定位依据“overlay”坐标系
+                  return place === 'above' ? r.y - overlay.top - h - gap : r.y - overlay.top + (r.height || 0) + gap
+                }
+                return floating.coordsReady ? (floating.y ?? 0) : -10000
+              })(),
+              left: (() => {
+                if (floating.strategy === 'absolute') {
+                  const overlay = previewOverlayRef.current?.getBoundingClientRect()
+                  const r = mdStableRectRef.current || floating.rect
+                  const w = toolbarRef.current?.offsetWidth || 0
+                  if (!overlay || !r) return -10000
+                  const overlayWidth = Math.max(0, overlay.right - overlay.left)
+                  const left = r.x - overlay.left
+                  return Math.min(Math.max(0, left), Math.max(0, overlayWidth - w))
+                }
+                return floating.coordsReady ? (floating.x ?? 0) : -10000
+              })(),
+              opacity: (() => {
+                if (floating.strategy === 'absolute') {
+                  const h = toolbarRef.current?.offsetHeight || 0
+                  const ok = h > 0 && mdFirstFrameReadyRef.current && (mdStableStateRef.current.consecutive >= MD_STABLE_MIN_FRAMES)
+                  return ok ? 1 : 0
+                }
+                return floating.coordsReady ? 1 : 0
+              })(),
+              pointerEvents: (() => {
+                if (floating.strategy === 'absolute') {
+                  const h = toolbarRef.current?.offsetHeight || 0
+                  const ok = h > 0 && mdFirstFrameReadyRef.current && (mdStableStateRef.current.consecutive >= MD_STABLE_MIN_FRAMES)
+                  return ok ? 'auto' : 'none'
+                }
+                return floating.coordsReady ? 'auto' : 'none'
+              })()
             }}
           >
             <div className="text-sm font-medium text-muted-foreground mb-2">
@@ -372,6 +502,7 @@ export default function EditorPanelMarkdown() {
               }))}
             onSelectionChange={onSelectionChange}
             onOpenMark={(m, rect) => {
+              try { if ((window as any)?.localStorage?.getItem('AILOOM_DEBUG_MD_FLOAT')) console.log('[md-float] panel:onOpenMark', { m, rect }) } catch {}
               setSelection({
                 startLine: m.startLine,
                 endLine: m.endLine,

@@ -185,6 +185,10 @@ const MarkdownPreview = forwardRef<PreviewHandle, Props>(function MarkdownPrevie
       })()
       if (!rng) return
       try { onAnchorRangeChange?.(rng.cloneRange()) } catch {}
+      // 选择锚点对应的稳定元素（包含 data-sourcepos 的最近祖先），用于滚动时的持续测量
+      const startHost = closestWithSourcePos(rng.startContainer)
+      const endHost = closestWithSourcePos(rng.endContainer)
+      const hostEl = startHost || endHost
       const startPos = posFromDomPoint(rng.startContainer, rng.startOffset)
       const endPos = posFromDomPoint(rng.endContainer, rng.endOffset)
       if (!startPos || !endPos) {
@@ -213,8 +217,8 @@ const MarkdownPreview = forwardRef<PreviewHandle, Props>(function MarkdownPrevie
         anchorRect
       })
       if (anchorRect) onAnchorChange?.(anchorRect)
-      // 选区为锚点来源：清空元素锚点
-      onAnchorElChange?.(null)
+      // 提供稳定元素锚点，供滚动/重排时持续测量
+      onAnchorElChange?.(hostEl)
     }
     el.addEventListener('mouseup', onMouseUp)
     return () => {
