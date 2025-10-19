@@ -251,7 +251,7 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
             }
           }
         }
-        // 2) 常规选择回调
+        // 2) 常规选择回调（转换为“文件绝对行号”返回）
         if (Date.now() < suppressSelectionUntilRef.current) return
         const sel = ed.getSelection()
         if (!sel || sel.isEmpty() || !model) {
@@ -266,9 +266,12 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
         const rng = new monaco.Range(start, startCol, end, endCol)
         const anchor = computeAnchorForRange(ed, rng)
         if (anchor) onAnchorChangeRef.current?.(anchor)
+        const offsetAbs = (initialStartRef.current || 1) - 1
+        const startAbs = start + offsetAbs
+        const endAbs = end + offsetAbs
         onSelRef.current?.({
-          startLine: start,
-          endLine: end,
+          startLine: startAbs,
+          endLine: endAbs,
           startColumn: startCol,
           endColumn: endCol,
           selectedText: text,
@@ -315,9 +318,12 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
         const rng = new monaco.Range(start, startCol, end, endCol)
         const anchor = computeAnchorForRange(ed, rng)
         if (anchor) onAnchorChangeRef.current?.(anchor)
+        const offsetAbs = (initialStartRef.current || 1) - 1
+        const startAbs = start + offsetAbs
+        const endAbs = end + offsetAbs
         onSelRef.current?.({
-          startLine: start,
-          endLine: end,
+          startLine: startAbs,
+          endLine: endAbs,
           startColumn: startCol,
           endColumn: endCol,
           selectedText: text,
