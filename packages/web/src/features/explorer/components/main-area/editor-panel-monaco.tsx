@@ -154,9 +154,13 @@ export default function EditorPanelMonaco() {
       if (changed) {
         if (s.anchorRect) floating.setAnchorRect(s.anchorRect)
         if (activeAnnId) setActiveAnnId(null)
+        // 将模型相对行号换算为文件绝对行号，保证与 Markdown 模式一致
+        const base = (chunkInfo?.start || 1)
+        const absStart = base + (s.startLine || 1) - 1
+        const absEnd = base + (s.endLine || 1) - 1
         setSelection({
-          startLine: s.startLine,
-          endLine: s.endLine,
+          startLine: absStart,
+          endLine: absEnd,
           startColumn: s.startColumn,
           endColumn: s.endColumn,
           selectedText: s.selectedText
