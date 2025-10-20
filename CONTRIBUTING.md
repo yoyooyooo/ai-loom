@@ -2,6 +2,8 @@
 
 本仓库包含 Rust 后端（Axum）与 Web 前端（React + Vite），以及用于发布的 npm 包装（元包 + 平台二进制子包）。本文面向参与开发与发布的贡献者。
 
+适用于用户的使用说明、安装与常见问题，请阅读根目录的 `README.md`（仅面向用户）。本文件聚焦开发流程、编码规范、打包发布与 CI。
+
 ## 环境要求
 - Rust stable（建议安装 rustup）
 - Node.js 18+、pnpm 8+/9+
@@ -30,6 +32,17 @@
   - 开发（`server-dev`/`dev-all`）：默认使用项目内 `--db-path "<ROOT>/.ailoom/ailoom.db"`；可通过环境变量 `DB_PATH=/abs/path/to/ailoom.db` 覆盖，便于验证全局 DB 隔离。
   - 生产/同源：默认 `~/ailoom/ailoom.db`，失败回退到项目内 `.ailoom/ailoom.db`。
 
+## 开发流程约定（重要）
+- 使用者会主动执行 `just server-dev` 以启动前后端热更新。Agent/脚本在开发环节不自行启动服务与构建。
+- 修改前端后无需执行 `pnpm -C packages/web build`，热更新会自动生效；仅在需要产出静态资源时再使用 `just web-build`/`just serve`。
+
+## WS 开发策略（重要）
+- 读取优先 WS：前端调用通过 wsPrefer 优先走 WebSocket；出现传输/能力类错误在短窗内回退 REST。可用 `VITE_WS_NO_FALLBACK=1` 强制纯 WS 验证，`VITE_WS_FUSE_MS` 调整短窗。
+- 写入默认 REST；如需验证保存经 WS，可临时开启 `VITE_WS_WRITE=1`（`file.save`）。
+- 订阅/推送：由服务端广播 `file.changed`、`tree.changed`、`annotations.*` 驱动缓存失效与 UI 同步。
+- 调试：`VITE_WS_DEBUG=1` 打开右下角 WS 面板；`VITE_WS_DEBUG_ROUTE=1` 显示每次调用的 WS/REST 路由决策。
+- 参考：`docs/guide/architecture.md`、`docs/specs/ws/client.md`、`docs/specs/ws/phase2-acceptance.md`
+
 ## 常用 just 任务
 - `just web-install` / `just web-build` / `just web-dev VITE_API_BASE=...`
 - `just server-build` / `just server-run [ROOT . WEB_DIST=packages/web/dist]`
@@ -47,6 +60,13 @@
   - 添加组件：`npx shadcn@canary add <component> -c packages/web`
   - 目录与别名遵循 `packages/web/components.json`（`aliases.ui = "@/components/ui"`）
   - Tailwind v4：`vite.config.ts` 接入 `@tailwindcss/vite`，并在 `src/styles/globals.css` 定义 CSS 变量与 `@theme inline`
+
+### 前端架构与命名（请遵循）
+- 目录/文件命名统一 `kebab-case`；组件导出 `PascalCase`；无 JSX 文件使用 `.ts`。
+- Store：`stores/<domain>.ts`，导出 `use<Domain>Store`，必要时 `persist({ name: '<app-scope>' })`。
+- Barrel 导出仅在 feature 目录边界，避免循环依赖。
+- 导入顺序：第三方 → `@/lib`/`@/stores` → feature 内 → 相对同级/子级；`@` 指向 `src`。
+- 详见：`docs/frontend-architecture.md`
 
 ## 测试建议
 - Rust：单元测试内联 `mod tests`；集成测试位于 `tests/`。
@@ -120,7 +140,7 @@
   - 调用 bump 脚本写回所有 npm 包版本与 `optionalDependencies`
   - 自动 `git commit` 与创建注释 Tag `vX.Y.Z`；`PUSH=1` 时推送当前分支与 Tag（`--follow-tags`）
   - `DRY_RUN=1` 时仅展示计划操作，不写文件
-  - 适用场景：在发布分支执行，以配合 GitHub Actions 的基于 Tag 自动发布
+- 适用场景：在发布分支执行，以配合 GitHub Actions 的基于 Tag 自动发布
 
 注意：
 - 404 Scope not found：`@ai-loom` 需在 npm 上创建组织并授予发布权限；或临时改为无 scope 包（例如 `ai-loom-server-darwin-arm64`），并同步更新元包 `optionalDependencies` 与二进制选择逻辑。

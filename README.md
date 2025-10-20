@@ -1,51 +1,54 @@
-- 一键构建并启动
-  - just serve
-- 单独启动后端（默认托管 packages/web/dist）
-  - just server-run
-  - 如需临时覆盖路径：ROOT=. WEB_DIST=packages/web/dist just server-run
-- API 便捷调试
-  - just api-tree PORT=63944 DIR=.
-  - just api-file PORT=63944 PATH=README.md START=1 MAX=2000
-- 前端
-  - just web-install
-  - just web-build
-  - just web-dev VITE_API_BASE=http://127.0.0.1:PORT
-  - 代码格式化（Prettier）：
-    - just fmt-web（写入修复）
-    - just fmt-web:check（仅检查）
+AI Loom（Ailoom）——本地代码与文档探索器
+====================================
 
-- 热更新开发（前后端）
-  - 需要安装：cargo install cargo-watch
-  - DB 默认存放在当前仓库：`.ailoom/ailoom.db`；支持通过环境变量覆盖：`DB_PATH=/abs/path/to/ailoom.db`
-  - 终端A：just server-dev PORT=63000（后端热重载 + 项目内 DB）
-  - 终端B：just web-dev VITE_API_BASE=http://127.0.0.1:63000
-  - 或运行：just dev（当前终端跑后端，另起一个终端跑前端）
+English: README.en.md
 
-- 发布 / 打包
-  - 构建后端 Release + 前端产物并打包：`just publish`
-  - 生成：`release/ailoom-<os>-<arch>` 目录与同名 `.tgz`
-  - 运行：
-    - 解压或进入目录，执行 `./run.sh`（可通过 `PORT=63000 ./run.sh` 指定端口）
-    - 生产默认使用用户目录 DB（`~/ailoom/ailoom.db`）；在该全局 DB 内按“工作区（向上寻找最近的 `.git` 作为根，找不到则取 `--root`）”隔离批注，且仅可见当前 `--root` 子树。
-    - 如需改为项目内 DB，可手动编辑 `run.sh`，添加 `--db-path "$DIR/.ailoom/ailoom.db"`
+它是什么
+- 本地运行的“代码/文档探索 + 批注”工具：在浏览器中浏览项目文件、分页查看/预览 Markdown、添加批注并快速回跳。
+- 后端使用 Rust/Axum，前端使用 React/Vite；安装即用，无需联网。
+- 数据保存在本机 SQLite：默认 `~/ailoom/ailoom.db`，失败回退到项目根目录 `.ailoom/ailoom.db`。
 
-- NPM 包（元包 + 平台二进制子包）
-  - 元包：`packages/npm/ai-loom`（包含 `bin/ai-loom.js` 与 `web/` 静态资源）
-  - 平台子包：示例 `packages/npm/server-darwin-arm64`（仅包含 `bin/ailoom-server` 二进制；包名：`@ai-loom/server-darwin-arm64`）
-  - 打包：`just npm-pack`（会生成两份 .tgz：`ai-loom-<v>.tgz` 与 `ai-loom-server-darwin-arm64-<v>.tgz`）
-  - 发布：`just npm-publish`（需先登录 npm，并按需扩展更多平台子包）
-  - 运行（安装后）：`npx ai-loom` 或 `npm i -g ai-loom && ai-loom`
+安装与运行（推荐）
+- 零安装直接运行（推荐）：
+  - 在你的项目目录执行：`npx ai-loom`
+  - 首次执行会自动拉取与本机平台匹配的预编译二进制；随后浏览器会自动打开。
+- 全局安装：
+  - `npm i -g ai-loom` 后运行：`ai-loom --root .`
+- 常用参数：
+  - `--root <path>` 指定工作目录（仅能访问此子树）
+  - `--db <path>` 或 `--db-path <path>` 指定数据库位置
+  - `--port <number>` 指定端口；`--no-open` 禁止自动打开浏览器
 
-更多参与与发布细节，请参见 `CONTRIBUTING.md`。
+界面与能力
+- 资源管理：左侧目录树，懒加载与展开记忆
+- 文件查看：代码/文本分页加载；Markdown 预览带高亮与定位
+- 批注：选区/行级批注，列表分组与一键回跳
+- 同步：保存后 ≤1s 内自动纠正，WS 优先读取，短窗内回退 HTTP
 
-文档与 SSoT
+与 AI 编码协作（如 Vibe Coding）
+- 适配 AI 编码流程：把 AI 生成或修改的代码在“原文件位置”直接做批注，带上行范围与上下文。
+- 反馈更高效：从批注中复制片段/路径回到对话即可，无需反复解释“哪个文件第几行”；AI 更容易精确定位并按意图修改。
+- 实用场景：标记“需改动/需解释/潜在风险/接口对不齐”等位置，作为下一轮迭代的待办清单。
 
-- 单一事实源（SSoT）位于 `docs/guide/`（架构/API/数据/前端/存储/安全等）。
-- `docs/specs/` 仅保留未实现摘要与指向 SSoT 的链接。
-- 数据库：采用 UUID 主键并启用外键校验（annotations.workspace_id → workspaces.id；删除 RESTRICT，更新 CASCADE）。详见 `docs/guide/storage.md`。
+常见问题
+- 未自动打开浏览器：查看终端输出 `AILOOM_PORT=<port>`，手动打开 `http://127.0.0.1:<port>`
+- 提示越权：确保访问的路径在 `--root` 指定的目录之下
+- 大文件被截断：为保护性能与内存，超限文件会被分页或限制显示
 
-代码格式化（总览）
+高级用法（可选）
+- 从源码运行（需 Rust、Node.js、pnpm、just）：
+  - 进入仓库根目录执行：`just serve`
+  - 仅尝鲜或离线环境可用；参与开发请阅读 CONTRIBUTING.md
+- API：本地服务提供 `/api/*`，适合二次集成，详见 `docs/guide/api.md`
 
-- Rust：`just fmt-rust` / `just fmt-rust:check`（基于 rustfmt）
-- Web：`just fmt-web` / `just fmt-web:check`（基于 Prettier，需要先执行 `just web-install` 安装依赖）
-- 一键（Rust + Web）：`just fmt` / `just fmt:check`
+隐私与安全
+- 服务仅绑定本机 `127.0.0.1`，启动时回显 `AILOOM_PORT`
+- 文件访问被限制在 `--root` 子树；遵循 `.gitignore` 与可选 `.ailoomignore`
+- 数据库存放路径可通过 `--db`/`--db-path` 指定
+
+更多
+- 开源协作与本地开发指南请见：CONTRIBUTING.md
+- 详细架构与数据说明：`docs/guide/`（架构/API/数据/前端/存储/安全等）
+
+License
+- MIT（参见 `packages/npm/ai-loom/package.json`）
