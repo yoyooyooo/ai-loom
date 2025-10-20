@@ -1,4 +1,4 @@
-# Rust Workspace（迁移说明）
+# Rust Workspace（规划）
 
 实现现状与职责已合并至 SSoT：
 - 总体架构：../guide/architecture.md

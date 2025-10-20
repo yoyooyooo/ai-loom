@@ -9,6 +9,7 @@ use crate::{
   state::AppState,
 };
 use axum::{routing::get, Router};
+use crate::ws::ws_upgrade_handler;
 use tower_http::{cors::{Any, CorsLayer}, services::ServeDir, trace::TraceLayer};
 
 pub fn build_router(state: AppState, web_dist: std::path::PathBuf, no_static: bool) -> Router {
@@ -26,6 +27,7 @@ pub fn build_router(state: AppState, web_dist: std::path::PathBuf, no_static: bo
     .route("/api/annotations/export", get(export_annotations))
     .route("/api/stitch", axum::routing::post(stitch_endpoint))
     .route("/api/annotations/verify", axum::routing::post(verify_annotations_endpoint))
+    .route("/ws", get(ws_upgrade_handler))
     .with_state(state)
     .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any));
 
@@ -35,4 +37,3 @@ pub fn build_router(state: AppState, web_dist: std::path::PathBuf, no_static: bo
     Router::new().nest_service("/", ServeDir::new(web_dist)).merge(api).layer(TraceLayer::new_for_http())
   }
 }
-

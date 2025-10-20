@@ -15,7 +15,20 @@ export default defineConfig({
       languageWorkers: ['editorWorkerService', 'typescript', 'json', 'css', 'html']
     })
   ],
-  server: { port: 5173 },
+  server: {
+    port: 5173,
+    proxy: {
+      '/api': {
+        target: process.env.VITE_API_BASE || 'http://127.0.0.1:3000',
+        changeOrigin: true
+      },
+      '/ws': {
+        target: process.env.VITE_API_BASE || 'http://127.0.0.1:3000',
+        ws: true,
+        changeOrigin: true
+      }
+    }
+  },
   build: { outDir: 'dist', sourcemap: false },
   resolve: {
     alias: {

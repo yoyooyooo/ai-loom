@@ -6,7 +6,7 @@
 - /Users/yoyo/projj/git.imile.com/ux/best-practice/docs/02-principles-and-architecture/05-file-conventions.md
 - /Users/yoyo/projj/git.imile.com/ux/best-practice/docs/adr/08-why-feature-first-structure.md
 
-> 注意：本文为强约束，新增代码应严格遵守；存量代码按需渐进迁移。
+> 注意：本文为强约束，新增代码应严格遵守；存量代码按需渐进调整。
 
 ## 1. 顶层原则
 
@@ -64,12 +64,13 @@ packages/web/src
 ### 3.1 全局 App Store（`src/stores/app.ts`）
 
 - 状态：
-  - `currentDir: string` 当前根目录
+  - `currentRoot: string` 当前根（供三段式 Query Key 使用）
+  - `currentDir: string` 当前视图目录（相对 `currentRoot`）
   - `selectedPath: string | null` 当前选中文件
   - `pageSize: number` 文件分页大小（用于大文件按行加载）
   - 偏好：`activePane: 'files' | 'annotations'`、`wrap: boolean`、`mdPreview: boolean`
 - 持久化：`persist({ name: 'ailoom.app' })`
-- 动作：`setCurrentDir`、`setSelectedPath`、`setPageSize`、`setActivePane`、`toggleWrap`、`toggleMdPreview`
+- 动作：`setCurrentRoot`、`setCurrentDir`、`setSelectedPath`、`setPageSize`、`setActivePane`、`toggleWrap`、`toggleMdPreview`
 
 ### 3.2 Explorer Store（`src/stores/explorer.ts`）
 
@@ -105,7 +106,7 @@ packages/web/src
 - `components/editor/MarkdownPreview.tsx` → `components/editor/markdown-preview.tsx`
 - `components/editor/MonacoEditorFull.tsx` → `components/editor/monaco-editor-full.tsx`
 
-> 存量命名可按计划批量迁移，确保 import 更新一致，避免一次性大范围扰动。
+> 存量命名可按计划批量调整，确保 import 更新一致，避免一次性大范围扰动。
 
 ## 6. 路由与 Feature 的边界
 
@@ -128,8 +129,9 @@ packages/web/src
 
 ## 9. React Query 约定
 
-- Query Key：`['tree', currentDir]`、`['annotations']`、`['file', path, range]` 等，按资源名 + 关键参数顺序命名。
-- 缓存策略：目录树使用 `staleTime/gcTime`，避免重复请求；写操作后用 `invalidateQueries` 精确失效。
+- Query Key：统一按“资源名 + 关键参数顺序”命名；目录树一律使用三段式键：`['tree', root, dir]`（顶层 `dir='.'`），以支持多根与精确失效。文件与批注保持现状：`['file', path, startLine, maxLines]`、`['annotations']`。
+- 迁移要求：不得再使用两段式 `['tree', currentDir]`。涉及预热（ensureQueryData/useIsFetching/useQuery）等场景均需使用三段式键，并在筛选时同时匹配 `root` 与 `dir` 两段参数。
+- 缓存策略：目录树设置 `staleTime/gcTime`，避免重复请求；写操作后用 `invalidateQueries` 精确失效。
 - 错误处理：在调用端对服务端错误进行用户可读提示；必要时在 `lib/api/client.ts` 统一封装错误类型。
 
 ## 10. API 层
@@ -137,13 +139,13 @@ packages/web/src
 - `lib/api/client.ts` 仅承载轻量请求封装与类型绑定；复杂拼接/组合逻辑下沉到 Feature 内部的 `services/` 或 hooks。
 - 所有 API 类型定义集中在 `lib/api/types.ts`，避免散落在组件中。
 
-## 11. 迁移策略
+## 11. 命名与结构调整计划
 
-1. 新增文件全面使用 `kebab-case`，同时在评审中强校验；存量文件按优先级渐进重命名（IDE/脚本统一更新 import）。
-2. 将 `src/lib/store/useAppStore.ts` 平移为 `src/stores/app.ts` 并扩展偏好项；过渡期保留 re-export 以避免大范围改动。
-3. 拆分 `routes/explorer.tsx`：迁移到 `features/explorer/pages/explorer-page.tsx`，并按“活动栏/侧栏/主区/浮层”组件化拆分。
+1. 新增文件全面使用 `kebab-case`，在评审中强校验；存量文件按优先级渐进重命名（通过 IDE/脚本统一更新 import）。
+2. 将 `src/lib/store/useAppStore.ts` 平移为 `src/stores/app.ts` 并扩展偏好项；通过统一路径更新消除临时重导出。
+3. 拆分 `routes/explorer.tsx`：调整为 `features/explorer/pages/explorer-page.tsx`，并按“活动栏/侧栏/主区/浮层”组件化拆分。
 4. 把领域专属组件移动到对应 feature 目录；仅保留通用组件在 `src/components`。
-5. 保持 React Query 键不变，减少缓存抖动；把 localStorage 零散键整合到 `persist(name: 'ailoom.app')`。
+5. 统一将目录树 Query Key 迁移为三段式 `['tree', root, dir]`（包括页面预热/ensureQueryData/useIsFetching 等），并批量更新筛选断言逻辑；把 localStorage 零散键整合到 `persist(name: 'ailoom.app')`。
 6. 渐进完成通用组件的 kebab-case 重命名与导入修复。
 
 ## 12. 开发与验证
@@ -151,3 +153,14 @@ packages/web/src
 - 开发热更新：使用者执行 `just server-dev`；Agent 不自行启动服务或构建。
 - 如需产出静态资源再用 `just web-build`/`just serve`。
 - Rust/后端与 CLI 的命令保持 README/AGENTS.md 既有约定。
+
+## 13. WS 订阅与缓存失效（Explorer）
+
+- 策略约定：优先 WS（`wsPrefer`），短窗熔断回退 REST；写入默认 REST，写后由服务端广播事件维持一致性（详见 AGENTS.md“WS 开发策略”）。
+- 订阅桥（按特性组织）：`src/features/explorer/subscriptions.ts` 仅维护 Explorer 所需的 `tree/file/annotations` 订阅，随页面挂载/卸载自动重建。
+- 领域化 invalidators：
+  - 文件：`src/features/explorer/ws-invalidators/file-invalidator.ts`（digest 短窗去重 + RAF 合批，失效 `['file', path]` 与所属目录树）
+  - 目录树：`src/features/explorer/ws-invalidators/tree-invalidator.ts`（`impactedPaths` 最小目录集，`truncated/缺摘要` 粗粒度刷新当前视图根）
+  - 批注：`src/features/explorer/ws-invalidators/annotations-invalidator.ts`（created/updated/deleted 直改列表或整表失效）
+  - 聚合安装：`src/features/explorer/invalidations.ts` 导出 `useExplorerInvalidations()`，在 `explorer-page.tsx` 中调用。
+- Query Key：继续遵循三段式 `['tree', root, dir]` 与 `['file', path, ...]`、`['annotations']` 的规范，invalidators 仅做精确失效或直改缓存，不存储业务状态。

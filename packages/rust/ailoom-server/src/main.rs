@@ -9,6 +9,7 @@ mod paths;
 mod services;
 mod routes;
 mod router;
+mod ws;
 
 use ailoom_fs::FsConfig;
 use ailoom_store::Store;
@@ -72,7 +73,32 @@ async fn main() -> anyhow::Result<()> {
     }
   };
 
-  let app_state = AppState { fs: fs_cfg.clone(), store, root: root.clone(), workspace_root: workspace_root.clone() };
+  // Init WS hub (Phase 1: enabled by default)
+  let ring_cap = std::env::var("AILOOM_WS_RING_CAP").ok().and_then(|s| s.parse::<usize>().ok()).unwrap_or(1024);
+  let hub = ws::hub::Hub::new(ring_cap);
+  let app_state = AppState { fs: fs_cfg.clone(), store, root: root.clone(), workspace_root: workspace_root.clone(), ws_hub: Some(hub.clone()) };
+  // Phase 2: optional FS watcher (env: AILOOM_FSWATCH_ENABLED=1)
+  let _watcher = ws::watch::spawn_watcher(app_state.clone());
+  // Periodic stats broadcast (debug/observability)
+  {
+    let hub_clone = hub.clone();
+    tokio::spawn(async move {
+      loop {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let snap = hub_clone.stats_snapshot();
+        let ts = time::OffsetDateTime::now_utc()
+          .format(&time::format_description::well_known::Rfc3339)
+          .unwrap_or_else(|_| "".into());
+        if let Ok(mut val) = serde_json::to_value(&snap) {
+          if let Some(obj) = val.as_object_mut() {
+            obj.insert("ts".into(), serde_json::json!(ts));
+          }
+          // stats 属于瞬时观测，不入 ring、不携带 eventId，避免污染 resume 语义
+          hub_clone.broadcast_ephemeral("session.stats".into(), val);
+        }
+      }
+    });
+  }
   let app = router::build_router(app_state, args.web_dist.clone(), args.no_static);
 
   let bind_addr: SocketAddr = match args.port { Some(p) => SocketAddr::from(([127, 0, 0, 1], p)), None => SocketAddr::from(([127, 0, 0, 1], 0)), };
@@ -83,4 +109,3 @@ async fn main() -> anyhow::Result<()> {
   axum::serve(listener, app).await?;
   Ok(())
 }
-

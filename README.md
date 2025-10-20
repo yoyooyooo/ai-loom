@@ -13,7 +13,7 @@
   - 代码格式化（Prettier）：
     - just fmt-web（写入修复）
     - just fmt-web:check（仅检查）
-  
+
 - 热更新开发（前后端）
   - 需要安装：cargo install cargo-watch
   - DB 默认存放在当前仓库：`.ailoom/ailoom.db`；支持通过环境变量覆盖：`DB_PATH=/abs/path/to/ailoom.db`
@@ -39,11 +39,13 @@
 更多参与与发布细节，请参见 `CONTRIBUTING.md`。
 
 文档与 SSoT
+
 - 单一事实源（SSoT）位于 `docs/guide/`（架构/API/数据/前端/存储/安全等）。
 - `docs/specs/` 仅保留未实现摘要与指向 SSoT 的链接。
- - 数据库：采用 UUID 主键并启用外键校验（annotations.workspace_id → workspaces.id；删除 RESTRICT，更新 CASCADE）。详见 `docs/guide/storage.md`。
+- 数据库：采用 UUID 主键并启用外键校验（annotations.workspace_id → workspaces.id；删除 RESTRICT，更新 CASCADE）。详见 `docs/guide/storage.md`。
 
 代码格式化（总览）
+
 - Rust：`just fmt-rust` / `just fmt-rust:check`（基于 rustfmt）
 - Web：`just fmt-web` / `just fmt-web:check`（基于 Prettier，需要先执行 `just web-install` 安装依赖）
 - 一键（Rust + Web）：`just fmt` / `just fmt:check`

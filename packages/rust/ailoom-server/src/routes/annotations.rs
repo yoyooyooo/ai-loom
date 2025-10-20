@@ -41,6 +41,10 @@ pub async fn create_annotation(
     Ok(_) => {
       let mut out = ann.clone();
       out.file_path = from_workspace_to_root(&state, &ws_rel_path);
+      if let Some(hub) = state.ws_hub.clone() {
+        let payload = serde_json::json!({"annotation": out.clone()});
+        hub.broadcast("annotations.created".into(), payload);
+      }
       Json(out).into_response()
     }
     Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(error("INTERNAL", &e.to_string()))).into_response(),
@@ -68,7 +72,7 @@ pub async fn update_annotation(
       if let Some(v) = body.priority { ex.priority = Some(v); }
       ex.updated_at = time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_else(|_| ex.updated_at);
       match state.store.update_annotation(&ex).await {
-        Ok(_) => { let mut out = ex.clone(); out.file_path = from_workspace_to_root(&state, &out.file_path); Json(out).into_response() }
+        Ok(_) => { let mut out = ex.clone(); out.file_path = from_workspace_to_root(&state, &out.file_path); if let Some(hub) = state.ws_hub.clone() { hub.broadcast("annotations.updated".into(), serde_json::json!({"annotation": out.clone()})); } Json(out).into_response() }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(error("INTERNAL", &e.to_string()))).into_response(),
       }
     }
@@ -79,7 +83,7 @@ pub async fn update_annotation(
 
 pub async fn delete_annotation(axum::extract::State(state): axum::extract::State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
   match state.store.delete_annotation(&id).await {
-    Ok(_) => Json(serde_json::json!({"ok": true})).into_response(),
+    Ok(_) => { if let Some(hub) = state.ws_hub.clone() { hub.broadcast("annotations.deleted".into(), serde_json::json!({"id": id.clone()})); } Json(serde_json::json!({"ok": true})).into_response() },
     Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(error("INTERNAL", &e.to_string()))).into_response(),
   }
 }

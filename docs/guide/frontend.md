@@ -15,12 +15,17 @@
 
 状态与 Query Key
 - React Query：
-  - 目录树：`['tree', currentDir]`（预热）与 `['tree', root, dir]`（逐层）
+  - 目录树：一律使用三段式 `['tree', root, dir]`（顶层 `dir='.'`），包含页面预热/ensureQueryData/useIsFetching 等全部场景
   - 批注列表：`['annotations']`
   - 文件分页：`['file', path, startLine, maxLines]`
 - Zustand：
   - `useAppStore`（persist: `ailoom.app`）：`currentDir/selectedPath/pageSize/activePane/wrap/mdPreview`
-  - `useExplorerStore`：`startLine/selection/showToolbar/comment/activeAnnId/full/chunkInfo/pendingJump`
+ - `useExplorerStore`：`startLine/selection/showToolbar/comment/activeAnnId/full/chunkInfo/pendingJump`
+
+WS 与订阅（Explorer）
+- 订阅桥：`features/explorer/subscriptions.ts` 维护 `tree/file/annotations` 订阅（随页面装载/卸载）。
+- 失效与直改：`features/explorer/ws-invalidators/*` 分别处理文件/目录树/批注事件 → 精确 `invalidateQueries` 或直接更新列表缓存；聚合于 `features/explorer/invalidations.ts` 并在 `explorer-page.tsx` 调用 `useExplorerInvalidations()` 安装。
+- 策略：读取优先 WS（短窗熔断回退 REST），写入默认 REST，写后由 WS 广播驱动 UI 同步。
 
 主要交互
 - 目录树：懒加载单层（根据展开状态构建）；本地存储记忆展开集合。
@@ -35,4 +40,4 @@
 
 实现提示（规范对齐）
 - `FileChunk` 字段命名已与后端对齐为 camelCase（见 `api.md`）。
-- 组件与文件命名已基本遵循 `kebab-case`；历史命名（如 `MonacoViewer.tsx`）可按计划迁移，但当前保持运行稳定优先。
+- 组件与文件命名统一为 `kebab-case`；如存在个别不一致命名（如 `MonacoViewer.tsx`），将按计划调整，当前仍以运行稳定优先。

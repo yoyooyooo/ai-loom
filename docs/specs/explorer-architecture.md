@@ -1,8 +1,8 @@
-# Explorer 页面架构（迁移说明）
+# Explorer 页面架构（规划）
 
-本规范已消化迁移到 SSoT：
-- 页面结构与组件拆分：../guide/frontend.md
-- 状态边界（Zustand + React Query）：../guide/frontend.md
+本规范已收敛到 SSoT：
+- 页面结构与组件拆分：../frontend-architecture.md
+- 状态边界（Zustand + React Query）：../frontend-architecture.md
 
 本文件仅保留简述与未完成项，后续以 SSoT 为唯一事实源。
 

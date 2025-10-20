@@ -57,10 +57,24 @@ pub async fn api_file_put(
 ) -> impl IntoResponse {
   match ailoom_fs::write_file(&state.fs, &body.path, &body.content, body.base_digest.as_deref()) {
     Ok(new_digest) => {
+      // 写后广播 file.changed
+      if let Some(hub) = state.ws_hub.clone() {
+        let payload = serde_json::json!({
+          "path": body.path.clone(),
+          "kind": "modified",
+          "digest": new_digest.clone(),
+        });
+        hub.broadcast("file.changed".into(), payload);
+        hub.inc_file_changed();
+      }
+      // 异步校验结束后广播 annotations.verify.done
       let st = state.clone();
       let path = body.path.clone();
+      let hub2 = state.ws_hub.clone();
       tokio::spawn(async move {
-        let _ = verify_annotations_for_file(&st, &path, Some(40), Some(5 * 1024 * 1024), true).await;
+        if let Ok(res) = verify_annotations_for_file(&st, &path, Some(40), Some(5 * 1024 * 1024), true).await {
+          if let Some(h) = hub2 { h.broadcast("annotations.verify.done".into(), serde_json::to_value(res).unwrap_or(serde_json::json!({}))); }
+        }
       });
       Json(serde_json::json!({"ok": true, "digest": new_digest})).into_response()
     }

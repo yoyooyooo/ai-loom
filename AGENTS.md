@@ -20,6 +20,13 @@
 - 使用者会主动执行 `just server-dev` 以启动前后端热更新。Agent 在开发环节不自行启动服务与构建。
 - 修改前端后无需执行 `pnpm -C packages/web build`，热更新会自动生效；仅在需要产出静态资源时再使用 `just web-build`/`just serve`。
 
+### WS 开发策略（重要）
+- 默认“读取优先 WS”：前端调用通过 `wsPrefer` 优先走 WebSocket，出现传输/能力类错误在短窗内回退 REST；可用 `VITE_WS_NO_FALLBACK=1` 强制纯 WS 验证，`VITE_WS_FUSE_MS` 调整短窗。
+- 写入默认 REST；如需验证保存经 WS，可临时开启 `VITE_WS_WRITE=1`（`file.save`）。
+- 订阅/推送：由服务端广播 `file.changed`、`tree.changed`、`annotations.*` 驱动缓存失效与 UI 同步；详见 `docs/guide/ws-overview.md` 与 `docs/specs/ws/client.md`。
+- 调试：`VITE_WS_DEBUG=1` 打开右下角 WS 面板；`VITE_WS_DEBUG_ROUTE=1` 显示每次调用的 WS/REST 路由决策。
+- 若后续遇到性能或网络卡点，再按需评估“HTTP 读取 + WS 推送”的混用策略（不作为当前默认）。
+
 ## 编码风格与命名
 - Rust：遵循 `rustfmt`（4 空格）；类型 `PascalCase`，函数/模块 `snake_case`，常量 `SCREAMING_SNAKE_CASE`。建议本地运行 `cargo fmt && cargo clippy -W warnings`。
 - Web（TypeScript/React）：2 空格缩进；组件导出的标识符使用 `PascalCase`；文件与目录一律使用 `kebab-case`（a-b-c），例如：`explorer-page.tsx`、`file-tree-panel.tsx`、`annotation-toolbar.tsx`。已启用 Prettier（见 `packages/web/.prettierrc.json`；约定：单引号、无分号、printWidth=100）。

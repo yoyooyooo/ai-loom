@@ -18,7 +18,7 @@
   - `endLine: number`
   - `content: string`
   - `truncated: boolean`
-- 实现差异：服务端当前返回 snake_case（`total_lines/start_line/end_line`）。见 `api.md` 对齐建议。
+- 返回字段大小写：服务端已通过 `#[serde(rename_all = "camelCase")]` 对齐 camelCase（含 `totalLines/startLine/endLine`）。
 
 ## Annotation
 - 通用字段（camelCase）：

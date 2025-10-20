@@ -8,5 +8,5 @@ pub struct AppState {
   pub store: Store,
   pub root: PathBuf,
   pub workspace_root: PathBuf,
+  pub ws_hub: Option<crate::ws::hub::Hub>,
 }
-

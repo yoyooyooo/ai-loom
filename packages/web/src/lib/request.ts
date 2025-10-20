@@ -23,7 +23,9 @@ export function toHttpError(e: any, fallbackMsg: string) {
   const data = e?.response?.data
   const code = data?.error?.code || (status ? 'HTTP_' + status : 'NETWORK')
   const message = data?.error?.message || fallbackMsg
-  return new Error(code + ':' + message)
+  const err: any = new Error(code + ':' + message)
+  err.code = code
+  return err
 }
 
 export default http

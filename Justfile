@@ -86,7 +86,7 @@ server-dev PORT='63000':
     -i packages/web \
     -i packages/npm \
     -i packages/web/dist \
-    -s "RUSTFLAGS=\"\${RUSTFLAGS:-} -Awarnings\" cargo run -p {{SERVER_BIN}} -- --root \"\${ROOT:-.}\" --web-dist \"\${WEB_DIST:-packages/web/dist}\" --db-path \"\${DB_PATH:-\${ROOT:-.}/.ailoom/ailoom.db}\" --port {{PORT}} 2>&1 | awk '{ print } /^AILOOM_PORT=/{ split(\$0,a,\"=\"); port=a[2]; printf(\"[server-dev] API: http://127.0.0.1:%s\\n\", port); fflush(); }'" 
+    -s "RUSTFLAGS=\"\${RUSTFLAGS:-} -Awarnings\" cargo run -p {{SERVER_BIN}} -- --root \"\${ROOT:-.}\" --web-dist \"\${WEB_DIST:-packages/web/dist}\" --db-path \"\${DB_PATH:-\${ROOT:-.}/.ailoom/ailoom.db}\" --port {{PORT}} 2>&1 | awk '{ print } /^AILOOM_PORT=/{ split(\$0,a,\"=\"); port=a[2]; printf(\"[server-dev] API: http://127.0.0.1:%s\\n\", port); fflush(); }'"
 
 # 前后端联调热更新（需要另开一个终端）
 # 终端A：just server-dev [PORT=63000]
@@ -123,6 +123,10 @@ release-bundle:
     '#!/usr/bin/env bash' \
     'set -euo pipefail' \
     'DIR="$(cd "$(dirname "$0")" && pwd)"' \
+    '# 默认启用本地文件监听（如需关闭：export AILOOM_FSWATCH_ENABLED=0）' \
+    'export AILOOM_FSWATCH_ENABLED="${AILOOM_FSWATCH_ENABLED:-1}"' \
+    '# 默认 WS 单帧写出软超时（更快纠偏）；如需更保守可覆盖为 1500' \
+    'export AILOOM_BROADCAST_SEND_TIMEOUT_MS="${AILOOM_BROADCAST_SEND_TIMEOUT_MS:-1000}"' \
     '# 生产默认使用用户目录 DB，如需项目内 DB，可添加：--db-path "$DIR/.ailoom/ailoom.db"' \
     'exec "$DIR/ailoom-server" --root "$DIR" --web-dist "$DIR/web" ${PORT:+--port $PORT}' \
     > "$OUT_DIR/run.sh"; \
@@ -314,3 +318,58 @@ open URL:
   else echo "{{URL}}"; fi
 
 # 模板目录 templates/vibe-kanban 仅作一次性参考，后续会在完全吸收后删除。
+# --- Verify / Smoke ---
+
+# 运行后端与前端测试（WS/REST 等价性 + 前端单测）
+verify:
+  just verify-rust
+  just verify-web
+  @echo "[verify] ✅ 后端与前端单测完成"
+  @echo "[verify] 下一步（任选）："
+  @echo "  - 单终端联动：just dev-all PORT=63000"
+  @echo "  - 分终端：just server-dev PORT=63000 与 just web-dev VITE_API_BASE=http://127.0.0.1:63000"
+  @echo "  - 开启面板调试：VITE_WS_DEBUG=1"
+  @echo "  - Phase 2 验收清单：docs/specs/ws/phase2-acceptance.md"
+
+verify-rust:
+  RUSTFLAGS="${RUSTFLAGS:-} -Awarnings" cargo test -p {{SERVER_BIN}} --tests -- --nocapture
+
+verify-web:
+  pnpm -C {{WEB_DIR}} test -s
+
+# 监听风暴压测（需 AILOOM_FSWATCH_ENABLED=1）；COUNT 默认为 1000
+burst-listen COUNT='1000':
+  bash scripts/fs-burst.sh . {{COUNT}}
+
+# REST 写压测：默认端口 63000、200 次、并发 16
+burst-save PORT='63000' COUNT='200' CONC='16':
+  AILOOM_PORT={{PORT}} node scripts/save-burst.mjs {{PORT}} {{COUNT}} {{CONC}}
+# 强制 WS 模式（仅用于验证 WS 路径；尽量最小开关）
+# 默认：开启监听；将 WS 单帧软超时降到 800ms，以便更快触发 close-first + resume
+dev-all-ws PORT='63000':
+  VITE_USE_WS=1 \
+  VITE_WS_NO_FALLBACK=1 \
+  VITE_WS_FUSE_MS=0 \
+  VITE_WS_WRITE=1 \
+  VITE_WS_DEBUG=1 \
+  AILOOM_FSWATCH_ENABLED="${AILOOM_FSWATCH_ENABLED:-1}" \
+  AILOOM_BROADCAST_SEND_TIMEOUT_MS="${AILOOM_BROADCAST_SEND_TIMEOUT_MS:-800}" \
+  RUST_LOG="${RUST_LOG:-ws=info,fswatch=info}" \
+  bash scripts/dev-all.sh {{PORT}}
+
+# 本地调试（与生产逻辑一致，只打开日志/面板/可选监听），推荐日常使用
+dev-all-debug PORT='63000':
+  RUST_LOG="${RUST_LOG:-ws=info,fswatch=info}" \
+  AILOOM_FSWATCH_ENABLED="${AILOOM_FSWATCH_ENABLED:-1}" \
+  VITE_WS_DEBUG=1 \
+  bash scripts/dev-all.sh {{PORT}}
+
+
+# Phase 3：写路径灰度（读取 WS + 写入优先 WS，允许回退）
+dev-ws-write PORT='63000':
+  VITE_USE_WS=1 \
+  VITE_WS_NO_FALLBACK=0 \
+  VITE_WS_FUSE_MS=1500 \
+  VITE_WS_DEBUG_ROUTE=1 \
+  VITE_WS_WRITE=1 \
+  bash scripts/dev-all.sh {{PORT}}

@@ -1,10 +1,17 @@
 import type { Annotation, CreateAnnotation, UpdateAnnotation } from '@/lib/api/types'
 import { http, toHttpError } from '@/lib/request'
+import { wsPrefer } from '@/lib/ws/query-helpers'
 
 export async function listAnnotations(): Promise<Annotation[]> {
   try {
-    const res = await http.get('/api/annotations')
-    return res.data as Annotation[]
+    return await wsPrefer<Annotation[]>(
+      'annotations.list',
+      {},
+      async (signal) => {
+        const res = await http.get('/api/annotations', { signal })
+        return res.data as Annotation[]
+      }
+    )
   } catch (e: any) {
     throw toHttpError(e, 'Failed to list annotations')
   }

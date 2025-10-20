@@ -273,7 +273,7 @@ mod tests {
     let fs_cfg = FsConfig::new(root.clone());
     let db = tmpdir.join("ailoom.db");
     let store = Store::connect_path(&db, &workspace_root.to_string_lossy()).await.unwrap();
-    AppState { fs: fs_cfg, store, root, workspace_root }
+    AppState { fs: fs_cfg, store, root, workspace_root, ws_hub: None }
   }
 
   fn new_ann(id: &str, file_path_ws_rel: &str, start: i64, end: i64, selected: &str) -> Annotation {

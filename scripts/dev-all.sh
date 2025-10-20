@@ -41,8 +41,15 @@ WATCH_PID=$!
 
 # 前端 Dev，指向后端端口
 echo "[dev-all] 后端 API: http://127.0.0.1:${PORT} (no static)"
-echo "[dev-all] 前端 Dev: http://localhost:5173"
-VITE_API_BASE="http://127.0.0.1:${PORT}" pnpm -C "${WEB_DIR}" dev
+echo "[dev-all] 前端 Dev: http://localhost:5173 (WS 默认开启；如需禁用：VITE_USE_WS=0)"
+# 显式透传 WS 相关开关，便于 dev-all-ws 等命令生效
+VITE_API_BASE="http://127.0.0.1:${PORT}" \
+VITE_USE_WS="${VITE_USE_WS:-1}" \
+VITE_WS_NO_FALLBACK="${VITE_WS_NO_FALLBACK:-}" \
+VITE_WS_FUSE_MS="${VITE_WS_FUSE_MS:-}" \
+VITE_WS_DEBUG_ROUTE="${VITE_WS_DEBUG_ROUTE:-}" \
+VITE_WS_DEBUG="${VITE_WS_DEBUG:-}" \
+pnpm -C "${WEB_DIR}" dev
 
 # 当前端退出，清理后端
 cleanup

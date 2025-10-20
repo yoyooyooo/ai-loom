@@ -1,4 +1,4 @@
-# 检索与预算（迁移说明）
+# 检索与预算（规划）
 
 已并入 SSoT 的部分：
 - Stitch 预算与裁剪策略：../guide/stitching.md

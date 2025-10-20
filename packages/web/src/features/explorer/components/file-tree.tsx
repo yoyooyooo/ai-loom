@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { TREE_CACHE_STALE_MS, TREE_CACHE_GC_MS } from '@/lib/config'
 import type { DirEntry } from '@/lib/api/types'
 import { fetchTree } from '@/features/explorer/api/tree'
+import { ws } from '@/lib/ws/singleton'
 
 type Node = DirEntry & { depth: number; expanded?: boolean; loaded?: boolean }
 
@@ -44,6 +45,31 @@ export default function FileTree({ root, onOpenFile, selectedPath }: Props) {
       const list = await buildNodes(root, 0, expandedRef.current, 0)
       setNodes(list)
     })()
+  }, [root])
+
+  // 监听 WS 事件，触发树的重建（与无感缓存失效配合）。
+  // 注意批量/风暴场景：做简单节流，避免重复重建。
+  useEffect(() => {
+    let timer: any = null
+    const schedule = () => {
+      if (timer) return
+      timer = setTimeout(async () => {
+        timer = null
+        try {
+          const expandSet = expandedRef.current
+          if (!expandSet || expandSet.size === 0) {
+            const top = await fetchTree(root)
+            setNodes(top.sort(compareEntry).map((c) => ({ ...c, depth: 0 })))
+          } else {
+            const list = await buildNodes(root, 0, expandSet, 0)
+            setNodes(list)
+          }
+        } catch {}
+      }, 200)
+    }
+    const s1 = ws.notification$('tree.changed').subscribe(() => schedule())
+    const s2 = ws.notification$('file.changed').subscribe(() => schedule())
+    return () => { try { clearTimeout(timer) } catch {}; try { s1.unsubscribe() } catch {}; try { s2.unsubscribe() } catch {} }
   }, [root])
 
   async function loadChildren(dir: string, depth: number, insertIndex?: number) {

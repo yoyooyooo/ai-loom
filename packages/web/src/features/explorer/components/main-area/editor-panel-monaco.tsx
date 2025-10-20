@@ -12,6 +12,12 @@ import { useEditorFloatingAnchor } from '@/components/editor/use-editor-floating
 import { toast } from 'sonner'
 
 export default function EditorPanelMonaco() {
+  const DISABLE_VERIFY = (() => {
+    const v = (import.meta as any).env?.VITE_DISABLE_VERIFY
+    if (v == null) return false
+    const s = String(v).toLowerCase()
+    return s === '1' || s === 'true'
+  })()
   const qc = useQueryClient()
   const { data: anns } = useQuery({ queryKey: ['annotations'], queryFn: listAnnotations })
 
@@ -100,12 +106,14 @@ export default function EditorPanelMonaco() {
     const lastAt = lastVerifiedAtRef.current.get(selectedPath) || 0
     if (Date.now() - lastAt < 1000) return
     lastVerifiedAtRef.current.set(selectedPath, Date.now())
-    void (async () => {
-      try {
-        await verifyAnnotations({ filePath: selectedPath, window: 40, fullLimitBytes: 5 * 1024 * 1024, removeBroken: true })
-        await qc.invalidateQueries({ queryKey: ['annotations'] })
-      } catch {}
-    })()
+    if (!DISABLE_VERIFY) {
+      void (async () => {
+        try {
+          await verifyAnnotations({ filePath: selectedPath, window: 40, fullLimitBytes: 5 * 1024 * 1024, removeBroken: true })
+          await qc.invalidateQueries({ queryKey: ['annotations'] })
+        } catch {}
+      })()
+    }
   }
 
   // 处理批注跳转

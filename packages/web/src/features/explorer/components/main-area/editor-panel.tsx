@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import MonacoEditorFull, { EditorFullHandle } from '@/components/editor/MonacoEditorFull'
 import type { DirEntry } from '@/lib/api/types'
 import { fetchFileFull, saveFile } from '@/features/explorer/api/files'
+import { ws } from '@/lib/ws/singleton'
 import { useAppStore } from '@/stores/app'
 import { useExplorerStore } from '@/stores/explorer'
 import { toast } from 'sonner'
@@ -11,15 +12,54 @@ import EditorPanelMarkdown from '@/features/explorer/components/main-area/editor
 
 export default function EditorPanel() {
   const qc = useQueryClient()
-  const { selectedPath, wrap, toggleWrap, mdPreview, toggleMdPreview, currentDir } = useAppStore()
+  const { selectedPath, wrap, toggleWrap, mdPreview, toggleMdPreview, currentDir, currentRoot } = useAppStore()
   const { full, enterFull, exitFull, setSelection, chunkInfo } = useExplorerStore()
   const editorRef = useRef<EditorFullHandle | null>(null)
 
   // 切换文件时重置选区（对齐旧行为）
   useEffect(() => { setSelection(null) }, [selectedPath, setSelection])
 
+  // 外部文件变更提醒/刷新（监听 file.changed 针对当前选中文件）
+  useEffect(() => {
+    if (!selectedPath) return
+    const sub = ws.notification$('file.changed').subscribe(async (p: any) => {
+      try {
+        const path = String(p?.path || '')
+        if (!path || path !== selectedPath) return
+        // 仅在全量编辑模式下提示/刷新；只读分页模式已由 Query 失效自动刷新
+        if (full) {
+          const currentVal = editorRef.current?.getValue?.() || full.content
+          // 若未修改（编辑器内容与已知内容一致），则自动刷新到最新
+          if (currentVal === full.content) {
+            try {
+              const f = await fetchFileFull(selectedPath)
+              enterFull({ ...full, content: f.content, digest: f.digest, language: f.language })
+              toast.success('已刷新最新内容')
+            } catch {}
+            return
+          }
+          // 若有本地修改，提示用户手动刷新，避免覆盖未保存内容
+          toast.info('文件已被外部修改', {
+            action: {
+              label: '刷新',
+              onClick: async () => {
+                try {
+                  const f = await fetchFileFull(selectedPath)
+                  enterFull({ ...full, content: f.content, digest: f.digest, language: f.language })
+                } catch (err: any) {
+                  toast.error('刷新失败：' + String(err?.message || err))
+                }
+              }
+            }
+          } as any)
+        }
+      } catch {}
+    })
+    return () => { try { sub.unsubscribe() } catch {} }
+  }, [selectedPath, full, enterFull])
+
   // 目录树缓存（用于显示当前文件大小）
-  const treeCached = qc.getQueryData(['tree', currentDir]) as DirEntry[] | undefined
+  const treeCached = qc.getQueryData(['tree', currentRoot, currentDir]) as DirEntry[] | undefined
 
   return (
     <div className="flex-1 h-full flex flex-col overflow-hidden">
@@ -61,7 +101,7 @@ export default function EditorPanel() {
                       setSelection(null)
                     } catch (err: any) {
                       const msg = String(err?.message || '')
-                      if (msg.startsWith('OVER_LIMIT') || msg.startsWith('HTTP_413')) toast.error('文件过大，无法全量读取')
+                      if (msg.startsWith('OVER_LIMIT') || msg.includes('MESSAGE_TOO_LARGE') || msg.startsWith('HTTP_413')) toast.error('文件过大，无法全量读取')
                       else if (msg.includes('NON_TEXT') || msg.startsWith('HTTP_415')) toast.error('该文件不是可预览的文本')
                       else toast.error('进入编辑失败：' + msg)
                     }

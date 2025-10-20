@@ -4,6 +4,7 @@ import { persist } from 'zustand/middleware'
 type ActivePane = 'files' | 'annotations'
 
 type AppState = {
+  currentRoot: string
   currentDir: string
   selectedPath: string | null
   pageSize: number
@@ -12,6 +13,7 @@ type AppState = {
   mdPreview: boolean
   theme: 'light' | 'dark'
   setCurrentDir: (dir: string) => void
+  setCurrentRoot: (r: string) => void
   setSelectedPath: (p: string | null) => void
   setPageSize: (n: number) => void
   setActivePane: (p: ActivePane) => void
@@ -24,6 +26,7 @@ type AppState = {
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
+      currentRoot: '.',
       currentDir: '.',
       selectedPath: null,
       pageSize: 1000,
@@ -32,6 +35,7 @@ export const useAppStore = create<AppState>()(
       mdPreview: false,
       theme: 'light',
       setCurrentDir: (dir) => set({ currentDir: dir }),
+      setCurrentRoot: (r) => set({ currentRoot: r }),
       setSelectedPath: (p) => set({ selectedPath: p }),
       setPageSize: (n) => set({ pageSize: n }),
       setActivePane: (p) => set({ activePane: p }),

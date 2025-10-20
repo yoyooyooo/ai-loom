@@ -6,6 +6,7 @@ import type { ViewerSelection } from '@/components/editor/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { listAnnotations, createAnnotation, updateAnnotation, deleteAnnotation } from '@/features/explorer/api/annotations'
 import { fetchFileFull } from '@/features/explorer/api/files'
+import { ws } from '@/lib/ws/singleton'
 import type { Annotation } from '@/lib/api/types'
 import { useAppStore } from '@/stores/app'
 import { useExplorerStore } from '@/stores/explorer'
@@ -103,16 +104,41 @@ export default function EditorPanelMarkdown() {
       } catch (e: any) {
         setMdContent(null)
         const msg = String(e?.message || '')
-        if (msg.startsWith('OVER_LIMIT') || msg.startsWith('HTTP_413')) {
+        // WS 路径返回 MESSAGE_TOO_LARGE；REST 返回 HTTP_413
+        if (msg.startsWith('OVER_LIMIT') || msg.includes('MESSAGE_TOO_LARGE') || msg.startsWith('HTTP_413')) {
           setMdError('预览不可用：文件过大，无法全量读取')
         } else if (msg.includes('NON_TEXT') || msg.startsWith('HTTP_415')) {
           setMdError('预览不可用：该文件不是文本')
+        } else if (msg.includes('INVALID_PATH') || msg.startsWith('HTTP_400')) {
+          setMdError('预览不可用：文件不存在或路径无效')
         } else {
           setMdError('预览加载失败')
         }
       }
     }
     run()
+  }, [selectedPath])
+
+  // 监听 file.changed：当前为 Markdown 预览时，自动刷新预览内容（不覆盖其它模式逻辑）
+  useEffect(() => {
+    if (!selectedPath || !selectedPath.toLowerCase().endsWith('.md')) return
+    const sub = ws.notification$('file.changed').subscribe(async (p: any) => {
+      try {
+        const path = String(p?.path || '')
+        if (!path || path !== selectedPath) return
+        const f = await fetchFileFull(selectedPath)
+        setMdContent(f.content)
+        setMdError(null)
+      } catch (e: any) {
+        // 保持原有错误映射
+        const msg = String(e?.message || '')
+        if (msg.startsWith('OVER_LIMIT') || msg.includes('MESSAGE_TOO_LARGE') || msg.startsWith('HTTP_413')) setMdError('预览不可用：文件过大，无法全量读取')
+        else if (msg.includes('NON_TEXT') || msg.startsWith('HTTP_415')) setMdError('预览不可用：该文件不是文本')
+        else if (msg.includes('INVALID_PATH') || msg.startsWith('HTTP_400')) setMdError('预览不可用：文件不存在或路径无效')
+        else setMdError('预览加载失败')
+      }
+    })
+    return () => { try { sub.unsubscribe() } catch {} }
   }, [selectedPath])
 
   // 浮层聚焦

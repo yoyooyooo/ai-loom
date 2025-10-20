@@ -6,12 +6,15 @@ import FileTreePanel from '@/features/explorer/components/side-panel/file-tree-p
 import SideAnnotationPanel from '@/features/explorer/components/side-panel/annotation-panel'
 import EditorPanel from '@/features/explorer/components/main-area/editor-panel'
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable'
+import { useExplorerInvalidations } from '@/features/explorer/invalidations'
 
 export default function ExplorerPage() {
-  const { currentDir, activePane } = useAppStore()
+  const { currentRoot, currentDir, activePane } = useAppStore()
+  // 安装 Explorer 领域内的 WS→Query 失效器
+  useExplorerInvalidations()
 
   // 预热目录树缓存
-  useQuery({ queryKey: ['tree', currentDir], queryFn: () => fetchTree(currentDir) })
+  useQuery({ queryKey: ['tree', currentRoot, currentDir], queryFn: () => fetchTree(currentDir) })
 
   // 各面板独立 loading：
   // - 文件树：当前 root 相关的 tree 查询
@@ -19,7 +22,7 @@ export default function ExplorerPage() {
   const fetchingTree =
     useIsFetching({
       predicate: (q) =>
-        Array.isArray(q.queryKey) && q.queryKey[0] === 'tree' && q.queryKey[1] === currentDir
+        Array.isArray(q.queryKey) && q.queryKey[0] === 'tree' && q.queryKey[1] === currentRoot && q.queryKey[2] === currentDir
     }) > 0
   const fetchingAnns =
     useIsFetching({
