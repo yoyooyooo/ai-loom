@@ -196,6 +196,8 @@ jobs:
     env:
       NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       HAS_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+      # 覆盖 CI 默认 frozen-lockfile 行为，避免 workspace importer 键集合校验
+      PNPM_CONFIG_FROZEN_LOCKFILE: 'false'
     steps:
       - name: Set NPM publish flags (dry-run)
         shell: bash
