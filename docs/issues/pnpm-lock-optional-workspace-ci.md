@@ -79,3 +79,19 @@ specifiers in the lockfile ({"commander":"^12.1.0","detect-libc":"^2.0.2","@type
 - 持续关注 pnpm 在 v9+ 的 workspace + optionalDependencies + frozen 行为是否提供更优配置或修复（例如 importer 集合校验策略）。
 - 仍建议：发布版本变更时先执行一次“只写根锁”（`pnpm -w install --lockfile-only`），保证锁与 `package.json` 同步，但在 meta 构建阶段不强制 frozen。
 
+---
+
+## 合理性评审（结论与补充建议）
+
+- 结论：当前“单根锁 + 按包过滤安装 + 仅在 `publish-meta` 阶段显式关闭 frozen”的做法是合理的、变更最小且可控的权衡。它绕开了 pnpm v9 在 workspace importer 上对 `specifiers` 键集合的严格比对，同时将“非 frozen”的影响面限制在两个必要的构建包（`packages/web` 与 `packages/npm/ai-loom`）。
+- 可接受的原因：
+  - 发布标签创建前，通过 `pnpm -w install --lockfile-only` 已确保根锁与源码一致；
+  - `publish-meta` 中的非 frozen 安装仅为“读锁并构建”，不会向仓库回写锁，也不会扩大安装范围；
+  - 使用 `--filter` + `--prefer-offline` 降低解析抖动与网络变量，对可复现性影响有限。
+- 潜在风险与边界：
+  - 在极端情况下，如果某些依赖的 semver 范围已变更且本地锁未包含所需解析，非 frozen 安装可能触发新的解析并试图更新锁（CI 不提交，产物仍以解析结果为准）。降低该风险的关键是：在发版前始终执行一次根目录的“只写锁”。
+  - 由于问题根因是“importer 的键集合不一致”，即便可选依赖版本号相同也会失败，因此只要维持单根锁 + 过滤安装 + frozen，就仍会复现；这印证了绕过 frozen 的必要性，直到 pnpm 行为有改进。
+- 建议的附加保护（非必须）：
+  - 在 `publish-meta` 任务的两个按包安装步骤后，增加一次只读校验：`git diff --quiet -- pnpm-lock.yaml || echo "[warn] install 过程中根锁发生变化（CI 不提交，仅提示）"`，用于早期发现潜在的解析漂移。
+  - 持续在 bump 流程中校验 pnpm 版本与 `packageManager` 一致（脚本已覆盖），并固定 Node 主版本（Action 已固定为 18）。
+  - 若后续需要完全可复现性（frozen）与平台可选依赖同时满足，优先切换到“子包独立锁”（方案 A），并在子包目录下使用 `--frozen-lockfile` 进行安装与构建。
