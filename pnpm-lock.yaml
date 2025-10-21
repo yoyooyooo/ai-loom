@@ -20,10 +20,6 @@ importers:
       detect-libc:
         specifier: ^2.0.2
         version: 2.1.2
-    optionalDependencies:
-      '@ai-loom/server-darwin-arm64':
-        specifier: 0.0.0
-        version: 0.0.0
     devDependencies:
       '@types/node':
         specifier: ^20.12.12
@@ -154,11 +150,6 @@ importers:
         version: 1.6.1(@types/node@20.19.21)(jsdom@24.1.3)(lightningcss@1.30.1)
 
 packages:
-
-  '@ai-loom/server-darwin-arm64@0.0.0':
-    resolution: {integrity: sha512-SSKjGMkYLWd1rN7w5upkye78udMtYg/k0KA5Y7Im836xCr7kbYgUWwxrC6qq0waDYOHWKwvffCnfgkUDCBu4sg==}
-    cpu: [arm64]
-    os: [darwin]
 
   '@asamuzakjp/css-color@3.2.0':
     resolution: {integrity: sha512-K1A6z8tS3XsmCMM86xoWdn7Fkdn9m6RSVtocUrJYIwZnFVkng/PvkEoWtOWmP+Scc6saYWHWZYbndEEXxl24jw==}
@@ -2782,9 +2773,6 @@ packages:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
 snapshots:
-
-  '@ai-loom/server-darwin-arm64@0.0.0':
-    optional: true
 
   '@asamuzakjp/css-color@3.2.0':
     dependencies:
