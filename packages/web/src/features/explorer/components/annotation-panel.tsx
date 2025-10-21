@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { listAnnotations, deleteAnnotation } from '@/features/explorer/api/annotations'
 import { toast } from 'sonner'
-import { Pencil, Trash2, RotateCcw, ClipboardCopy, StickyNote, ListX } from 'lucide-react'
+import { Pencil, Trash2, RotateCcw, ClipboardCopy, StickyNote, ListX, TextWrap } from 'lucide-react'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 
@@ -30,7 +30,9 @@ export default function AnnotationPanel({ onJump, currentFile }: Props) {
   })
 
   const storageKey = 'ailoom.annotations.expanded'
+  const wrapStorageKey = 'ailoom.annotations.items.wrap'
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [wrapItems, setWrapItems] = useState(false)
   const [editing, setEditing] = useState<Annotation | null>(null)
   const [editValue, setEditValue] = useState('')
   const [confirmClear, setConfirmClear] = useState(false)
@@ -49,6 +51,16 @@ export default function AnnotationPanel({ onJump, currentFile }: Props) {
       setExpanded(setx)
     }
   }, [currentFile])
+
+  // 读取“条目多行展示”偏好
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(wrapStorageKey)
+      setWrapItems(raw === '1')
+    } catch {
+      setWrapItems(false)
+    }
+  }, [])
 
   function saveExpanded(next: Set<string>) {
     try {
@@ -174,6 +186,22 @@ export default function AnnotationPanel({ onJump, currentFile }: Props) {
           <Button
             variant="ghost"
             size="icon"
+            className={`h-5 w-5 p-0 rounded-sm ${wrapItems ? 'text-primary dark:text-white' : ''}`}
+            title={wrapItems ? '收起条目为单行' : '展开条目为多行'}
+            aria-label={wrapItems ? '收起条目为单行' : '展开条目为多行'}
+            onClick={() => {
+              const next = !wrapItems
+              setWrapItems(next)
+              try {
+                localStorage.setItem(wrapStorageKey, next ? '1' : '0')
+              } catch {}
+            }}
+          >
+            <TextWrap className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
             className="h-5 w-5 p-0 rounded-sm"
             title="刷新"
             aria-label="刷新"
@@ -237,13 +265,23 @@ export default function AnnotationPanel({ onJump, currentFile }: Props) {
                   {anns.map((a) => (
                     <li
                       key={a.id}
-                      className="pl-10 group flex items-center justify-between gap-2 px-2 py-1 hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer"
+                      className={`pl-10 group flex ${wrapItems ? 'items-start' : 'items-center'} justify-between gap-2 px-2 py-1 hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer`}
                       onClick={() => onJump?.(a)}
                       title={`L${a.startLine}-${a.endLine}`}
                     >
-                      <div className="flex-1 overflow-hidden flex items-center gap-1.5">
-                        <StickyNote className="h-4 w-4 opacity-60 shrink-0" />
-                        <div className="text-sm font-medium overflow-hidden text-ellipsis whitespace-nowrap">
+                      <div
+                        className={`flex-1 overflow-hidden flex ${wrapItems ? 'items-start' : 'items-center'} gap-1.5`}
+                      >
+                        <StickyNote
+                          className={`h-4 w-4 opacity-60 shrink-0 ${wrapItems ? 'mt-1' : ''}`}
+                        />
+                        <div
+                          className={`text-sm font-medium ${
+                            wrapItems
+                              ? 'whitespace-pre-wrap break-words'
+                              : 'overflow-hidden text-ellipsis whitespace-nowrap'
+                          }`}
+                        >
                           {a.comment}
                         </div>
                       </div>
