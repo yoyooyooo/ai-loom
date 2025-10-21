@@ -154,6 +154,18 @@ packages/web/src
 - 如需产出静态资源再用 `just web-build`/`just serve`。
 - Rust/后端与 CLI 的命令保持 README/AGENTS.md 既有约定。
 
+## 12.1 构建与缓存（Turborepo）
+
+- 已集成 Turborepo（仅作用于前端 `packages/web`）：
+  - 根目录新增 `turbo.json` 与 `package.json`（devDependencies: `turbo`）。
+  - 命令示例：
+    - `pnpm turbo run dev --filter=ai-loom-web`（等价于到 `packages/web` 执行 `pnpm dev`，不缓存）
+    - `pnpm turbo run build --filter=ai-loom-web`（缓存 `dist/**` 产物，增量复用）
+    - `pnpm turbo run test --filter=ai-loom-web`
+  - 也可使用根脚本：`pnpm dev/build/test`。
+- Rust 构建：沿用 `cargo`（已具备增量编译）；后续如需统一入口，可在 `packages/rust/ailoom-server` 旁新增一个 npm 包，仅做脚本代理 `cargo build -p ailoom-server`（默认不建议缓存跨平台产物）。
+- 远端缓存（可选）：后续可绑定 Vercel Remote Cache 或自建 Turborepo 远端缓存服务，提升多人协作与 CI 速度。
+
 ## 13. WS 订阅与缓存失效（Explorer）
 
 - 策略约定：优先 WS（`wsPrefer`），短窗熔断回退 REST；写入默认 REST，写后由服务端广播事件维持一致性（详见 AGENTS.md“WS 开发策略”）。

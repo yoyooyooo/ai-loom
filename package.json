@@ -1,0 +1,15 @@
+{
+  "name": "ailoom-monorepo",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@9.15.9",
+  "devDependencies": {
+    "turbo": "^2.0.4"
+  },
+  "scripts": {
+    "turbo": "turbo",
+    "dev": "turbo run dev --filter=./packages/web",
+    "build": "turbo run build",
+    "test": "turbo run test --filter=./packages/web"
+  }
+}

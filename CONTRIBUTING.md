@@ -47,8 +47,8 @@
 - `just web-install` / `just web-build` / `just web-dev VITE_API_BASE=...`
 - `just server-build` / `just server-run [ROOT . WEB_DIST=packages/web/dist]`
 - `just server-dev [PORT=63000]` / `just dev`
-- 代码格式化：`just fmt`（一键 Rust + Web）/ `just fmt:check`，或分别使用 `just fmt-rust` / `just fmt-web`
-- API 调试：`just api-tree PORT=xxxx DIR=.`, `just api-file PORT=xxxx FILE=README.md START=1 MAX=2000`
+- 代码格式化：`just fmt`（一键 Rust + Web）/ `just fmt-check`，或分别使用 `just fmt-rust` / `just fmt-web`
+- API 调试：`scripts/api-tree.sh <PORT> <DIR>`、`scripts/api-file.sh <PORT> <FILE> [START] [MAX]`
 - 打包（Release 二进制 + 前端）：`just publish`（输出 `release/ailoom-<os>-<arch>`）
 
 ## 编码规范
@@ -155,8 +155,8 @@
 - `@ai-loom/server-win32-x64-msvc`
 实现步骤：
 1) 新增子包目录与 `package.json`（配置 `os`/`cpu`/`libc`）
-2) `just` 中仿照 `npm-bin-darwin-arm64` 添加拷贝二进制任务
-   - 已内置：`npm-bin-darwin-x64`、`npm-bin-linux-x64-gnu`、`npm-bin-linux-x64-musl`、`npm-bin-linux-arm64-gnu`、`npm-bin-linux-arm64-musl`、`npm-bin-win32-x64-msvc`
+2) `just` 使用参数化命令拷贝二进制：`npm-bin TARGET=<平台>`
+   - 已内置 TARGET：`darwin-arm64|darwin-x64|linux-x64-gnu|linux-x64-musl|linux-arm64-gnu|linux-arm64-musl|win32-x64-msvc`
 3) 元包 `optionalDependencies` 增加新子包；`bin/ai-loom.js` 的平台映射（已引入 `detect-libc`）
 4) 本地 `just npm-pack` 验证；CI 可用矩阵分别构建并 `npm publish`
 
@@ -170,7 +170,7 @@
 ## 文件参考（关键入口）
 - 后端端口/CORS：`packages/rust/ailoom-server/src/main.rs:24`, `packages/rust/ailoom-server/src/main.rs:71`, `packages/rust/ailoom-server/src/main.rs:83`
 - 热更新与发布脚本：`Justfile:50`, `Justfile:96`, `Justfile:112`
-- 元包入口（npm）：`packages/npm/ai-loom/bin/ai-loom.js:1`
+- 元包入口（npm）：`packages/npm/ai-loom/src/cli.ts:1`（构建输出：`dist/cli.js`）
 - 子包清单（示例）：`packages/npm/server-darwin-arm64/package.json:1`
 
 欢迎通过 PR/Issue 进行改进与反馈！

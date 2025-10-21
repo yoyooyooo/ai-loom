@@ -4,11 +4,12 @@
   "description": "AI Loom CLI (bundles web UI) with platform-specific server binaries via optionalDependencies",
   "license": "MIT",
   "private": false,
+  "type": "commonjs",
   "bin": {
-    "ai-loom": "bin/ai-loom.js"
+    "ai-loom": "dist/cli.js"
   },
   "files": [
-    "bin",
+    "dist",
     "web"
   ],
   "optionalDependencies": {
@@ -21,7 +22,25 @@
     "@ai-loom/server-win32-x64-msvc": "0.0.0"
   },
   "dependencies": {
-    "detect-libc": "^2.0.2"
+    "detect-libc": "^2.0.2",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "tsup": "^8.1.0"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "clean": "rm -rf dist"
+  },
+  "tsup": {
+    "entry": ["src/cli.ts"],
+    "format": ["cjs"],
+    "target": "node18",
+    "sourcemap": true,
+    "minify": false,
+    "clean": true
   },
   "publishConfig": {
     "access": "public"

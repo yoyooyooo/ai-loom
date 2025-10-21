@@ -1,6 +1,7 @@
 target
 node_modules
 dist
+.turbo/
 
 # Local DB & runtime artifacts
 server.log

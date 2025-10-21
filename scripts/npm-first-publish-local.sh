@@ -17,25 +17,25 @@ ARCH=$(uname -m)
 echo "[first-publish] host: ${OS}/${ARCH}"
 
 PKG_DIR=""
-BUILD_TASK=""
+TARGET=""
 BIN_NAME="ailoom-server"
 
 case "${OS}-${ARCH}" in
   darwin-arm64)
-    PKG_DIR="packages/npm/server-darwin-arm64"; BUILD_TASK="npm-bin-darwin-arm64";
+    PKG_DIR="packages/npm/server-darwin-arm64"; TARGET="darwin-arm64";
     ;;
   darwin-x86_64|darwin-amd64)
-    PKG_DIR="packages/npm/server-darwin-x64"; BUILD_TASK="npm-bin-darwin-x64";
+    PKG_DIR="packages/npm/server-darwin-x64"; TARGET="darwin-x64";
     ;;
   linux-x86_64|linux-amd64)
     # 默认发布 gnu 变体；如需 musl，请在对应 runner/环境再执行
-    PKG_DIR="packages/npm/server-linux-x64-gnu"; BUILD_TASK="npm-bin-linux-x64-gnu";
+    PKG_DIR="packages/npm/server-linux-x64-gnu"; TARGET="linux-x64-gnu";
     ;;
   linux-aarch64)
-    PKG_DIR="packages/npm/server-linux-arm64-gnu"; BUILD_TASK="npm-bin-linux-arm64-gnu";
+    PKG_DIR="packages/npm/server-linux-arm64-gnu"; TARGET="linux-arm64-gnu";
     ;;
   msys_nt-10.0-x86_64|mingw*-x86_64|cygwin*-x86_64|windowsnt-10.0-*)
-    PKG_DIR="packages/npm/server-win32-x64-msvc"; BUILD_TASK="npm-bin-win32-x64-msvc"; BIN_NAME="ailoom-server.exe";
+    PKG_DIR="packages/npm/server-win32-x64-msvc"; TARGET="win32-x64-msvc"; BIN_NAME="ailoom-server.exe";
     ;;
   *)
     echo "暂不支持的本机平台：${OS}/${ARCH}；请在支持的平台上执行" >&2
@@ -43,8 +43,8 @@ case "${OS}-${ARCH}" in
     ;;
 esac
 
-echo "[first-publish] build server binary via: just ${BUILD_TASK}"
-just ${BUILD_TASK}
+echo "[first-publish] build server binary via: just npm-bin TARGET=${TARGET}"
+just npm-bin TARGET=${TARGET}
 
 echo "[first-publish] prepare meta web: just npm-meta-prepare"
 just npm-meta-prepare
@@ -60,4 +60,3 @@ echo "[first-publish] publish meta package: packages/npm/ai-loom"
 (cd packages/npm/ai-loom && npm publish "${P_FLAGS[@]}")
 
 echo "[first-publish] done (dry_run=$DRY_RUN)"
-

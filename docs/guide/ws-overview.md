@@ -283,3 +283,10 @@
   - 前端：`VITE_USE_WS=1 VITE_WS_NO_FALLBACK=1 VITE_WS_FUSE_MS=0 VITE_WS_WRITE=1 VITE_WS_DEBUG=1`
   - 后端：`AILOOM_FSWATCH_ENABLED=1`、`AILOOM_BROADCAST_SEND_TIMEOUT_MS=800`、`RUST_LOG=ws=info,fswatch=info`
   - 说明：更激进的 800ms 软超时便于尽快触发 `close-first + resume`，用于验证纯 WS 链路。
+
+### CLI（npm）与监听
+
+- 通过 npm 包运行：`npx ai-loom [options]`
+  - 默认不启用本地文件监听
+  - 加 `--watch` 开启监听（尊重 `.gitignore/.ailoomignore`）
+  - 其余参数直接透传给后端（如 `--root`、`--web-dist`、`--port`）

@@ -48,6 +48,15 @@ English: README.en.md
   - 分终端：终端A `just server-dev PORT=63000`；终端B `just web-dev VITE_API_BASE=http://127.0.0.1:63000`
 - 仅后端：`just server-run` 或 `ROOT=. WEB_DIST=packages/web/dist just server-run`
 - 前端：`just web-install`、`just web-build`（仅在需要产出静态资源时使用）、`just web-dev VITE_API_BASE=http://127.0.0.1:<port>`
+- 脚本（便捷调试 API）：
+  - `scripts/api-tree.sh <port> <dir>`
+  - `scripts/api-file.sh <port> <path> <startLine> <maxLines>`
+  - `scripts/ann-list.sh <port>`
+  - `scripts/ann-create.sh <port> <path> <startLine> <endLine> "备注" "选中文本"`
+- 代码格式化：
+  - Rust：`just fmt-rust` / `just fmt-rust-check`
+  - Web：`just fmt-web` / `just fmt-web-check`
+  - 一键（Rust + Web）：`just fmt` / `just fmt-check`
 - 更多开发与发布流程、编码规范请见 CONTRIBUTING.md
 
 WebSocket 行为与调试
