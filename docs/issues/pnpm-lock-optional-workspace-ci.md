@@ -95,3 +95,15 @@ specifiers in the lockfile ({"commander":"^12.1.0","detect-libc":"^2.0.2","@type
   - 在 `publish-meta` 任务的两个按包安装步骤后，增加一次只读校验：`git diff --quiet -- pnpm-lock.yaml || echo "[warn] install 过程中根锁发生变化（CI 不提交，仅提示）"`，用于早期发现潜在的解析漂移。
   - 持续在 bump 流程中校验 pnpm 版本与 `packageManager` 一致（脚本已覆盖），并固定 Node 主版本（Action 已固定为 18）。
   - 若后续需要完全可复现性（frozen）与平台可选依赖同时满足，优先切换到“子包独立锁”（方案 A），并在子包目录下使用 `--frozen-lockfile` 进行安装与构建。
+
+### 如果要“严格锁对齐”，两条可落地路线
+
+- 路线 1（最小改 CI、仍用方案 B 思路）：在 `publish-meta` 里先做一次工作区全量安装并保持 frozen，然后仅在构建步骤进入子包目录执行 build，而不再对单包执行安装。
+  - 示例（伪命令）：`pnpm -w install --frozen-lockfile` → `pnpm -C packages/web build` → `pnpm -C packages/npm/ai-loom build`。
+  - 影响：安装范围增大（仅限 workspace 中这两个包），但保持了严格 frozen，不再触发 importer 键集合比较导致的失败。
+  - 适用：可以接受 meta 阶段多装少量依赖的场景。
+- 路线 2（彻底规避 optionalDependencies 对锁校验的影响）：让 `ai-loom` 不再承担“构建 + 可选依赖声明”双重职责。
+  - 方案 A：将 CLI 打包搬到专用 builder 包（例如 `packages/npm/ai-loom-builder`，不含 optionalDependencies），CI 仅在该包安装+构建，然后把产物拷贝回 `ai-loom` 再发布。`ai-loom` 仅保留 runtime 字段（bin/files/optionalDependencies），从而 meta 构建阶段无需在 `ai-loom` 下安装，避免触发校验。
+  - 方案 B：移除 `ai-loom` 的 optionalDependencies，改为 postinstall/runtime 下载对应平台二进制（常见做法：从 GitHub Releases 下载），这样锁只含 JS 依赖，完全跨平台一致；但需要实现下载与校验逻辑，且用户环境需联网。
+
+> 注：以上两条路线都需要调整 CI 流程；若短期不改 CI，可继续沿用当前方案 B，并辅以上文“附加保护”中的只读提示，降低潜在漂移带来的不确定性。
