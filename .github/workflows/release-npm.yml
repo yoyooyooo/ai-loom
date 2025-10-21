@@ -215,10 +215,8 @@ jobs:
         with:
           node-version: 18
           registry-url: 'https://registry.npmjs.org'
-      - name: Setup pnpm
+      - name: Setup pnpm (read version from packageManager)
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - name: Build web assets for meta package
         run: |
