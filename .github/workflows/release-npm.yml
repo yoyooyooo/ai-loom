@@ -222,6 +222,11 @@ jobs:
           mkdir -p packages/npm/ai-loom/web
           cp -R packages/web/dist/* packages/npm/ai-loom/web/ 2>/dev/null || true
 
+      - name: Build CLI (meta package js bundling)
+        run: |
+          pnpm -C packages/npm/ai-loom i
+          pnpm -C packages/npm/ai-loom build
+
       - name: npm whoami / ping (diagnostic)
         shell: bash
         run: |
