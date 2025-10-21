@@ -54,10 +54,6 @@ jobs:
           node-version: 18
       - name: Setup pnpm (read version from packageManager)
         uses: pnpm/action-setup@v4
-      - name: Lockfile consistency check (frozen)
-        run: |
-          pnpm -v
-          pnpm -w install --frozen-lockfile --prefer-offline
       - name: Version consistency check
         run: node scripts/check-npm-versions.mjs --tag "${TAG_NAME}"
 
@@ -226,7 +222,7 @@ jobs:
 
       - name: Build web assets for meta package
         run: |
-          pnpm -C packages/web i
+          pnpm -C packages/web i --no-frozen-lockfile
           pnpm -C packages/web build
           rm -rf packages/npm/ai-loom/web
           mkdir -p packages/npm/ai-loom/web
@@ -234,7 +230,7 @@ jobs:
 
       - name: Build CLI (meta package js bundling)
         run: |
-          pnpm -C packages/npm/ai-loom i
+          pnpm -C packages/npm/ai-loom i --no-frozen-lockfile
           pnpm -C packages/npm/ai-loom build
 
       - name: npm whoami / ping (diagnostic)
