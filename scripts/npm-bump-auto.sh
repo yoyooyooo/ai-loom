@@ -42,7 +42,15 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 node scripts/bump-npm-version.mjs --version "$NEW"
-git add packages/npm/**/package.json
+# 更新 lockfile 以与新的 package.json 对齐（仅写锁文件，不安装依赖）
+if command -v pnpm >/dev/null 2>&1; then
+  echo "[auto-bump] 更新 pnpm-lock.yaml (lockfile-only)"
+  pnpm -w install --lockfile-only
+else
+  echo "[auto-bump] 警告：未找到 pnpm，跳过锁文件更新。CI 将在 frozen-lockfile 下失败。" >&2
+fi
+
+git add packages/npm/**/package.json pnpm-lock.yaml
 if ! git diff --cached --quiet; then
   git commit -m "chore(release): npm bump to ${NEW}"
 fi
