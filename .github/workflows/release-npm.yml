@@ -220,7 +220,7 @@ jobs:
 
       - name: Build web assets for meta package
         run: |
-          pnpm -C packages/web i
+          pnpm -C packages/web i --no-frozen-lockfile
           pnpm -C packages/web build
           rm -rf packages/npm/ai-loom/web
           mkdir -p packages/npm/ai-loom/web
@@ -228,7 +228,7 @@ jobs:
 
       - name: Build CLI (meta package js bundling)
         run: |
-          pnpm -C packages/npm/ai-loom i
+          pnpm -C packages/npm/ai-loom i --no-frozen-lockfile
           pnpm -C packages/npm/ai-loom build
 
       - name: npm whoami / ping (diagnostic)
