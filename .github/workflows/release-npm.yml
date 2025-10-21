@@ -215,14 +215,12 @@ jobs:
         with:
           node-version: 18
           registry-url: 'https://registry.npmjs.org'
-      - name: Setup pnpm
+      - name: Setup pnpm (read version from packageManager)
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - name: Build web assets for meta package
         run: |
-          pnpm -C packages/web i
+          pnpm i --prefer-offline --filter ./packages/web
           pnpm -C packages/web build
           rm -rf packages/npm/ai-loom/web
           mkdir -p packages/npm/ai-loom/web
@@ -230,7 +228,7 @@ jobs:
 
       - name: Build CLI (meta package js bundling)
         run: |
-          pnpm -C packages/npm/ai-loom i
+          pnpm i --prefer-offline --filter ./packages/npm/ai-loom
           pnpm -C packages/npm/ai-loom build
 
       - name: npm whoami / ping (diagnostic)

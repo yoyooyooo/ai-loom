@@ -42,7 +42,20 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 node scripts/bump-npm-version.mjs --version "$NEW"
-git add packages/npm/**/package.json
+
+# 只写根锁（不安装依赖），使用本机 pnpm，并校验版本与 packageManager 一致
+echo "[auto-bump] writing root lockfile via pnpm (lockfile-only)"
+REQ_VER=$(node -e "try{const pm=require('./package.json').packageManager||'';console.log(pm.split('@')[1]||'')}catch(e){console.log('')}")
+if [ -z "${REQ_VER}" ]; then REQ_VER="9.12.3"; fi
+CUR_VER=$(pnpm -v 2>/dev/null || echo '')
+if [ "${CUR_VER}" != "${REQ_VER}" ]; then
+  echo "[auto-bump] 需要 pnpm ${REQ_VER}，当前 ${CUR_VER:-未安装}。请先安装对应版本（例如：npm i -g pnpm@${REQ_VER} 或 pnpm env use -g ${REQ_VER}）。" >&2
+  exit 1
+fi
+pnpm -w install --lockfile-only
+
+# 将 package.json 与根锁一并加入提交
+git add packages/npm/**/package.json pnpm-lock.yaml
 if ! git diff --cached --quiet; then
   git commit -m "chore(release): npm bump to ${NEW}"
 fi
