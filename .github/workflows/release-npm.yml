@@ -56,46 +56,52 @@ jobs:
         run: node scripts/check-npm-versions.mjs --tag "${TAG_NAME}"
 
   publish-platforms:
-    name: Publish platform subpackages
+    name: ${{ matrix.platform }}
     needs: check-versions
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - platform: server-darwin-arm64
+            os: macos-14
             rust_target: ''
             pkg_dir: packages/npm/server-darwin-arm64
             bin_name: ailoom-server
             bin_src: target/release/ailoom-server
 
-          - os: macos-13
+          - platform: server-darwin-x64
+            os: macos-13
             rust_target: x86_64-apple-darwin
             pkg_dir: packages/npm/server-darwin-x64
             bin_name: ailoom-server
             bin_src: target/x86_64-apple-darwin/release/ailoom-server
 
-          - os: ubuntu-latest
+          - platform: server-linux-x64-gnu
+            os: ubuntu-latest
             rust_target: x86_64-unknown-linux-gnu
             apt: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev
             pkg_dir: packages/npm/server-linux-x64-gnu
             bin_name: ailoom-server
             bin_src: target/x86_64-unknown-linux-gnu/release/ailoom-server
 
-          - os: ubuntu-latest
+          - platform: server-linux-x64-musl
+            os: ubuntu-latest
             rust_target: x86_64-unknown-linux-musl
             apt: sudo apt-get update && sudo apt-get install -y musl-tools
             pkg_dir: packages/npm/server-linux-x64-musl
             bin_name: ailoom-server
             bin_src: target/x86_64-unknown-linux-musl/release/ailoom-server
 
-          - os: ubuntu-latest
+          - platform: server-linux-arm64-gnu
+            os: ubuntu-latest
             rust_target: aarch64-unknown-linux-gnu
             apt: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
             pkg_dir: packages/npm/server-linux-arm64-gnu
             bin_name: ailoom-server
             bin_src: target/aarch64-unknown-linux-gnu/release/ailoom-server
 
-          - os: windows-latest
+          - platform: server-win32-x64-msvc
+            os: windows-latest
             rust_target: x86_64-pc-windows-msvc
             pkg_dir: packages/npm/server-win32-x64-msvc
             bin_name: ailoom-server.exe
