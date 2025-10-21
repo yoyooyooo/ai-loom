@@ -52,6 +52,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 18
+      - name: Setup pnpm (read version from packageManager)
+        uses: pnpm/action-setup@v4
+      - name: Lockfile consistency check (frozen)
+        run: |
+          pnpm -v
+          pnpm -w install --frozen-lockfile --prefer-offline
       - name: Version consistency check
         run: node scripts/check-npm-versions.mjs --tag "${TAG_NAME}"
 
