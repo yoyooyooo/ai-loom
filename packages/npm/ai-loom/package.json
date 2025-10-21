@@ -1,6 +1,6 @@
 {
   "name": "ai-loom",
-  "version": "0.0.0",
+  "version": "0.0.23",
   "description": "AI Loom CLI (bundles web UI) with platform-specific server binaries via optionalDependencies",
   "license": "MIT",
   "private": false,
@@ -13,13 +13,13 @@
     "web"
   ],
   "optionalDependencies": {
-    "@ai-loom/server-darwin-arm64": "0.0.0",
-    "@ai-loom/server-darwin-x64": "0.0.0",
-    "@ai-loom/server-linux-arm64-gnu": "0.0.0",
-    "@ai-loom/server-linux-arm64-musl": "0.0.0",
-    "@ai-loom/server-linux-x64-gnu": "0.0.0",
-    "@ai-loom/server-linux-x64-musl": "0.0.0",
-    "@ai-loom/server-win32-x64-msvc": "0.0.0"
+    "@ai-loom/server-darwin-arm64": "0.0.23",
+    "@ai-loom/server-darwin-x64": "0.0.23",
+    "@ai-loom/server-linux-arm64-gnu": "0.0.23",
+    "@ai-loom/server-linux-arm64-musl": "0.0.23",
+    "@ai-loom/server-linux-x64-gnu": "0.0.23",
+    "@ai-loom/server-linux-x64-musl": "0.0.23",
+    "@ai-loom/server-win32-x64-msvc": "0.0.23"
   },
   "dependencies": {
     "detect-libc": "^2.0.2",
@@ -35,8 +35,12 @@
     "clean": "rm -rf dist"
   },
   "tsup": {
-    "entry": ["src/cli.ts"],
-    "format": ["cjs"],
+    "entry": [
+      "src/cli.ts"
+    ],
+    "format": [
+      "cjs"
+    ],
     "target": "node18",
     "sourcemap": true,
     "minify": false,
