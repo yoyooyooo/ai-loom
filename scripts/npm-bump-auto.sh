@@ -61,6 +61,9 @@ set -e
 ${PNPM_CMD} -v
 ${PNPM_CMD} -w install --lockfile-only
 
+# 补全 pnpm-lock.yaml 中的 optionalDependencies（跨平台可选依赖的 specifiers）
+node scripts/lock-ensure-optional.mjs
+
 git add packages/npm/**/package.json pnpm-lock.yaml
 if ! git diff --cached --quiet; then
   git commit -m "chore(release): npm bump to ${NEW}"

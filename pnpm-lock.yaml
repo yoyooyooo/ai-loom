@@ -26,7 +26,6 @@ importers:
         version: 0.0.0
       '@ai-loom/server-darwin-x64':
         specifier: 0.0.0
-        version: 0.0.0
       '@ai-loom/server-linux-arm64-gnu':
         specifier: 0.0.0
         version: 0.0.0
