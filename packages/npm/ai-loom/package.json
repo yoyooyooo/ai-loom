@@ -6,10 +6,11 @@
   "private": false,
   "type": "commonjs",
   "bin": {
-    "ai-loom": "dist/cli.js"
+    "ai-loom": "bin/cli.js"
   },
   "files": [
-    "dist",
+    "bin",
+    "src",
     "web"
   ],
   "optionalDependencies": {
@@ -24,23 +25,6 @@
   "dependencies": {
     "detect-libc": "^2.0.2",
     "commander": "^12.1.0"
-  },
-  "devDependencies": {
-    "@types/node": "^20.12.12",
-    "tsup": "^8.1.0"
-  },
-  "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
-    "clean": "rm -rf dist"
-  },
-  "tsup": {
-    "entry": ["src/cli.ts"],
-    "format": ["cjs"],
-    "target": "node18",
-    "sourcemap": true,
-    "minify": false,
-    "clean": true
   },
   "publishConfig": {
     "access": "public"

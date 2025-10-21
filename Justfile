@@ -145,8 +145,6 @@ npm-meta-prepare:
   else \
     pnpm -C {{WEB_DIR}} build; \
   fi
-  # 强制构建 CLI TypeScript，避免 Turbo 命中后 dist 未更新
-  pnpm -C packages/npm/ai-loom build
   rm -rf packages/npm/ai-loom/web
   mkdir -p packages/npm/ai-loom/web
   cp -R {{WEB_DIST}}/* packages/npm/ai-loom/web/ 2>/dev/null || true
@@ -368,8 +366,6 @@ dev-ws-write PORT='63000':
 # 准备 CLI 运行所需资源：构建后端二进制 + 复制前端 dist 到 npm/ai-loom/web
 cli-prepare:
   just npm-meta-prepare
-  # 确保 dist/cli.js 为最新
-  pnpm -C packages/npm/ai-loom build
   RUSTFLAGS="${RUSTFLAGS:-} -Awarnings" cargo build -p {{SERVER_BIN}}
 
 # 直接用 Node 启动 CLI（不经过全局安装），方便本地快速测试
@@ -382,18 +378,16 @@ cli *EXTRA:
     AILOOM_FSWATCH_ENABLED=1 \
       RUST_LOG="${RUST_LOG:-warn,ws=warn,fswatch=warn}" \
       AILOOM_SERVER_BIN="target/debug/{{SERVER_BIN}}" \
-      node packages/npm/ai-loom/dist/cli.js --root "{{ROOT}}" --port "${PORT:-63000}" {{EXTRA}}; \
+      node packages/npm/ai-loom/bin/cli.js --root "{{ROOT}}" --port "${PORT:-63000}" {{EXTRA}}; \
   else \
     RUST_LOG="${RUST_LOG:-warn,ws=warn,fswatch=warn}" \
       AILOOM_SERVER_BIN="target/debug/{{SERVER_BIN}}" \
-      node packages/npm/ai-loom/dist/cli.js --root "{{ROOT}}" --port "${PORT:-63000}" {{EXTRA}}; \
+      node packages/npm/ai-loom/bin/cli.js --root "{{ROOT}}" --port "${PORT:-63000}" {{EXTRA}}; \
   fi
 
 # 仅查看 CLI 帮助，不进行任何构建
 cli-help:
-  # 若未构建过 CLI，则用 Turbo 构建（仅过滤 ai-loom 包）
-  [ -f packages/npm/ai-loom/dist/cli.js ] || pnpm -C packages/npm/ai-loom build >/dev/null 2>&1 || true
-  node packages/npm/ai-loom/dist/cli.js --help
+  node packages/npm/ai-loom/bin/cli.js --help
 
 # 开启文件监听的 CLI（父进程强制注入监听开关）
 # 用法：just cli-watch [ROOT=. PORT=63000] -- [透传参数]
@@ -402,4 +396,4 @@ cli-watch *EXTRA:
   env AILOOM_FSWATCH_ENABLED=1 \
     RUST_LOG="${RUST_LOG:-ws=info,fswatch=info}" \
     AILOOM_SERVER_BIN="target/debug/{{SERVER_BIN}}" \
-    node packages/npm/ai-loom/dist/cli.js --root "{{ROOT}}" --port "${PORT:-63000}" ${EXTRA:+ $EXTRA}
+    node packages/npm/ai-loom/bin/cli.js --root "{{ROOT}}" --port "${PORT:-63000}" ${EXTRA:+ $EXTRA}
