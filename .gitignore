@@ -24,3 +24,10 @@ tmp/
 .DS_Store
 .vscode/
 .ailoom/
+
+# codex
+.codex/auth.json
+.codex/config.toml
+.codex/sessions
+.codex/history.jsonl
+.codex/version.json
