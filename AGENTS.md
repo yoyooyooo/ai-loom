@@ -72,3 +72,10 @@
 - 后端仅绑定本机并回显 `AILOOM_PORT`；文件访问被限制在 `--root`；大文件/二进制自动防护与截断。
 - 忽略规则：尊重 `.gitignore` 与可选 `.ailoomignore`。
 - 数据库路径：`--db-path`/`--db` 可指定；示例：`ai-loom --root . --db ~/.ailoom/ailoom.db`。
+
+## Active Technologies
+- TypeScript (Web, React + Vite)、Rust 1.75+（后端 crate） + Web：React、TanStack Query、shadcn/ui；Server：`ailoom-stitch`（内部 crate，被 `ailoom-server` 使用） (001-conditional-omission-note)
+- N/A（无数据模型变更） (001-conditional-omission-note)
+
+## Recent Changes
+- 001-conditional-omission-note: Added TypeScript (Web, React + Vite)、Rust 1.75+（后端 crate） + Web：React、TanStack Query、shadcn/ui；Server：`ailoom-stitch`（内部 crate，被 `ailoom-server` 使用）

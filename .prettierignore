@@ -1,0 +1,21 @@
+# Monorepo common ignores
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+build/
+**/build/
+coverage/
+**/coverage/
+# lock files
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+# generated
+**/*.min.js
+**/*.min.css
+# caches
+.turbo/
+.cache/
+.parcel-cache/
+

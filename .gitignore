@@ -1,3 +1,32 @@
+# Universal
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+.idea/
+.vscode/
+*.log
+.env*
+
+# Node/TypeScript
+node_modules/
+dist/
+build/
+coverage/
+
+# Rust
+target/
+debug/
+release/
+*.rs.bk
+*.rlib
+*.prof*
+
+# Tooling caches
+.turbo/
+.parcel-cache/
+.cache/
+
 target
 node_modules
 dist
