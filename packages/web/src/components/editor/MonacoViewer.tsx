@@ -50,6 +50,8 @@ type Props = {
   wrap?: boolean
   topPadLines?: number
   onAnchorChange?: (rect: AnchorRect | null) => void
+  editable?: boolean
+  onContentChange?: (content: string) => void
 }
 
 const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
@@ -65,7 +67,9 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
     onOpenMark,
     wrap,
     topPadLines = 3,
-    onAnchorChange
+    onAnchorChange,
+    editable = false,
+    onContentChange
   },
   fref
 ) {
@@ -120,6 +124,9 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
   useEffect(() => {
     onAnchorChangeRef.current = onAnchorChange
   }, [onAnchorChange])
+  useEffect(() => {
+    onContentChangeRef.current = onContentChange
+  }, [onContentChange])
   const suppressSelectionOnceRef = useRef(false)
   const suppressSelectionUntilRef = useRef(0)
   const blockHitRef = useRef(false)
@@ -127,6 +134,12 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
     | { lineNumber: number; column: number; height: number }
     | null
   >(null)
+  
+  // 可编辑模式下的智能意图检测
+  const lastSelectionTimeRef = useRef(0)
+  const lastEditTimeRef = useRef(0)
+  const selectionDelayTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const onContentChangeRef = useRef<typeof onContentChange | undefined>(onContentChange)
 
   const computeAnchorForRange = (
     ed: monaco.editor.IStandaloneCodeEditor,
@@ -158,18 +171,18 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
       editorRef.current = monaco.editor.create(containerRef.current, {
         value: '',
         language: 'plaintext',
-        readOnly: true,
+        readOnly: !editable,
         theme: isDark ? 'vs-dark' : 'vs',
         minimap: { enabled: false },
         scrollBeyondLastLine: false,
         lineNumbers: 'on',
         wordWrap: wrap ? 'on' : 'off',
-        // 关闭默认的词/匹配高亮与括号配对边框，减少只读状态的干扰
-        occurrencesHighlight: false,
-        selectionHighlight: false,
-        matchBrackets: 'never',
-        bracketPairColorization: { enabled: false } as any,
-        guides: { bracketPairs: false } as any
+        // 在可编辑模式下保持基本的编辑辅助功能
+        occurrencesHighlight: editable ? 'singleFile' : 'off',
+        selectionHighlight: !editable,
+        matchBrackets: editable ? 'near' : 'never',
+        bracketPairColorization: { enabled: editable } as any,
+        guides: { bracketPairs: editable } as any
       })
       // 在按下时命中注解则拦截默认行为，只弹出浮层且不改变光标
       editorRef.current.onMouseDown((e) => {
@@ -304,33 +317,131 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
         const sel = ed.getSelection()
         const model = ed.getModel()
         if (!sel || sel.isEmpty() || !model) {
+          // 清理延迟的标注触发
+          if (selectionDelayTimeoutRef.current) {
+            clearTimeout(selectionDelayTimeoutRef.current)
+            selectionDelayTimeoutRef.current = null
+          }
           onSelectionChange?.(null)
           return
         }
-        const start = Math.min(sel.startLineNumber, sel.endLineNumber)
-        const end = Math.max(sel.startLineNumber, sel.endLineNumber)
-        const startCol = sel.startLineNumber <= sel.endLineNumber ? sel.startColumn : sel.endColumn
-        const endCol = sel.startLineNumber <= sel.endLineNumber ? sel.endColumn : sel.startColumn
-        const text = model.getValueInRange(sel)
-        const rng = new monaco.Range(start, startCol, end, endCol)
-        const anchor = computeAnchorForRange(ed, rng)
-        if (anchor) onAnchorChangeRef.current?.(anchor)
-        onSelRef.current?.({
-          startLine: start,
-          endLine: end,
-          startColumn: startCol,
-          endColumn: endCol,
-          selectedText: text,
-          anchorRect: anchor || undefined
-        })
+
+        const now = Date.now()
+        lastSelectionTimeRef.current = now
+        
+        // 在可编辑模式下应用智能意图检测
+        if (editable) {
+          // 清理之前的延迟触发
+          if (selectionDelayTimeoutRef.current) {
+            clearTimeout(selectionDelayTimeoutRef.current)
+            selectionDelayTimeoutRef.current = null
+          }
+          
+          const start = Math.min(sel.startLineNumber, sel.endLineNumber)
+          const end = Math.max(sel.startLineNumber, sel.endLineNumber)
+          const startCol = sel.startLineNumber <= sel.endLineNumber ? sel.startColumn : sel.endColumn
+          const endCol = sel.startLineNumber <= sel.endLineNumber ? sel.endColumn : sel.startColumn
+          const text = model.getValueInRange(sel)
+          
+          // 智能意图检测规则：
+          // 1. 最近有编辑操作（500ms内）-> 可能是编辑意图，延迟触发
+          // 2. 选择文本很短（<3字符）-> 可能是编辑意图，延迟触发
+          // 3. 单行选择且很短 -> 可能是编辑意图
+          const recentEdit = now - lastEditTimeRef.current < 500
+          const shortSelection = text.length < 3
+          const singleShortLine = start === end && text.length < 10
+          
+          const shouldDelay = recentEdit || shortSelection || singleShortLine
+          const delayMs = recentEdit ? 800 : shortSelection ? 600 : 400
+          
+          if (shouldDelay) {
+            // 延迟触发，给用户时间完成编辑操作
+            selectionDelayTimeoutRef.current = setTimeout(() => {
+              // 检查选择是否仍然有效且未被编辑中断
+              const currentSel = ed.getSelection()
+              if (currentSel && !currentSel.isEmpty() && 
+                  Date.now() - lastEditTimeRef.current > 300 && // 确保没有新的编辑
+                  lastSelectionTimeRef.current === now) { // 确保没有新的选择
+                const rng = new monaco.Range(start, startCol, end, endCol)
+                const anchor = computeAnchorForRange(ed, rng)
+                if (anchor) onAnchorChangeRef.current?.(anchor)
+                onSelRef.current?.({
+                  startLine: start,
+                  endLine: end,
+                  startColumn: startCol,
+                  endColumn: endCol,
+                  selectedText: text,
+                  anchorRect: anchor || undefined
+                })
+              }
+              selectionDelayTimeoutRef.current = null
+            }, delayMs)
+          } else {
+            // 立即触发（长文本选择或明显的标注意图）
+            const rng = new monaco.Range(start, startCol, end, endCol)
+            const anchor = computeAnchorForRange(ed, rng)
+            if (anchor) onAnchorChangeRef.current?.(anchor)
+            onSelRef.current?.({
+              startLine: start,
+              endLine: end,
+              startColumn: startCol,
+              endColumn: endCol,
+              selectedText: text,
+              anchorRect: anchor || undefined
+            })
+          }
+        } else {
+          // 只读模式下保持原有逻辑
+          const start = Math.min(sel.startLineNumber, sel.endLineNumber)
+          const end = Math.max(sel.startLineNumber, sel.endLineNumber)
+          const startCol = sel.startLineNumber <= sel.endLineNumber ? sel.startColumn : sel.endColumn
+          const endCol = sel.startLineNumber <= sel.endLineNumber ? sel.endColumn : sel.startColumn
+          const text = model.getValueInRange(sel)
+          const rng = new monaco.Range(start, startCol, end, endCol)
+          const anchor = computeAnchorForRange(ed, rng)
+          if (anchor) onAnchorChangeRef.current?.(anchor)
+          onSelRef.current?.({
+            startLine: start,
+            endLine: end,
+            startColumn: startCol,
+            endColumn: endCol,
+            selectedText: text,
+            anchorRect: anchor || undefined
+          })
+        }
       })
 
       // 去掉 mousedown 命中逻辑，统一在 mouseup 里处理（避免与“空选择关闭浮层”的竞争）
+      // 可编辑模式下添加内容变更监听
+      if (editable) {
+        const model = editorRef.current.getModel()
+        if (model) {
+          const contentDisposable = model.onDidChangeContent(() => {
+            lastEditTimeRef.current = Date.now()
+            const content = model.getValue()
+            onContentChangeRef.current?.(content)
+          })
+          // 存储disposable以便后续清理
+          ;(editorRef.current as any)._contentDisposable = contentDisposable
+        }
+      }
     }
     return () => {
+      // 清理内容变更监听
+      const editor = editorRef.current
+      if (editor && (editor as any)._contentDisposable) {
+        try {
+          ;(editor as any)._contentDisposable.dispose()
+        } catch {}
+      }
+      // 清理延迟的标注触发
+      if (selectionDelayTimeoutRef.current) {
+        clearTimeout(selectionDelayTimeoutRef.current)
+        selectionDelayTimeoutRef.current = null
+      }
       // keep editor across renders; dispose only on unmount
     }
-  }, [])
+  }, [editable])
 
   // 滚动时更新锚点，保证浮层跟随
   useEffect(() => {
