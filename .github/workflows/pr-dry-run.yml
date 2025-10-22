@@ -127,6 +127,7 @@ jobs:
 
       - name: npm publish (dry-run)
         working-directory: ${{ matrix.pkg_dir }}
+        shell: bash
         run: npm publish ${NPM_PROVENANCE} --access public ${NPM_FLAGS}
 
   simulate-meta:
@@ -172,4 +173,5 @@ jobs:
 
       - name: npm publish meta (dry-run)
         working-directory: packages/npm/ai-loom
+        shell: bash
         run: npm publish ${NPM_PROVENANCE} --access public ${NPM_FLAGS}
