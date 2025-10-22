@@ -1,5 +1,8 @@
 use ailoom_core::Annotation;
 
+const HEADER_CHARS: &str = "> 说明: 片段中若发生省略，将使用 <<<OMITTED ~N CHARS>>> 进行标记；请勿臆测缺失内容，定位以文件路径与行号为准。\n\n";
+const HEADER_LINES: &str = "> 说明: 片段中若发生省略，将使用 <<<OMITTED ~N LINES>>> 进行标记；请勿臆测缺失内容，定位以文件路径与行号为准。\n\n";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TemplateId {
     Concise,
@@ -49,21 +52,17 @@ pub fn generate_prompt(
             .then(a.start_line.cmp(&b.start_line))
     });
 
-    let mut out = String::new();
-    match template {
-        TemplateId::Concise => {
-            out.push_str("# Annotations (Concise)\n\n");
-            out.push_str(
-                "> 说明: 片段中若发生省略，将使用 <<<OMITTED ~N CHARS>>> 进行标记；请勿臆测缺失内容，定位以文件路径与行号为准。\n\n",
-            );
-        }
-        TemplateId::Detailed => {
-            out.push_str("# Annotations (Detailed)\n\n");
-            out.push_str(
-                "> 说明: 片段中若发生省略，将使用 <<<OMITTED ~N LINES>>> 进行标记；请勿臆测缺失内容，定位以文件路径与行号为准。\n\n",
-            );
-        }
-    }
+    let heading = match template {
+        TemplateId::Concise => "# Annotations (Concise)\n\n",
+        TemplateId::Detailed => "# Annotations (Detailed)\n\n",
+    };
+    let assumed_header = match template {
+        TemplateId::Concise => HEADER_CHARS,
+        TemplateId::Detailed => HEADER_LINES,
+    };
+
+    let mut body = String::new();
+    let mut omitted_any = false;
     let mut used = 0usize;
     for a in anns.iter() {
         // 选中文本：按模板做“中间省略”裁剪（concise 基于字符，detailed 基于行）
@@ -72,6 +71,11 @@ pub fn generate_prompt(
             TemplateId::Concise => collapse_middle_chars(raw, 60, 60, 120),
             TemplateId::Detailed => collapse_middle_lines(raw, 20, 20, 40),
         };
+
+        // 省略检测（显式占位符）
+        if snippet.contains("<<<OMITTED ~") {
+            omitted_any = true;
+        }
 
         // 若片段内含有三反引号，则用四反引号包裹，避免围栏冲突
         let fence = if snippet.contains("```") {
@@ -97,14 +101,15 @@ pub fn generate_prompt(
                 snippet
             ),
         };
-        // budget check
-        if out.len() + item.len() > max_chars && used > 0 {
+        // budget check（以包含“说明行”的最坏情况作为预算基准，避免后置插入导致超限）
+        let base_len = heading.len() + assumed_header.len() + body.len();
+        if base_len + item.len() > max_chars && used > 0 {
             break;
         }
-        if out.len() + item.len() > max_chars {
+        if base_len + item.len() > max_chars {
             // single item larger than budget: hard cut
-            let remain = max_chars.saturating_sub(out.len());
-            out.push_str(
+            let remain = max_chars.saturating_sub(base_len);
+            body.push_str(
                 &item[..item
                     .char_indices()
                     .take_while(|(i, _)| *i < remain)
@@ -116,10 +121,17 @@ pub fn generate_prompt(
             used += 1;
             break;
         }
-        out.push_str(&item);
+        body.push_str(&item);
         used += 1;
     }
     let truncated = used < anns.len();
+    // 组装最终输出：标题 + （按需）说明 + 正文
+    let mut out = String::new();
+    out.push_str(heading);
+    if omitted_any {
+        out.push_str(assumed_header);
+    }
+    out.push_str(&body);
     let chars = out.len();
     StitchResult {
         prompt: out,
@@ -187,4 +199,71 @@ fn collapse_middle_lines(s: &str, head: usize, tail: usize, max_lines: usize) ->
         out.pop();
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ann(id: &str, file: &str, text: &str, comment: &str) -> Annotation {
+        Annotation {
+            id: id.to_string(),
+            file_path: file.to_string(),
+            start_line: 1,
+            end_line: 9999,
+            start_column: None,
+            end_column: None,
+            selected_text: text.to_string(),
+            comment: comment.to_string(),
+            pre_context_hash: None,
+            post_context_hash: None,
+            file_digest: None,
+            tags: None,
+            priority: Some("P1".into()),
+            created_at: "0".into(),
+            updated_at: "0".into(),
+        }
+    }
+
+    #[test]
+    fn concise_with_omission_adds_header_once() {
+        let long = "a".repeat(400);
+        let r = generate_prompt(TemplateId::Concise, 10_000, vec![ann("1", "a.rs", &long, "c1")]);
+        assert!(r.prompt.contains("<<<OMITTED ~"), "snippet should contain omission marker");
+        assert!(r.prompt.contains("> 说明: 片段中若发生省略"));
+        assert!(r.prompt.contains("CHARS>>>"));
+        assert_eq!(r.prompt.matches("> 说明: 片段中若发生省略").count(), 1, "header appears once");
+    }
+
+    #[test]
+    fn detailed_with_omission_adds_header_once() {
+        let long_lines = (0..200).map(|i| format!("line{}", i)).collect::<Vec<_>>().join("\n");
+        let r = generate_prompt(TemplateId::Detailed, 50_000, vec![ann("1", "a.rs", &long_lines, "c1")]);
+        assert!(r.prompt.contains("<<<OMITTED ~"));
+        assert!(r.prompt.contains("LINES>>>"));
+        assert!(r.prompt.contains("> 说明: 片段中若发生省略"));
+        assert_eq!(r.prompt.matches("> 说明: 片段中若发生省略").count(), 1);
+    }
+
+    #[test]
+    fn no_omission_no_header_and_no_extra_blank() {
+        let short = "abcdefg";
+        let r = generate_prompt(TemplateId::Concise, 10_000, vec![ann("1", "a.rs", short, "c1")]);
+        assert!(!r.prompt.contains("> 说明: 片段中若发生省略"));
+        // 顶部应该是标题 + 空行，然后直接进入正文条目
+        assert!(r.prompt.starts_with("# Annotations (Concise)\n\n- ["));
+    }
+
+    #[test]
+    fn multiple_omissions_still_single_header() {
+        let long1 = "x".repeat(400);
+        let long2 = "y".repeat(500);
+        let r = generate_prompt(
+            TemplateId::Concise,
+            50_000,
+            vec![ann("1", "a.rs", &long1, "c1"), ann("2", "b.rs", &long2, "c2")],
+        );
+        assert!(r.prompt.contains("<<<OMITTED ~"));
+        assert_eq!(r.prompt.matches("> 说明: 片段中若发生省略").count(), 1);
+    }
 }
