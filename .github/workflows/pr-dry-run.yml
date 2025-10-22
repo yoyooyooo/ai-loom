@@ -1,0 +1,175 @@
+name: PR Dry Run - Release Simulation
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-dry-run-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  simulate-platforms:
+    name: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: server-darwin-arm64
+            os: macos-14
+            rust_target: ''
+            pkg_dir: packages/npm/server-darwin-arm64
+            bin_name: ailoom-server
+            bin_src: target/release/ailoom-server
+
+          - platform: server-darwin-x64
+            os: macos-13
+            rust_target: x86_64-apple-darwin
+            pkg_dir: packages/npm/server-darwin-x64
+            bin_name: ailoom-server
+            bin_src: target/x86_64-apple-darwin/release/ailoom-server
+
+          - platform: server-linux-x64-gnu
+            os: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+            apt: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev
+            pkg_dir: packages/npm/server-linux-x64-gnu
+            bin_name: ailoom-server
+            bin_src: target/x86_64-unknown-linux-gnu/release/ailoom-server
+
+          - platform: server-linux-x64-musl
+            os: ubuntu-latest
+            rust_target: x86_64-unknown-linux-musl
+            apt: sudo apt-get update && sudo apt-get install -y musl-tools
+            pkg_dir: packages/npm/server-linux-x64-musl
+            bin_name: ailoom-server
+            bin_src: target/x86_64-unknown-linux-musl/release/ailoom-server
+
+          - platform: server-linux-arm64-gnu
+            os: ubuntu-latest
+            rust_target: aarch64-unknown-linux-gnu
+            apt: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+            pkg_dir: packages/npm/server-linux-arm64-gnu
+            bin_name: ailoom-server
+            bin_src: target/aarch64-unknown-linux-gnu/release/ailoom-server
+
+          - platform: server-win32-x64-msvc
+            os: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            pkg_dir: packages/npm/server-win32-x64-msvc
+            bin_name: ailoom-server.exe
+            bin_src: target/x86_64-pc-windows-msvc/release/ailoom-server.exe
+
+    runs-on: ${{ matrix.os }}
+    env:
+      # 强制 npm 干跑，不需要令牌
+      NPM_FLAGS: --dry-run
+      # 禁用 provenance 以避免 OIDC 要求
+      NPM_PROVENANCE: ''
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          registry-url: 'https://registry.npmjs.org'
+          scope: '@ai-loom'
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Install Linux build deps
+        if: runner.os == 'Linux' && matrix.apt
+        run: ${{ matrix.apt }}
+
+      - name: Configure aarch64 cross linker
+        if: matrix.rust_target == 'aarch64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar" >> $GITHUB_ENV
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
+
+      - name: Build release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ matrix.rust_target }}" ]; then
+            cargo build -p ailoom-server --release --target "${{ matrix.rust_target }}"
+          else
+            cargo build -p ailoom-server --release
+          fi
+
+      - name: Copy binary into subpackage
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${{ matrix.pkg_dir }}/bin"
+          cp "${{ matrix.bin_src }}" "${{ matrix.pkg_dir }}/bin/${{ matrix.bin_name }}"
+          chmod +x "${{ matrix.pkg_dir }}/bin/${{ matrix.bin_name }}" || true
+
+      - name: npm whoami / ping (diagnostic)
+        shell: bash
+        run: |
+          (npm whoami && npm ping) || true
+
+      - name: npm publish (dry-run)
+        working-directory: ${{ matrix.pkg_dir }}
+        run: npm publish ${NPM_PROVENANCE} --access public ${NPM_FLAGS}
+
+  simulate-meta:
+    name: Simulate meta package ai-loom
+    needs: simulate-platforms
+    runs-on: ubuntu-latest
+    env:
+      NPM_FLAGS: --dry-run
+      NPM_PROVENANCE: ''
+      PNPM_CONFIG_FROZEN_LOCKFILE: 'false'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js and pnpm
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Setup pnpm (read version from packageManager)
+        uses: pnpm/action-setup@v4
+
+      - name: Build web assets for meta package
+        run: |
+          pnpm i --prefer-offline --filter ./packages/web --no-frozen-lockfile
+          pnpm -C packages/web build
+          rm -rf packages/npm/ai-loom/web
+          mkdir -p packages/npm/ai-loom/web
+          cp -R packages/web/dist/* packages/npm/ai-loom/web/ 2>/dev/null || true
+
+      - name: Build CLI (meta package js bundling)
+        run: |
+          pnpm i --prefer-offline --filter ./packages/npm/ai-loom --no-frozen-lockfile
+          pnpm -C packages/npm/ai-loom build
+
+      - name: npm whoami / ping (diagnostic)
+        shell: bash
+        run: |
+          (npm whoami && npm ping) || true
+
+      - name: npm publish meta (dry-run)
+        working-directory: packages/npm/ai-loom
+        run: npm publish ${NPM_PROVENANCE} --access public ${NPM_FLAGS}
