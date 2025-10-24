@@ -1,0 +1,118 @@
+openapi: 3.0.3
+info:
+  title: Chat Sidebar Integration
+  version: 1.0.0
+paths:
+  /api/chat/conversations:
+    get:
+      summary: 列出会话历史（倒序）
+      parameters:
+        - in: query
+          name: cursor
+          schema:
+            type: string
+          description: 分页游标（若为空表示第一页）
+        - in: query
+          name: pageSize
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+      responses:
+        '200':
+          description: 成功返回会话列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ConversationHistoryEntry'
+                  nextCursor:
+                    type: string
+                    nullable: true
+        '500':
+          description: INTERNAL 错误
+  /api/chat/conversations/resume:
+    post:
+      summary: 通过历史路径恢复会话
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path:
+                  type: string
+                forceStop:
+                  type: boolean
+                  description: 是否在恢复前强制停止当前生成
+      responses:
+        '200':
+          description: 成功恢复
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversationId:
+                    type: string
+                  messages:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Message'
+        '409':
+          description: CONFLICT - 当前会话仍在生成且 forceStop=false
+        '404':
+          description: 指定 path 不存在
+  /api/chat/conversations/{conversationId}/interrupt:
+    post:
+      summary: 停止当前生成
+      parameters:
+        - in: path
+          name: conversationId
+          required: true
+          schema:
+            type: string
+      responses:
+        '202':
+          description: 已接受停止请求
+        '404':
+          description: 会话不存在
+components:
+  schemas:
+    ConversationHistoryEntry:
+      type: object
+      required: [path, preview, timestamp]
+      properties:
+        path:
+          type: string
+        preview:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        model:
+          type: string
+        status:
+          type: string
+          enum: [active, archived]
+    Message:
+      type: object
+      required: [id, role, content]
+      properties:
+        id:
+          type: string
+        role:
+          type: string
+          enum: [user, assistant, system]
+        content:
+          type: string
+        createdAt:
+          type: string
+          format: date-time

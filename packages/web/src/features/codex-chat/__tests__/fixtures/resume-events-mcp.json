@@ -1,0 +1,10 @@
+{
+  "events": [
+    { "method": "chat.turn.started", "params": { "turnSeq": 1 } },
+    { "method": "chat.tool.mcp.begin", "params": { "callId": "m1", "server": "sv", "tool": "tl", "arguments": { "x": 1 } } },
+    { "method": "chat.tool.mcp.end", "params": { "callId": "m1", "server": "sv", "tool": "tl", "arguments": { "x": 1 }, "result": { "ok": true } } },
+    { "method": "chat.message.completed", "params": { "text": "done" } },
+    { "method": "chat.turn.complete", "params": { "turnSeq": 1 } }
+  ]
+}
+

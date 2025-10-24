@@ -1,8 +1,7 @@
-pub mod state;
+pub mod paths;
 pub mod router;
-pub mod ws;
 pub mod routes;
 pub mod services;
-pub mod paths;
+pub mod state;
 pub mod web;
-
+pub mod ws;

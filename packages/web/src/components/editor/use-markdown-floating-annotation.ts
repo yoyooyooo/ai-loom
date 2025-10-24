@@ -14,13 +14,19 @@ export function useMarkdownFloatingAnnotation(params: {
   const { containerEl, previewHostEl, previewScrollEl, show, activeMarkId } = params
   const debug = (() => {
     try {
-      const v = (typeof window !== 'undefined' && window.localStorage?.getItem('AILOOM_DEBUG_MD_FLOAT')) || ''
+      const v =
+        (typeof window !== 'undefined' && window.localStorage?.getItem('AILOOM_DEBUG_MD_FLOAT')) ||
+        ''
       return v === '1' || v === 'true'
     } catch {
       return false
     }
   })()
-  const dlog = (...args: any[]) => { try { if (debug) console.log('[md-float]', ...args) } catch {} }
+  const dlog = (...args: any[]) => {
+    try {
+      if (debug) console.log('[md-float]', ...args)
+    } catch {}
+  }
 
   const [rectState, setRectState] = useState<AnchorRect | null>(null)
   const lastAnchorRectRef = useRef<AnchorRect | null>(null)
@@ -44,7 +50,10 @@ export function useMarkdownFloatingAnnotation(params: {
 
   const strategyPref = (() => {
     try {
-      const s = (typeof window !== 'undefined' && window.localStorage?.getItem('AILOOM_MD_FLOAT_STRATEGY')) || ''
+      const s =
+        (typeof window !== 'undefined' &&
+          window.localStorage?.getItem('AILOOM_MD_FLOAT_STRATEGY')) ||
+        ''
       if (s === 'abs') return 'absolute'
       if (s === 'fix') return 'fixed'
       return 'absolute' // 默认使用 absolute 相对 overlay，更稳妥
@@ -66,7 +75,9 @@ export function useMarkdownFloatingAnnotation(params: {
   }, [])
 
   const scheduleUpdate = () => {
-    try { if (rafRef.current != null) cancelAnimationFrame(rafRef.current) } catch {}
+    try {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
+    } catch {}
     rafRef.current = requestAnimationFrame(() => {
       try {
         // 每次更新前重算翻转方向（带滞后阈值）
@@ -76,7 +87,12 @@ export function useMarkdownFloatingAnnotation(params: {
         const r = computeAnchorRect()
         // 仅在候选矩形“合理”时发布并记为 lastGood；否则沿用上一帧
         if (r && isRectSane(r)) {
-          const rr = { x: r.x ?? (r as any).left ?? 0, y: r.y ?? (r as any).top ?? 0, width: Math.max(1, r.width || 1), height: Math.max(1, r.height || 1) }
+          const rr = {
+            x: r.x ?? (r as any).left ?? 0,
+            y: r.y ?? (r as any).top ?? 0,
+            width: Math.max(1, r.width || 1),
+            height: Math.max(1, r.height || 1)
+          }
           lastGoodRectRef.current = rr
           setRectState(rr)
           dlog('rect:publish', rr)
@@ -95,24 +111,35 @@ export function useMarkdownFloatingAnnotation(params: {
             let next = prev
             if (prev === 'top-start') {
               if (!needAbove && needBelow) next = 'bottom-start'
-              else if (!needAbove && !needBelow) next = spaceBelow > spaceAbove ? 'bottom-start' : 'top-start'
+              else if (!needAbove && !needBelow)
+                next = spaceBelow > spaceAbove ? 'bottom-start' : 'top-start'
             } else {
               if (!needBelow && needAbove) next = 'top-start'
-              else if (!needBelow && !needAbove) next = spaceAbove > spaceBelow ? 'top-start' : 'bottom-start'
+              else if (!needBelow && !needAbove)
+                next = spaceAbove > spaceBelow ? 'top-start' : 'bottom-start'
             }
             return next
           })
         }
       } catch {}
-      try { update() } catch {}
+      try {
+        update()
+      } catch {}
     })
   }
 
   function isRectSane(r: any) {
     try {
-      const h = r?.height ?? (r?.bottom - r?.top) ?? 0
+      const h = (() => {
+        if (!r) return 0
+        if (typeof r.height === 'number') return r.height
+        if (typeof r.bottom === 'number' && typeof r.top === 'number') return r.bottom - r.top
+        return 0
+      })()
       return Number.isFinite(h) && h >= 8
-    } catch { return false }
+    } catch {
+      return false
+    }
   }
 
   function computeAnchorRect(): DOMRect | null {
@@ -124,15 +151,15 @@ export function useMarkdownFloatingAnnotation(params: {
         const list = range.getClientRects()
         const r = list && list.length > 0 ? list[0] : range.getBoundingClientRect()
         if (isRectSane(r)) {
-          const left = (baseLeft ?? r.left)
+          const left = baseLeft ?? r.left
           const out = {
             x: left,
             y: r.top,
             left,
             top: r.top,
-            width: Math.max(1, r.width || (r.right - r.left) || 1),
+            width: Math.max(1, r.width || r.right - r.left || 1),
             height: Math.max(1, r.height || 1),
-            right: left + Math.max(1, r.width || (r.right - r.left) || 1),
+            right: left + Math.max(1, r.width || r.right - r.left || 1),
             bottom: r.top + Math.max(1, r.height || 1)
           } as DOMRect
           dlog('rect:from-range', out)
@@ -145,15 +172,15 @@ export function useMarkdownFloatingAnnotation(params: {
       if (anchorElRef.current) {
         const r = anchorElRef.current.getBoundingClientRect()
         if (isRectSane(r)) {
-          const left = (baseLeft ?? r.left)
+          const left = baseLeft ?? r.left
           const out = {
             x: left,
             y: r.top,
             left,
             top: r.top,
-            width: Math.max(1, r.width || (r.right - r.left) || 1),
+            width: Math.max(1, r.width || r.right - r.left || 1),
             height: Math.max(1, r.height || 1),
-            right: left + Math.max(1, r.width || (r.right - r.left) || 1),
+            right: left + Math.max(1, r.width || r.right - r.left || 1),
             bottom: r.top + Math.max(1, r.height || 1)
           } as DOMRect
           dlog('rect:from-el', out)
@@ -165,7 +192,10 @@ export function useMarkdownFloatingAnnotation(params: {
       // 3) 点击高亮的场景：合并多段内联标注的矩形
       if (previewHostEl && activeMarkId) {
         const uni = getUnionRectByMarkId(previewHostEl, activeMarkId, baseLeft)
-        if (uni) { dlog('rect:from-union', uni); return uni as DOMRect }
+        if (uni) {
+          dlog('rect:from-union', uni)
+          return uni as DOMRect
+        }
       }
       // 4) window.getSelection 兜底
       try {
@@ -175,15 +205,15 @@ export function useMarkdownFloatingAnnotation(params: {
           const list = range.getClientRects()
           const r = list && list.length > 0 ? list[0] : range.getBoundingClientRect()
           if (isRectSane(r)) {
-            const left = (baseLeft ?? r.left)
+            const left = baseLeft ?? r.left
             const out = {
               x: left,
               y: r.top,
               left,
               top: r.top,
-              width: Math.max(1, r.width || (r.right - r.left) || 1),
+              width: Math.max(1, r.width || r.right - r.left || 1),
               height: Math.max(1, r.height || 1),
-              right: left + Math.max(1, r.width || (r.right - r.left) || 1),
+              right: left + Math.max(1, r.width || r.right - r.left || 1),
               bottom: r.top + Math.max(1, r.height || 1)
             } as DOMRect
             dlog('rect:from-window-selection', out)
@@ -198,7 +228,7 @@ export function useMarkdownFloatingAnnotation(params: {
       if (r) {
         const baseLeft2 = getBaseLeft(previewHostEl || containerEl, ANCHOR_LEFT_TWEAK)
         const baseX = anchorBaseRef.current?.x
-        const left = (baseX != null ? baseX : (baseLeft2 ?? r.x))
+        const left = baseX != null ? baseX : (baseLeft2 ?? r.x)
         const sc = previewScrollEl
         const curTop = (sc ? sc.scrollTop : (window as any)?.scrollY || 0) as number
         const base = anchorBaseRef.current
@@ -223,9 +253,20 @@ export function useMarkdownFloatingAnnotation(params: {
       dlog('rect:error; using last')
       const r = lastAnchorRectRef.current
       if (!r) return null
-      const left = r.x, top = r.y
-      const w = Math.max(1, r.width || 1), h = Math.max(1, r.height || 1)
-      return { x: left, y: top, left, top, width: w, height: h, right: left + w, bottom: top + h } as DOMRect
+      const left = r.x,
+        top = r.y
+      const w = Math.max(1, r.width || 1),
+        h = Math.max(1, r.height || 1)
+      return {
+        x: left,
+        y: top,
+        left,
+        top,
+        width: w,
+        height: h,
+        right: left + w,
+        bottom: top + h
+      } as DOMRect
     }
   }
 
@@ -233,13 +274,22 @@ export function useMarkdownFloatingAnnotation(params: {
     const v = {
       getBoundingClientRect: () => {
         const r = computeAnchorRect()
-        const ret = (
-          r || ({ x: -10000, y: -10000, left: -10000, top: -10000, width: 1, height: 1, right: -9999, bottom: -9999 } as DOMRect)
-        )
+        const ret =
+          r ||
+          ({
+            x: -10000,
+            y: -10000,
+            left: -10000,
+            top: -10000,
+            width: 1,
+            height: 1,
+            right: -9999,
+            bottom: -9999
+          } as DOMRect)
         dlog('getBoundingClientRect ->', ret)
         return ret
       },
-      contextElement: (previewScrollEl || containerEl) || undefined
+      contextElement: previewScrollEl || containerEl || undefined
     }
     ;(refs.setReference as any)(v)
     scheduleUpdate()
@@ -276,11 +326,20 @@ export function useMarkdownFloatingAnnotation(params: {
     if (!show) return
     const sc = previewScrollEl
     if (!sc) return
-    const onScroll = () => { dlog('scroll'); scheduleUpdate() }
+    const onScroll = () => {
+      dlog('scroll')
+      scheduleUpdate()
+    }
     sc.addEventListener('scroll', onScroll, { passive: true })
-    const onWinScroll = () => { dlog('win-scroll'); scheduleUpdate() }
+    const onWinScroll = () => {
+      dlog('win-scroll')
+      scheduleUpdate()
+    }
     window.addEventListener('scroll', onWinScroll, true)
-    const onResize = () => { dlog('resize'); scheduleUpdate() }
+    const onResize = () => {
+      dlog('resize')
+      scheduleUpdate()
+    }
     window.addEventListener('resize', onResize)
     return () => {
       sc.removeEventListener('scroll', onScroll)
@@ -293,9 +352,17 @@ export function useMarkdownFloatingAnnotation(params: {
     if (!show) return
     const host = previewHostEl
     if (!host) return
-    const ro = new ResizeObserver(() => { scheduleUpdate() })
-    try { ro.observe(host) } catch {}
-    return () => { try { ro.disconnect() } catch {} }
+    const ro = new ResizeObserver(() => {
+      scheduleUpdate()
+    })
+    try {
+      ro.observe(host)
+    } catch {}
+    return () => {
+      try {
+        ro.disconnect()
+      } catch {}
+    }
   }, [show, previewHostEl, update])
 
   // 针对异步内容变化的增强：
@@ -306,12 +373,18 @@ export function useMarkdownFloatingAnnotation(params: {
     if (!show) return
     const host = previewHostEl
     if (!host) return
-    const onImgLoad = () => { scheduleUpdate() }
+    const onImgLoad = () => {
+      scheduleUpdate()
+    }
     const attachImgListeners = (root: HTMLElement) => {
       try {
         const imgs = root.querySelectorAll('img')
         imgs.forEach((img) => {
-          try { img.addEventListener('load', onImgLoad as any, { passive: true } as any) } catch { img.addEventListener('load', onImgLoad as any) }
+          try {
+            img.addEventListener('load', onImgLoad as any, { passive: true } as any)
+          } catch {
+            img.addEventListener('load', onImgLoad as any)
+          }
         })
       } catch {}
     }
@@ -319,7 +392,9 @@ export function useMarkdownFloatingAnnotation(params: {
       try {
         const imgs = root.querySelectorAll('img')
         imgs.forEach((img) => {
-          try { img.removeEventListener('load', onImgLoad as any) } catch {}
+          try {
+            img.removeEventListener('load', onImgLoad as any)
+          } catch {}
         })
       } catch {}
     }
@@ -329,19 +404,37 @@ export function useMarkdownFloatingAnnotation(params: {
         m.addedNodes?.forEach((n) => {
           if (!(n instanceof HTMLElement)) return
           if (n.tagName === 'IMG') {
-            try { (n as HTMLImageElement).addEventListener('load', onImgLoad as any, { passive: true } as any) } catch { (n as HTMLImageElement).addEventListener('load', onImgLoad as any) }
+            try {
+              ;(n as HTMLImageElement).addEventListener(
+                'load',
+                onImgLoad as any,
+                { passive: true } as any
+              )
+            } catch {
+              ;(n as HTMLImageElement).addEventListener('load', onImgLoad as any)
+            }
           } else {
             attachImgListeners(n)
           }
         })
       }
     })
-    try { mo.observe(host, { childList: true, subtree: true }) } catch {}
-    const onTransitionEnd = () => { scheduleUpdate() }
-    try { host.addEventListener('transitionend', onTransitionEnd, true) } catch {}
+    try {
+      mo.observe(host, { childList: true, subtree: true })
+    } catch {}
+    const onTransitionEnd = () => {
+      scheduleUpdate()
+    }
+    try {
+      host.addEventListener('transitionend', onTransitionEnd, true)
+    } catch {}
     return () => {
-      try { host.removeEventListener('transitionend', onTransitionEnd, true) } catch {}
-      try { mo.disconnect() } catch {}
+      try {
+        host.removeEventListener('transitionend', onTransitionEnd, true)
+      } catch {}
+      try {
+        mo.disconnect()
+      } catch {}
       detachImgListeners(host)
     }
   }, [show, previewHostEl])
@@ -349,8 +442,12 @@ export function useMarkdownFloatingAnnotation(params: {
   const refsEx = {
     ...refs,
     setFloating: (node: any) => {
-      try { floatingElRef.current = node as any } catch {}
-      try { (refs.setFloating as any)(node) } catch {}
+      try {
+        floatingElRef.current = node as any
+      } catch {}
+      try {
+        ;(refs.setFloating as any)(node)
+      } catch {}
     }
   }
 
@@ -372,7 +469,7 @@ export function useMarkdownFloatingAnnotation(params: {
         const st = (sc ? sc.scrollTop : (window as any)?.scrollY || 0) as number
         const baseLeft0 = getBaseLeft(previewHostEl || containerEl, ANCHOR_LEFT_TWEAK)
         anchorBaseRef.current = {
-          x: (baseLeft0 != null ? baseLeft0 : rect.x),
+          x: baseLeft0 != null ? baseLeft0 : rect.x,
           y: rect.y,
           scrollTop: st,
           width: rect.width,

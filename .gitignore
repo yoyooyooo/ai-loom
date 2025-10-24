@@ -60,3 +60,4 @@ tmp/
 .codex/sessions
 .codex/history.jsonl
 .codex/version.json
+.rsworktree/

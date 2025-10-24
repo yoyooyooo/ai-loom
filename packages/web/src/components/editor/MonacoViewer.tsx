@@ -9,12 +9,7 @@ import { ANCHOR_LEFT_TWEAK } from '@/components/editor/constants'
 
 export type ViewerHandle = {
   // 以“文件绝对行号”定位
-  reveal: (
-    startLine: number,
-    endLine: number,
-    startColumn?: number,
-    endColumn?: number
-  ) => void
+  reveal: (startLine: number, endLine: number, startColumn?: number, endColumn?: number) => void
   // 以“当前模型行号”（1-based）定位（避免偏移不同步问题）
   revealModel: (
     startLineRel: number,
@@ -40,13 +35,16 @@ type Props = {
     startColumn?: number
     endColumn?: number
   }[]
-  onOpenMark?: (mark: {
-    id?: string
-    startLine: number
-    endLine: number
-    startColumn?: number
-    endColumn?: number
-  }, anchorRect?: AnchorRect) => void
+  onOpenMark?: (
+    mark: {
+      id?: string
+      startLine: number
+      endLine: number
+      startColumn?: number
+      endColumn?: number
+    },
+    anchorRect?: AnchorRect
+  ) => void
   wrap?: boolean
   topPadLines?: number
   onAnchorChange?: (rect: AnchorRect | null) => void
@@ -123,10 +121,11 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
   const suppressSelectionOnceRef = useRef(false)
   const suppressSelectionUntilRef = useRef(0)
   const blockHitRef = useRef(false)
-  const lastAnchorFromMarkRef = useRef<
-    | { lineNumber: number; column: number; height: number }
-    | null
-  >(null)
+  const lastAnchorFromMarkRef = useRef<{
+    lineNumber: number
+    column: number
+    height: number
+  } | null>(null)
 
   const computeAnchorForRange = (
     ed: monaco.editor.IStandaloneCodeEditor,
@@ -136,8 +135,14 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
       const host = containerRef.current
       const rect = host?.getBoundingClientRect()
       if (!rect) return null
-      const pStart = ed.getScrolledVisiblePosition({ lineNumber: rng.startLineNumber, column: rng.startColumn } as any)
-      const pEnd = ed.getScrolledVisiblePosition({ lineNumber: rng.endLineNumber, column: rng.endColumn } as any)
+      const pStart = ed.getScrolledVisiblePosition({
+        lineNumber: rng.startLineNumber,
+        column: rng.startColumn
+      } as any)
+      const pEnd = ed.getScrolledVisiblePosition({
+        lineNumber: rng.endLineNumber,
+        column: rng.endColumn
+      } as any)
       const li = ed.getLayoutInfo?.()
       const contentLeft = (li && (li as any).contentLeft) || 0
       if (!pStart) return null
@@ -154,7 +159,8 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
   useEffect(() => {
     if (!containerRef.current) return
     if (!editorRef.current) {
-      const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+      const isDark =
+        typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
       editorRef.current = monaco.editor.create(containerRef.current, {
         value: '',
         language: 'plaintext',
@@ -165,7 +171,7 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
         lineNumbers: 'on',
         wordWrap: wrap ? 'on' : 'off',
         // 关闭默认的词/匹配高亮与括号配对边框，减少只读状态的干扰
-        occurrencesHighlight: false,
+        occurrencesHighlight: 'off',
         selectionHighlight: false,
         matchBrackets: 'never',
         bracketPairColorization: { enabled: false } as any,
@@ -355,7 +361,11 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
         if (anchor) onAnchorChangeRef.current?.(anchor)
       }
     })
-    return () => { try { disp.dispose() } catch {} }
+    return () => {
+      try {
+        disp.dispose()
+      } catch {}
+    }
   }, [])
 
   // 面板尺寸变化时触发布局，避免在可调整分割下内容不可见
@@ -522,7 +532,13 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
       try {
         const key = `${s}-${e}-${sCol}-${eCol}`
         const vis = ed.getVisibleRanges() || []
-        const inView = vis.some((r) => !(r.endLineNumber < selRange.startLineNumber || r.startLineNumber > selRange.endLineNumber))
+        const inView = vis.some(
+          (r) =>
+            !(
+              r.endLineNumber < selRange.startLineNumber ||
+              r.startLineNumber > selRange.endLineNumber
+            )
+        )
         if (lastJumpKeyRef.current === key && inView) {
           ed.setSelection(selRange)
           return
@@ -546,7 +562,11 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
           // 若当前位置已接近目标顶部，避免重复设置引发闪烁
           try {
             const curTop = ed.getScrollTop()
-            if (Math.abs(curTop - top) <= 2 && lastRevealRef.current?.s === sRel && lastRevealRef.current?.e === eRel) {
+            if (
+              Math.abs(curTop - top) <= 2 &&
+              lastRevealRef.current?.s === sRel &&
+              lastRevealRef.current?.e === eRel
+            ) {
               return
             }
           } catch {}
@@ -556,8 +576,14 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
       }
       revealTop()
       // 下一帧设置选区，并抑制一次选择变更回调，避免外层误开浮层
-      try { (suppressSelectionOnceRef as any).current = true } catch {}
-      setTimeout(() => { try { ed.setSelection(selRange) } catch {} }, 0)
+      try {
+        ;(suppressSelectionOnceRef as any).current = true
+      } catch {}
+      setTimeout(() => {
+        try {
+          ed.setSelection(selRange)
+        } catch {}
+      }, 0)
       // 40ms 后校验是否可见，若仍不可见，使用居中兜底
       setTimeout(() => {
         try {
@@ -591,7 +617,13 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
       try {
         const key = `rel:${sRelRaw}-${eRelRaw}-${sCol}-${eCol}`
         const vis = ed.getVisibleRanges() || []
-        const inView = vis.some((r) => !(r.endLineNumber < selRange.startLineNumber || r.startLineNumber > selRange.endLineNumber))
+        const inView = vis.some(
+          (r) =>
+            !(
+              r.endLineNumber < selRange.startLineNumber ||
+              r.startLineNumber > selRange.endLineNumber
+            )
+        )
         if (lastJumpKeyRef.current === key && inView) {
           ed.setSelection(selRange)
           return
@@ -612,7 +644,11 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
           const top = ed.getTopForLineNumber(sRel)
           try {
             const curTop = ed.getScrollTop()
-            if (Math.abs(curTop - top) <= 2 && lastRevealRef.current?.s === sRel && lastRevealRef.current?.e === eRel) {
+            if (
+              Math.abs(curTop - top) <= 2 &&
+              lastRevealRef.current?.s === sRel &&
+              lastRevealRef.current?.e === eRel
+            ) {
               return
             }
           } catch {}
@@ -621,8 +657,14 @@ const MonacoViewer = forwardRef<ViewerHandle, Props>(function MonacoViewer(
         } catch {}
       }
       revealTop()
-      try { (suppressSelectionOnceRef as any).current = true } catch {}
-      setTimeout(() => { try { ed.setSelection(selRange) } catch {} }, 0)
+      try {
+        ;(suppressSelectionOnceRef as any).current = true
+      } catch {}
+      setTimeout(() => {
+        try {
+          ed.setSelection(selRange)
+        } catch {}
+      }, 0)
       setTimeout(() => {
         try {
           const vis = ed.getVisibleRanges()

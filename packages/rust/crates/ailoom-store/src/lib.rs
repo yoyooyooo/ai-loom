@@ -26,14 +26,19 @@ impl Store {
             .synchronous(SqliteSynchronous::Normal);
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(8)
-            .after_connect(|conn, _meta| Box::pin(async move {
-                // Enforce referential integrity on every connection
-                sqlx::query("PRAGMA foreign_keys=ON;").execute(conn).await?;
-                Ok(())
-            }))
+            .after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    // Enforce referential integrity on every connection
+                    sqlx::query("PRAGMA foreign_keys=ON;").execute(conn).await?;
+                    Ok(())
+                })
+            })
             .connect_with(options)
             .await?;
-        let mut s = Self { pool, workspace_id: workspace_key.to_string() };
+        let mut s = Self {
+            pool,
+            workspace_id: workspace_key.to_string(),
+        };
         s.migrate().await?;
         // ensure workspace row and get id; use workspace_key as root_path fallback
         let ws_id = s
@@ -47,13 +52,18 @@ impl Store {
     pub async fn connect(database_url: &str, workspace_key: &str) -> Result<Self, StoreError> {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(8)
-            .after_connect(|conn, _meta| Box::pin(async move {
-                sqlx::query("PRAGMA foreign_keys=ON;").execute(conn).await?;
-                Ok(())
-            }))
+            .after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    sqlx::query("PRAGMA foreign_keys=ON;").execute(conn).await?;
+                    Ok(())
+                })
+            })
             .connect(database_url)
             .await?;
-        let mut s = Self { pool, workspace_id: workspace_key.to_string() };
+        let mut s = Self {
+            pool,
+            workspace_id: workspace_key.to_string(),
+        };
         s.migrate().await?;
         let ws_id = s
             .ensure_workspace_get_id(workspace_key, workspace_key)
@@ -134,21 +144,29 @@ impl Store {
             .execute(&self.pool)
             .await?;
         // workspace-scoped indices
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_annotations_ws_id ON annotations(workspace_id);")
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_annotations_ws_id ON annotations(workspace_id);",
+        )
+        .execute(&self.pool)
+        .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_annotations_ws_id_file ON annotations(workspace_id, file_path);")
             .execute(&self.pool)
             .await?;
         // workspace indices
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_workspaces_updated_at ON workspaces(updated_at);")
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_workspaces_updated_at ON workspaces(updated_at);",
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
     /// Upsert current workspace row by unique `key` and return its id (UUID-like or existing).
-    pub async fn ensure_workspace_get_id(&self, key: &str, root_path: &str) -> Result<String, StoreError> {
+    pub async fn ensure_workspace_get_id(
+        &self,
+        key: &str,
+        root_path: &str,
+    ) -> Result<String, StoreError> {
         // Try select existing by key
         if let Some(row) = sqlx::query("SELECT id FROM workspaces WHERE key = ?1")
             .bind(key)

@@ -41,4 +41,3 @@ describe('annotations-invalidator', () => {
     expect(list.find((a) => a.id === 'x2')).toBeUndefined()
   })
 })
-

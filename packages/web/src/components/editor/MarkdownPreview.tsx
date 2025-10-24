@@ -37,7 +37,18 @@ type Props = {
 export type PreviewHandle = { reveal: (startLine: number, endLine: number) => void }
 
 const MarkdownPreview = forwardRef<PreviewHandle, Props>(function MarkdownPreview(
-  { content, annotations = [], onSelectionChange, onOpenMark, onAnchorChange, onAnchorElChange, onAnchorRangeChange, onContainerElChange, onScrollElChange, onOverlayElChange },
+  {
+    content,
+    annotations = [],
+    onSelectionChange,
+    onOpenMark,
+    onAnchorChange,
+    onAnchorElChange,
+    onAnchorRangeChange,
+    onContainerElChange,
+    onScrollElChange,
+    onOverlayElChange
+  },
   ref
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -47,7 +58,7 @@ const MarkdownPreview = forwardRef<PreviewHandle, Props>(function MarkdownPrevie
   // rehype 插件：把节点位置信息写入 data-sourcepos
   function withSourcePos() {
     return (tree: any) => {
-      visit(tree, (node: any, index: number | null, parent: any) => {
+      visit(tree, (node: any, index: number | undefined, parent: any) => {
         if (!node || typeof node !== 'object' || !node.position) return
         const p = node.position
         const start = p.start || { line: 1, column: 1 }
@@ -181,10 +192,16 @@ const MarkdownPreview = forwardRef<PreviewHandle, Props>(function MarkdownPrevie
       }
       // 计算精准行列：使用 Range 起止点在所属 span[data-sourcepos] 内的字符偏移推进行列
       const rng = (() => {
-        try { return sel.getRangeAt(0) } catch { return null }
+        try {
+          return sel.getRangeAt(0)
+        } catch {
+          return null
+        }
       })()
       if (!rng) return
-      try { onAnchorRangeChange?.(rng.cloneRange()) } catch {}
+      try {
+        onAnchorRangeChange?.(rng.cloneRange())
+      } catch {}
       // 选择锚点对应的稳定元素（包含 data-sourcepos 的最近祖先），用于滚动时的持续测量
       const startHost = closestWithSourcePos(rng.startContainer)
       const endHost = closestWithSourcePos(rng.endContainer)
@@ -247,7 +264,9 @@ const MarkdownPreview = forwardRef<PreviewHandle, Props>(function MarkdownPrevie
         const r = document.createRange()
         r.selectNodeContents(hit)
         onAnchorRangeChange?.(r)
-      } catch { onAnchorRangeChange?.(null) }
+      } catch {
+        onAnchorRangeChange?.(null)
+      }
       if (sp) {
         onOpenMark(
           {
@@ -288,10 +307,11 @@ const MarkdownPreview = forwardRef<PreviewHandle, Props>(function MarkdownPrevie
       const el = containerRef.current
       if (!el) return
       // 优先命中内联高亮 span（更贴近目标），否则退化到任意含 sourcepos 的节点
-      const pref = Array.from(el.querySelectorAll<HTMLElement>('span.ailoom-anno-inline[data-sourcepos]'))
-      const nodes = pref.length > 0
-        ? pref
-        : Array.from(el.querySelectorAll<HTMLElement>('[data-sourcepos]'))
+      const pref = Array.from(
+        el.querySelectorAll<HTMLElement>('span.ailoom-anno-inline[data-sourcepos]')
+      )
+      const nodes =
+        pref.length > 0 ? pref : Array.from(el.querySelectorAll<HTMLElement>('[data-sourcepos]'))
       let best: HTMLElement | null = null
       for (const n of nodes) {
         const sp = parseSourcePos(n.getAttribute('data-sourcepos'))
@@ -314,10 +334,14 @@ const MarkdownPreview = forwardRef<PreviewHandle, Props>(function MarkdownPrevie
             const top = Math.max(0, Math.min(desiredTop, maxTop))
             sc.scrollTo({ top, behavior: 'auto' })
           } catch {
-            try { best.scrollIntoView({ block: 'start', behavior: 'auto' }) } catch {}
+            try {
+              best.scrollIntoView({ block: 'start', behavior: 'auto' })
+            } catch {}
           }
         } else {
-          try { best.scrollIntoView({ block: 'start', behavior: 'auto' }) } catch {}
+          try {
+            best.scrollIntoView({ block: 'start', behavior: 'auto' })
+          } catch {}
         }
       }
     }

@@ -3,7 +3,13 @@ import MonacoViewer, { ViewerHandle } from '@/components/editor/MonacoViewer'
 import { Textarea } from '@/components/ui/textarea'
 import type { AnchorRect, ViewerSelection } from '@/components/editor/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { listAnnotations, verifyAnnotations, createAnnotation, updateAnnotation, deleteAnnotation } from '@/features/explorer/api/annotations'
+import {
+  listAnnotations,
+  verifyAnnotations,
+  createAnnotation,
+  updateAnnotation,
+  deleteAnnotation
+} from '@/features/explorer/api/annotations'
 import { fetchFileChunk } from '@/features/explorer/api/files'
 import type { Annotation, FileChunk } from '@/lib/api/types'
 import { useAppStore } from '@/stores/app'
@@ -76,7 +82,9 @@ export default function EditorPanelMonaco() {
       try {
         ;(el as any).focus?.({ preventScroll: true })
       } catch {
-        try { el.focus() } catch {}
+        try {
+          el.focus()
+        } catch {}
       }
       try {
         const len = el.value?.length ?? 0
@@ -109,7 +117,12 @@ export default function EditorPanelMonaco() {
     if (!DISABLE_VERIFY) {
       void (async () => {
         try {
-          await verifyAnnotations({ filePath: selectedPath, window: 40, fullLimitBytes: 5 * 1024 * 1024, removeBroken: true })
+          await verifyAnnotations({
+            filePath: selectedPath,
+            window: 40,
+            fullLimitBytes: 5 * 1024 * 1024,
+            removeBroken: true
+          })
           await qc.invalidateQueries({ queryKey: ['annotations'] })
         } catch {}
       })()
@@ -125,7 +138,12 @@ export default function EditorPanelMonaco() {
     if (inCurrentChunk) {
       const startRel = Math.max(1, s - (chunkInfo?.start || 1) + 1)
       const endRel = Math.max(1, e - (chunkInfo?.start || 1) + 1)
-      viewerRef.current?.revealModel?.(startRel, endRel, pendingJump.startColumn, pendingJump.endColumn)
+      viewerRef.current?.revealModel?.(
+        startRel,
+        endRel,
+        pendingJump.startColumn,
+        pendingJump.endColumn
+      )
       setSelection({
         startLine: s,
         endLine: e,
@@ -163,7 +181,7 @@ export default function EditorPanelMonaco() {
         if (s.anchorRect) floating.setAnchorRect(s.anchorRect)
         if (activeAnnId) setActiveAnnId(null)
         // 将模型相对行号换算为文件绝对行号，保证与 Markdown 模式一致
-        const base = (chunkInfo?.start || 1)
+        const base = chunkInfo?.start || 1
         const absStart = base + (s.startLine || 1) - 1
         const absEnd = base + (s.endLine || 1) - 1
         setSelection({
@@ -187,7 +205,9 @@ export default function EditorPanelMonaco() {
       if (!el) return
       if (el.contains(e.target as Node)) return
       closeToolbar()
-      try { viewerRef.current?.clearSelection?.() } catch {}
+      try {
+        viewerRef.current?.clearSelection?.()
+      } catch {}
     }
     document.addEventListener('mousedown', onDocMouseDown, false)
     return () => document.removeEventListener('mousedown', onDocMouseDown, false)
@@ -200,7 +220,9 @@ export default function EditorPanelMonaco() {
       if (e.key === 'Escape') {
         e.preventDefault()
         closeToolbar()
-        try { viewerRef.current?.clearSelection?.() } catch {}
+        try {
+          viewerRef.current?.clearSelection?.()
+        } catch {}
       }
     }
     document.addEventListener('keydown', onKey, true)
@@ -329,10 +351,12 @@ export default function EditorPanelMonaco() {
               } else {
                 if (editorPlacementRef.current === 'above') {
                   if (!needAbove && needBelow) editorPlacementRef.current = 'below'
-                  else if (!needAbove && !needBelow) editorPlacementRef.current = spaceBelow > spaceAbove ? 'below' : 'above'
+                  else if (!needAbove && !needBelow)
+                    editorPlacementRef.current = spaceBelow > spaceAbove ? 'below' : 'above'
                 } else {
                   if (!needBelow && needAbove) editorPlacementRef.current = 'above'
-                  else if (!needBelow && !needAbove) editorPlacementRef.current = spaceAbove > spaceBelow ? 'above' : 'below'
+                  else if (!needBelow && !needAbove)
+                    editorPlacementRef.current = spaceAbove > spaceBelow ? 'above' : 'below'
                 }
               }
               const place = editorPlacementRef.current
@@ -414,9 +438,7 @@ export default function EditorPanelMonaco() {
           })
           const id = m.id || null
           setActiveAnnId(id)
-          let ann =
-            (id && lastEditedRef.current.get(id)) ||
-            (anns ?? []).find((a) => a.id === id)
+          let ann = (id && lastEditedRef.current.get(id)) || (anns ?? []).find((a) => a.id === id)
           setComment(ann?.comment || '')
           openToolbar()
         }}

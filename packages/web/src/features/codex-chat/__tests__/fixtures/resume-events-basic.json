@@ -1,0 +1,9 @@
+{
+  "events": [
+    { "method": "chat.turn.started", "params": { "turnSeq": 1 } },
+    { "method": "chat.message.delta", "params": { "delta": "Hello" } },
+    { "method": "chat.message.completed", "params": { "text": "Hello" } },
+    { "method": "chat.turn.complete", "params": { "turnSeq": 1 } }
+  ]
+}
+

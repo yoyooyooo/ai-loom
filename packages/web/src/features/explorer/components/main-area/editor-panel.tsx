@@ -4,6 +4,7 @@ import MonacoEditorFull, { EditorFullHandle } from '@/components/editor/MonacoEd
 import type { DirEntry } from '@/lib/api/types'
 import { fetchFileFull, saveFile } from '@/features/explorer/api/files'
 import { ws } from '@/lib/ws/singleton'
+import type { FileChangedPayload } from '@/lib/ws/event-payloads'
 import { useAppStore } from '@/stores/app'
 import { useExplorerStore } from '@/stores/explorer'
 import { toast } from 'sonner'
@@ -12,17 +13,20 @@ import EditorPanelMarkdown from '@/features/explorer/components/main-area/editor
 
 export default function EditorPanel() {
   const qc = useQueryClient()
-  const { selectedPath, wrap, toggleWrap, mdPreview, toggleMdPreview, currentDir, currentRoot } = useAppStore()
+  const { selectedPath, wrap, toggleWrap, mdPreview, toggleMdPreview, currentDir, currentRoot } =
+    useAppStore()
   const { full, enterFull, exitFull, setSelection, chunkInfo } = useExplorerStore()
   const editorRef = useRef<EditorFullHandle | null>(null)
 
   // 切换文件时重置选区（对齐旧行为）
-  useEffect(() => { setSelection(null) }, [selectedPath, setSelection])
+  useEffect(() => {
+    setSelection(null)
+  }, [selectedPath, setSelection])
 
   // 外部文件变更提醒/刷新（监听 file.changed 针对当前选中文件）
   useEffect(() => {
     if (!selectedPath) return
-    const sub = ws.notification$('file.changed').subscribe(async (p: any) => {
+    const sub = ws.notification$('file.changed').subscribe(async (p: FileChangedPayload) => {
       try {
         const path = String(p?.path || '')
         if (!path || path !== selectedPath) return
@@ -55,7 +59,11 @@ export default function EditorPanel() {
         }
       } catch {}
     })
-    return () => { try { sub.unsubscribe() } catch {} }
+    return () => {
+      try {
+        sub.unsubscribe()
+      } catch {}
+    }
   }, [selectedPath, full, enterFull])
 
   // 目录树缓存（用于显示当前文件大小）
@@ -69,14 +77,23 @@ export default function EditorPanel() {
           <div className="shrink-0 flex items-center justify-between text-sm px-2 py-1">
             <div>
               <span className="opacity-70 mr-2">文件:</span>
-              <code className="px-1.5 py-0.5 bg-black/5 dark:bg-white/5 rounded">{selectedPath}</code>
+              <code className="px-1.5 py-0.5 bg-black/5 dark:bg-white/5 rounded">
+                {selectedPath}
+              </code>
               {chunkInfo && (
-                <span className="ml-2 opacity-60">L{chunkInfo.start}-{chunkInfo.end}/{chunkInfo.total}</span>
+                <span className="ml-2 opacity-60">
+                  L{chunkInfo.start}-{chunkInfo.end}/{chunkInfo.total}
+                </span>
               )}
               {(() => {
                 const size = treeCached?.find((e) => e.path === selectedPath)?.size
                 if (size == null) return null
-                const human = size < 1024 ? size + 'B' : size < 1024 * 1024 ? (size / 1024).toFixed(1) + 'KB' : (size / 1024 / 1024).toFixed(1) + 'MB'
+                const human =
+                  size < 1024
+                    ? size + 'B'
+                    : size < 1024 * 1024
+                      ? (size / 1024).toFixed(1) + 'KB'
+                      : (size / 1024 / 1024).toFixed(1) + 'MB'
                 return <span className="ml-2 opacity-60">{human}</span>
               })()}
             </div>
@@ -101,8 +118,14 @@ export default function EditorPanel() {
                       setSelection(null)
                     } catch (err: any) {
                       const msg = String(err?.message || '')
-                      if (msg.startsWith('OVER_LIMIT') || msg.includes('MESSAGE_TOO_LARGE') || msg.startsWith('HTTP_413')) toast.error('文件过大，无法全量读取')
-                      else if (msg.includes('NON_TEXT') || msg.startsWith('HTTP_415')) toast.error('该文件不是可预览的文本')
+                      if (
+                        msg.startsWith('OVER_LIMIT') ||
+                        msg.includes('MESSAGE_TOO_LARGE') ||
+                        msg.startsWith('HTTP_413')
+                      )
+                        toast.error('文件过大，无法全量读取')
+                      else if (msg.includes('NON_TEXT') || msg.startsWith('HTTP_415'))
+                        toast.error('该文件不是可预览的文本')
                       else toast.error('进入编辑失败：' + msg)
                     }
                   }}
@@ -115,7 +138,11 @@ export default function EditorPanel() {
 
           <div className="relative flex-1 min-h-0">
             {!full ? (
-              mdPreview ? <EditorPanelMarkdown /> : <EditorPanelMonaco />
+              mdPreview ? (
+                <EditorPanelMarkdown />
+              ) : (
+                <EditorPanelMonaco />
+              )
             ) : (
               <>
                 <div className="flex items-center gap-2 mb-2">
@@ -125,11 +152,16 @@ export default function EditorPanel() {
                       if (!selectedPath || !full) return
                       const content = editorRef.current?.getValue() || full.content
                       try {
-                        const r = await saveFile({ path: selectedPath, content, baseDigest: full.digest })
+                        const r = await saveFile({
+                          path: selectedPath,
+                          content,
+                          baseDigest: full.digest
+                        })
                         if (r.ok) enterFull({ ...full, content, digest: r.digest || full.digest })
                       } catch (err: any) {
                         const msg = String(err?.message || '')
-                        if (msg.startsWith('CONFLICT:')) toast.error('保存冲突：文件已被外部修改，请刷新内容后再试')
+                        if (msg.startsWith('CONFLICT:'))
+                          toast.error('保存冲突：文件已被外部修改，请刷新内容后再试')
                         else toast.error('保存失败：' + msg)
                       }
                     }}
@@ -148,11 +180,16 @@ export default function EditorPanel() {
                   onSave={async (content) => {
                     if (!selectedPath || !full) return
                     try {
-                      const r = await saveFile({ path: selectedPath, content, baseDigest: full.digest })
+                      const r = await saveFile({
+                        path: selectedPath,
+                        content,
+                        baseDigest: full.digest
+                      })
                       if (r.ok) enterFull({ ...full, content, digest: r.digest || full.digest })
                     } catch (err: any) {
                       const msg = String(err?.message || '')
-                      if (msg.startsWith('CONFLICT:')) toast.error('保存冲突：文件已被外部修改，请刷新内容后再试')
+                      if (msg.startsWith('CONFLICT:'))
+                        toast.error('保存冲突：文件已被外部修改，请刷新内容后再试')
                       else toast.error('保存失败：' + msg)
                     }
                   }}

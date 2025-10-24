@@ -1,0 +1,6 @@
+{"type":"session_meta","payload":{"id":"0199ffff-aaaa-bbbb-cccc-000000000001","timestamp":"2025-10-25T06:07:25.000Z","cwd":"/Users/test/project","originator":"codex_cli_rs","cli_version":"0.50.0","instructions":"demo"}}
+{"type":"turn_context","payload":{"cwd":"/Users/test/project","approval_policy":"on-request","sandbox_policy":{"mode":"workspace-write","writable_roots":["/Users/test/project","/Users/test/project/tmp"],"network_access":false,"exclude_tmpdir_env_var":true,"exclude_slash_tmp":false},"model":"gpt-5","effort":"medium","summary":"auto"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"hello"}}
+{"type":"event_msg","payload":{"type":"agent_reasoning","text":"thinking"}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"hi"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/Users/test/project</cwd>\n  <approval_policy>on-request</approval_policy>\n  <sandbox_mode>workspace-write</sandbox_mode>\n  <network_access>disabled</network_access>\n  <root>/Users/test/project</root>\n  <root>/Users/test/project/tmp</root>\n  <shell>zsh</shell>\n</environment_context>"}]}}

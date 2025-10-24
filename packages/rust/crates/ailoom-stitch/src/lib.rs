@@ -228,17 +228,35 @@ mod tests {
     #[test]
     fn concise_with_omission_adds_header_once() {
         let long = "a".repeat(400);
-        let r = generate_prompt(TemplateId::Concise, 10_000, vec![ann("1", "a.rs", &long, "c1")]);
-        assert!(r.prompt.contains("<<<OMITTED ~"), "snippet should contain omission marker");
+        let r = generate_prompt(
+            TemplateId::Concise,
+            10_000,
+            vec![ann("1", "a.rs", &long, "c1")],
+        );
+        assert!(
+            r.prompt.contains("<<<OMITTED ~"),
+            "snippet should contain omission marker"
+        );
         assert!(r.prompt.contains("> 说明: 片段中若发生省略"));
         assert!(r.prompt.contains("CHARS>>>"));
-        assert_eq!(r.prompt.matches("> 说明: 片段中若发生省略").count(), 1, "header appears once");
+        assert_eq!(
+            r.prompt.matches("> 说明: 片段中若发生省略").count(),
+            1,
+            "header appears once"
+        );
     }
 
     #[test]
     fn detailed_with_omission_adds_header_once() {
-        let long_lines = (0..200).map(|i| format!("line{}", i)).collect::<Vec<_>>().join("\n");
-        let r = generate_prompt(TemplateId::Detailed, 50_000, vec![ann("1", "a.rs", &long_lines, "c1")]);
+        let long_lines = (0..200)
+            .map(|i| format!("line{}", i))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let r = generate_prompt(
+            TemplateId::Detailed,
+            50_000,
+            vec![ann("1", "a.rs", &long_lines, "c1")],
+        );
         assert!(r.prompt.contains("<<<OMITTED ~"));
         assert!(r.prompt.contains("LINES>>>"));
         assert!(r.prompt.contains("> 说明: 片段中若发生省略"));
@@ -248,7 +266,11 @@ mod tests {
     #[test]
     fn no_omission_no_header_and_no_extra_blank() {
         let short = "abcdefg";
-        let r = generate_prompt(TemplateId::Concise, 10_000, vec![ann("1", "a.rs", short, "c1")]);
+        let r = generate_prompt(
+            TemplateId::Concise,
+            10_000,
+            vec![ann("1", "a.rs", short, "c1")],
+        );
         assert!(!r.prompt.contains("> 说明: 片段中若发生省略"));
         // 顶部应该是标题 + 空行，然后直接进入正文条目
         assert!(r.prompt.starts_with("# Annotations (Concise)\n\n- ["));
@@ -261,7 +283,10 @@ mod tests {
         let r = generate_prompt(
             TemplateId::Concise,
             50_000,
-            vec![ann("1", "a.rs", &long1, "c1"), ann("2", "b.rs", &long2, "c2")],
+            vec![
+                ann("1", "a.rs", &long1, "c1"),
+                ann("2", "b.rs", &long2, "c2"),
+            ],
         );
         assert!(r.prompt.contains("<<<OMITTED ~"));
         assert_eq!(r.prompt.matches("> 说明: 片段中若发生省略").count(), 1);

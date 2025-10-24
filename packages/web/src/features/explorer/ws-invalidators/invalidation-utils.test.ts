@@ -12,4 +12,3 @@ describe('invalidation-utils', () => {
     expect(dirname('/a')).toBe('/')
   })
 })
-

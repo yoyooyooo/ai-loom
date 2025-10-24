@@ -36,7 +36,7 @@ cargo watch -q -c \
   -i packages/web \
   -i packages/npm \
   -i packages/web/dist \
-  -s "RUSTFLAGS=\"\${RUSTFLAGS:-} -Awarnings\" cargo run -p ${SERVER_BIN} -- --root \"${ROOT}\" --db-path \"${DB_PATH:-${ROOT}/.ailoom/ailoom.db}\" --port ${PORT} --no-static 2>&1 | awk '/^AILOOM_PORT=/{ split(\$0,a,\"=\"); printf(\"[dev-all] 前端访问: http://localhost:5173 (API: http://127.0.0.1:%s)\\n\", a[2]); fflush() } { print }'" &
+  -s "RUSTFLAGS=\"\${RUSTFLAGS:-} -Awarnings\" cargo run -p ${SERVER_BIN} --bin ${SERVER_BIN} -- --root \"${ROOT}\" --db-path \"${DB_PATH:-${ROOT}/.ailoom/ailoom.db}\" --port ${PORT} --no-static 2>&1 | awk '/^AILOOM_PORT=/{ split(\$0,a,\"=\"); printf(\"[dev-all] 前端访问: http://localhost:5173 (API: http://127.0.0.1:%s)\\n\", a[2]); fflush() } { print }'" &
 WATCH_PID=$!
 
 # 前端 Dev，指向后端端口

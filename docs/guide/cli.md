@@ -14,9 +14,12 @@
 
 默认参数
 - 未显式传入时：
-  - `--root` 默认 `process.cwd()`
+ - `--root` 默认 `process.cwd()`
   - `--web-dist` 默认指向包内 `web` 目录（内置构建产物）
 
 传参透传
 - CLI 其余参数透传到 `ailoom-server`（详见 `server --help`）。
 
+辅助命令
+- 生成 Codex 协议类型：`just codex-codegen`（依赖 `pnpm i`，输出到 `packages/web/src/lib/codex-types/` 与 `docs/specs/codex/`）。
+- 校验 Codex 版本一致性：`./scripts/check-codex-version.sh [version]`。

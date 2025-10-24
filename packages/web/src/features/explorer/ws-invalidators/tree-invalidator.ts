@@ -1,5 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { ws } from '@/lib/ws/singleton'
+import type { TreeChangedPayload, SessionResyncPayload } from '@/lib/ws/event-payloads'
 import { createRafBatch, calcMinimalDirs, dirname } from './invalidation-utils'
 
 export function installTreeInvalidator(
@@ -22,7 +23,7 @@ export function installTreeInvalidator(
     }
   }
 
-  const s1 = ws.notification$('tree.changed').subscribe((p: any) => {
+  const s1 = ws.notification$('tree.changed').subscribe((p: TreeChangedPayload) => {
     const dir = String(p?.dir || '')
     const hasImpacted = Object.prototype.hasOwnProperty.call(p || {}, 'impactedPaths')
     const impacted: string[] = Array.isArray(p?.impactedPaths) ? p.impactedPaths : []
@@ -37,14 +38,17 @@ export function installTreeInvalidator(
     rafBatch(flush)
   })
 
-  const s2 = ws.notification$('session.resync').subscribe(() => {
+  const s2 = ws.notification$('session.resync').subscribe((_p: SessionResyncPayload) => {
     qc.invalidateQueries({ queryKey: ['tree', ctx.getCurrentRoot(), ctx.getCurrentDir() || '.'] })
   })
 
   return () => {
-    try { s1.unsubscribe() } catch {}
-    try { s2.unsubscribe() } catch {}
+    try {
+      s1.unsubscribe()
+    } catch {}
+    try {
+      s2.unsubscribe()
+    } catch {}
     pendingDirs.clear()
   }
 }
-

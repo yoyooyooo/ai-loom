@@ -10,7 +10,10 @@ export function useExplorerInvalidations() {
       getCurrentRoot: () => useAppStore.getState().currentRoot,
       getCurrentDir: () => useAppStore.getState().currentDir
     })
-    return () => { try { cleanup() } catch {} }
+    return () => {
+      try {
+        cleanup()
+      } catch {}
+    }
   }, [qc])
 }
-

@@ -36,7 +36,12 @@ describe('explorer subscriptions', () => {
     const { unmount } = renderHook(() => useExplorerSubscriptions())
 
     const calls1 = __getCalls()
-    expect(calls1.some((c: any) => c.topic === 'tree' && c.filter?.dir === '.')).toBe(true)
+    // 当前目录为 '.' 时实现传空字符串用于“任意目录”；测试兼容两种写法
+    expect(
+      calls1.some(
+        (c: any) => c.topic === 'tree' && (c.filter?.dir === '.' || c.filter?.dir === '')
+      )
+    ).toBe(true)
     expect(calls1.some((c: any) => c.topic === 'annotations')).toBe(true)
     expect(calls1.some((c: any) => c.topic === 'file' && c.filter?.prefix)).toBe(false)
 
@@ -80,4 +85,3 @@ describe('explorer subscriptions', () => {
     expect(anyUnsubCalled).toBe(true)
   })
 })
-

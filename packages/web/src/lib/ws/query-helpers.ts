@@ -28,7 +28,13 @@ const DEBUG_ROUTE = (() => {
 const isTransportError = (e: any) => {
   const code = e?.code
   if (!code) return true
-  return code === 'MESSAGE_TOO_LARGE' || code === 'WS_DOWN' || code === 'TIMEOUT' || code === 'WS_DISABLED' || code === 'NOT_SUPPORTED'
+  return (
+    code === 'MESSAGE_TOO_LARGE' ||
+    code === 'WS_DOWN' ||
+    code === 'TIMEOUT' ||
+    code === 'WS_DISABLED' ||
+    code === 'NOT_SUPPORTED'
+  )
 }
 
 // 短窗熔断：某方法发生传输类错误后，在 fuseMs 窗口内直接回退 REST，避免抖动
@@ -62,7 +68,10 @@ export async function wsPrefer<T>(
     // 命中传输/能力错误：设置 fuse 窗口
     const fuseMs = opts?.fuseMs ?? DEFAULT_FUSE_MS
     if (!NO_FALLBACK && fuseMs > 0) fuseUntil.set(method, Date.now() + fuseMs)
-    if (NO_FALLBACK) { if (DEBUG_ROUTE) console.log('[wsPrefer] WS(error, no-fallback)', method, e?.code || e); throw e }
+    if (NO_FALLBACK) {
+      if (DEBUG_ROUTE) console.log('[wsPrefer] WS(error, no-fallback)', method, e?.code || e)
+      throw e
+    }
     if (DEBUG_ROUTE) console.log('[wsPrefer] REST(error)', method, e?.code || e)
     return await httpFallback(opts?.signal)
   }
@@ -71,13 +80,36 @@ export async function wsPrefer<T>(
 function waitForWsUp(timeoutMs: number) {
   return new Promise<void>((resolve) => {
     try {
-      if ((ws as any).state === 'up') { resolve(); return }
+      if ((ws as any).state === 'up') {
+        resolve()
+        return
+      }
       let done = false
-      const timer = setTimeout(() => { if (!done) { done = true; try { sub?.unsubscribe?.() } catch {} ; resolve() } }, Math.max(0, timeoutMs || 0))
+      const timer = setTimeout(
+        () => {
+          if (!done) {
+            done = true
+            try {
+              sub?.unsubscribe?.()
+            } catch {}
+            resolve()
+          }
+        },
+        Math.max(0, timeoutMs || 0)
+      )
       const sub = (ws as any).online$?.subscribe?.((v: any) => {
         if (done) return
-        if (v) { done = true; clearTimeout(timer); try { sub?.unsubscribe?.() } catch {}; resolve() }
+        if (v) {
+          done = true
+          clearTimeout(timer)
+          try {
+            sub?.unsubscribe?.()
+          } catch {}
+          resolve()
+        }
       })
-    } catch { resolve() }
+    } catch {
+      resolve()
+    }
   })
 }

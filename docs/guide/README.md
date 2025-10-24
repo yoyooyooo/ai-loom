@@ -10,10 +10,15 @@
 - Stitch 拼接与预算：见 `stitching.md`
 - 前端结构与流程：见 `frontend.md`
 - 批注交互（跳转/浮层/高亮，Editor/Markdown）：见 `annotations-ssot.md`
-- 批注交互（跳转/浮层/高亮，Editor/Markdown）：见 `annotations-ssot.md`
 - 存储层与迁移：见 `storage.md`
 - CLI 分发与运行：见 `cli.md`
 - 安全与配置：见 `security.md`
+- Chat WS 事件：见 `codex-chat-ws-ssot.md`
+- Codex Chat Turn SSoT（WS+Resume）：见 `codex-chat-turn-ssot.md`
+- Chat 配置与能力：见 `codex-chat-config.md`
+- Chat 历史与恢复：见 `chat-resume-history.md`
+- 读取合并（Explored 聚合）：见 `chat-explored-aggregation.md`
+- Codex 版本固定：见 `codex-versioning.md`
 
 常用索引
 - 错误码与前端提示映射：见 `api.md` 尾部小节

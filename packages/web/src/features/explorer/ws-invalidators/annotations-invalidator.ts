@@ -1,24 +1,41 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { ws } from '@/lib/ws/singleton'
+import type {
+  AnnotationsCreatedPayload,
+  AnnotationsUpdatedPayload,
+  AnnotationsDeletedPayload
+} from '@/lib/ws/event-payloads'
 
 export function installAnnotationsInvalidator(qc: QueryClient) {
   if (!ws.enabled) return () => {}
 
   const subs = [
-    ws.notification$('annotations.created').subscribe((p: any) => onAnnCreated(qc, p)),
-    ws.notification$('annotations.updated').subscribe((p: any) => onAnnUpdated(qc, p)),
-    ws.notification$('annotations.deleted').subscribe((p: any) => onAnnDeleted(qc, p)),
+    ws
+      .notification$('annotations.created')
+      .subscribe((p: AnnotationsCreatedPayload) => onAnnCreated(qc, p)),
+    ws
+      .notification$('annotations.updated')
+      .subscribe((p: AnnotationsUpdatedPayload) => onAnnUpdated(qc, p)),
+    ws
+      .notification$('annotations.deleted')
+      .subscribe((p: AnnotationsDeletedPayload) => onAnnDeleted(qc, p)),
     ws.notification$('annotations.verify.done').subscribe(() => scheduleAnn(qc))
   ]
 
-  return () => { for (const s of subs) { try { s.unsubscribe() } catch {} } }
+  return () => {
+    for (const s of subs) {
+      try {
+        s.unsubscribe()
+      } catch {}
+    }
+  }
 }
 
 function scheduleAnn(qc: QueryClient) {
   qc.invalidateQueries({ queryKey: ['annotations'] })
 }
 
-function onAnnCreated(qc: QueryClient, p: any) {
+function onAnnCreated(qc: QueryClient, p: AnnotationsCreatedPayload) {
   const ann = p?.annotation
   if (!ann || !ann.id) return scheduleAnn(qc)
   qc.setQueryData(['annotations'], (prev: any) => {
@@ -28,7 +45,7 @@ function onAnnCreated(qc: QueryClient, p: any) {
   })
 }
 
-function onAnnUpdated(qc: QueryClient, p: any) {
+function onAnnUpdated(qc: QueryClient, p: AnnotationsUpdatedPayload) {
   const ann = p?.annotation
   if (!ann || !ann.id) return scheduleAnn(qc)
   qc.setQueryData(['annotations'], (prev: any) => {
@@ -40,7 +57,7 @@ function onAnnUpdated(qc: QueryClient, p: any) {
   })
 }
 
-function onAnnDeleted(qc: QueryClient, p: any) {
+function onAnnDeleted(qc: QueryClient, p: AnnotationsDeletedPayload) {
   const id = p?.id
   if (!id) return scheduleAnn(qc)
   qc.setQueryData(['annotations'], (prev: any) => {
@@ -49,4 +66,3 @@ function onAnnDeleted(qc: QueryClient, p: any) {
     return next
   })
 }
-

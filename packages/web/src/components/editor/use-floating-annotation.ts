@@ -41,7 +41,9 @@ export function useFloatingAnnotation(params: {
   })
 
   const scheduleUpdate = () => {
-    try { if (rafRef.current != null) cancelAnimationFrame(rafRef.current) } catch {}
+    try {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
+    } catch {}
     rafRef.current = requestAnimationFrame(() => {
       try {
         if (mdPreview) {
@@ -60,14 +62,32 @@ export function useFloatingAnnotation(params: {
               if (anchorElRef.current) {
                 const rr = anchorElRef.current.getBoundingClientRect()
                 const left = baseLeft ?? rr.left
-                return { x: left, y: rr.top, left, top: rr.top, width: Math.max(1, rr.right - left), height: Math.max(1, rr.height || 1), right: rr.right, bottom: rr.bottom } as DOMRect
+                return {
+                  x: left,
+                  y: rr.top,
+                  left,
+                  top: rr.top,
+                  width: Math.max(1, rr.right - left),
+                  height: Math.max(1, rr.height || 1),
+                  right: rr.right,
+                  bottom: rr.bottom
+                } as DOMRect
               }
               if (savedRangeRef.current) {
                 const range = savedRangeRef.current
                 const list = range.getClientRects()
                 const rr = list && list.length > 0 ? list[0] : range.getBoundingClientRect()
                 const left = baseLeft ?? rr.left
-                return { x: left, y: rr.top, left, top: rr.top, width: Math.max(1, rr.right - left), height: Math.max(1, rr.height || 1), right: rr.right, bottom: rr.bottom } as DOMRect
+                return {
+                  x: left,
+                  y: rr.top,
+                  left,
+                  top: rr.top,
+                  width: Math.max(1, rr.right - left),
+                  height: Math.max(1, rr.height || 1),
+                  right: rr.right,
+                  bottom: rr.bottom
+                } as DOMRect
               }
             } catch {}
             return lastAnchorRectRef.current as any
@@ -83,17 +103,21 @@ export function useFloatingAnnotation(params: {
               let next = prev
               if (prev === 'top-start') {
                 if (!needAbove && needBelow) next = 'bottom-start'
-                else if (!needAbove && !needBelow) next = spaceBelow > spaceAbove ? 'bottom-start' : 'top-start'
+                else if (!needAbove && !needBelow)
+                  next = spaceBelow > spaceAbove ? 'bottom-start' : 'top-start'
               } else {
                 if (!needBelow && needAbove) next = 'top-start'
-                else if (!needBelow && !needAbove) next = spaceAbove > spaceBelow ? 'top-start' : 'bottom-start'
+                else if (!needBelow && !needAbove)
+                  next = spaceAbove > spaceBelow ? 'top-start' : 'bottom-start'
               }
               return next
             })
           }
         }
       } catch {}
-      try { update() } catch {}
+      try {
+        update()
+      } catch {}
     })
   }
 
@@ -187,10 +211,11 @@ export function useFloatingAnnotation(params: {
         }
         const r = lastAnchorRectRef.current!
         return (
-          r || ({ x: 0, y: 0, left: 0, top: 0, width: 1, height: 1, right: 1, bottom: 1 } as DOMRect)
+          r ||
+          ({ x: 0, y: 0, left: 0, top: 0, width: 1, height: 1, right: 1, bottom: 1 } as DOMRect)
         )
       },
-      contextElement: (mdPreview ? (previewScrollEl || containerEl) : containerEl) || undefined
+      contextElement: (mdPreview ? previewScrollEl || containerEl : containerEl) || undefined
     }
     ;(refs.setReference as any)(v)
     // Markdown 模式：依据边界与滞后阈值决定放置方向（top/bottom），避免边界附近来回翻转
@@ -259,9 +284,13 @@ export function useFloatingAnnotation(params: {
     if (!mdPreview || !show) return
     const sc = previewScrollEl
     if (!sc) return
-    const onScroll = () => { scheduleUpdate() }
+    const onScroll = () => {
+      scheduleUpdate()
+    }
     sc.addEventListener('scroll', onScroll, { passive: true })
-    const onWinScroll = () => { scheduleUpdate() }
+    const onWinScroll = () => {
+      scheduleUpdate()
+    }
     window.addEventListener('scroll', onWinScroll, true)
     return () => {
       sc.removeEventListener('scroll', onScroll)
@@ -273,16 +302,28 @@ export function useFloatingAnnotation(params: {
     if (!mdPreview || !show) return
     const host = previewHostEl
     if (!host) return
-    const ro = new ResizeObserver(() => { scheduleUpdate() })
-    try { ro.observe(host) } catch {}
-    return () => { try { ro.disconnect() } catch {} }
+    const ro = new ResizeObserver(() => {
+      scheduleUpdate()
+    })
+    try {
+      ro.observe(host)
+    } catch {}
+    return () => {
+      try {
+        ro.disconnect()
+      } catch {}
+    }
   }, [mdPreview, show, previewHostEl, update])
 
   const refsEx = {
     ...refs,
     setFloating: (node: any) => {
-      try { floatingElRef.current = node as any } catch {}
-      try { (refs.setFloating as any)(node) } catch {}
+      try {
+        floatingElRef.current = node as any
+      } catch {}
+      try {
+        ;(refs.setFloating as any)(node)
+      } catch {}
     }
   }
 

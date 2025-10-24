@@ -22,13 +22,22 @@ export function useExplorerSubscriptions() {
     // 2) 当前目录前缀（保留更精细的局部优化）
     if (currentDir && currentDir !== '.') {
       const filePrefix = currentDir.endsWith('/') ? currentDir : currentDir + '/'
-      subscriptions.push(ws.subscribeTopic$('file', { prefix: filePrefix }).subscribe(() => ({}) as any))
+      subscriptions.push(
+        ws.subscribeTopic$('file', { prefix: filePrefix }).subscribe(() => ({}) as any)
+      )
     }
     // 当前文件精确事件（编辑器）
     if (selectedPath) {
-      subscriptions.push(ws.subscribeTopic$('file', { path: selectedPath }).subscribe(() => ({}) as any))
+      subscriptions.push(
+        ws.subscribeTopic$('file', { path: selectedPath }).subscribe(() => ({}) as any)
+      )
     }
-    return () => { for (const s of subscriptions) { try { s.unsubscribe() } catch {} } }
+    return () => {
+      for (const s of subscriptions) {
+        try {
+          s.unsubscribe()
+        } catch {}
+      }
+    }
   }, [currentDir, selectedPath])
 }
-

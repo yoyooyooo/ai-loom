@@ -1,11 +1,9 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { ws } from '@/lib/ws/singleton'
+import type { FileChangedPayload } from '@/lib/ws/event-payloads'
 import { createRafBatch, dirname } from './invalidation-utils'
 
-export function installFileInvalidator(
-  qc: QueryClient,
-  ctx: { getCurrentRoot: () => string }
-) {
+export function installFileInvalidator(qc: QueryClient, ctx: { getCurrentRoot: () => string }) {
   if (!ws.enabled) return () => {}
 
   const digestHitAt = new Map<string, number>()
@@ -19,14 +17,17 @@ export function installFileInvalidator(
       const files = Array.from(pendingFiles)
       pendingFiles.clear()
       for (const path of files) {
-        qc.invalidateQueries({ predicate: (q) => Array.isArray(q.queryKey) && q.queryKey[0] === 'file' && q.queryKey[1] === path })
+        qc.invalidateQueries({
+          predicate: (q) =>
+            Array.isArray(q.queryKey) && q.queryKey[0] === 'file' && q.queryKey[1] === path
+        })
         const d = dirname(path)
         qc.invalidateQueries({ queryKey: ['tree', root, d] })
       }
     }
   }
 
-  const sub = ws.notification$('file.changed').subscribe((p: any) => {
+  const sub = ws.notification$('file.changed').subscribe((p: FileChangedPayload) => {
     const path = String(p?.path || '')
     if (!path) return
     const hasDigest = Boolean(p?.digest)
@@ -44,9 +45,10 @@ export function installFileInvalidator(
   })
 
   return () => {
-    try { sub.unsubscribe() } catch {}
+    try {
+      sub.unsubscribe()
+    } catch {}
     pendingFiles.clear()
     digestHitAt.clear()
   }
 }
-

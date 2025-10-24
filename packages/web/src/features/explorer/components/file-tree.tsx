@@ -1,5 +1,7 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { ChevronRight, File as FileIcon, Folder } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { TREE_CACHE_STALE_MS, TREE_CACHE_GC_MS } from '@/lib/config'
 import type { DirEntry } from '@/lib/api/types'
 import { fetchTree } from '@/features/explorer/api/tree'
@@ -69,7 +71,17 @@ export default function FileTree({ root, onOpenFile, selectedPath }: Props) {
     }
     const s1 = ws.notification$('tree.changed').subscribe(() => schedule())
     const s2 = ws.notification$('file.changed').subscribe(() => schedule())
-    return () => { try { clearTimeout(timer) } catch {}; try { s1.unsubscribe() } catch {}; try { s2.unsubscribe() } catch {} }
+    return () => {
+      try {
+        clearTimeout(timer)
+      } catch {}
+      try {
+        s1.unsubscribe()
+      } catch {}
+      try {
+        s2.unsubscribe()
+      } catch {}
+    }
   }, [root])
 
   async function loadChildren(dir: string, depth: number, insertIndex?: number) {
@@ -171,36 +183,48 @@ export default function FileTree({ root, onOpenFile, selectedPath }: Props) {
     }
   }
   return (
-    <div className="text-sm select-none">
-      <ul>
+    <div className="select-none text-sm">
+      <ul className="flex flex-col gap-1">
         {nodes.map((n, i) => {
           const isDir = n.type === 'dir' || n.type === 'Dir'
           return (
-            <li
-              key={n.path}
-              className={`flex items-center gap-1 rounded px-1 ${
-                selectedPath === n.path
-                  ? 'bg-black/10 dark:bg-white/10'
-                  : 'hover:bg-black/5 dark:hover:bg-white/5'
-              }`}
-            >
+            <li key={n.path}>
               <button
-                className="text-left flex-1 flex items-center gap-1 py-1 w-full"
+                type="button"
                 onClick={() => toggle(i)}
-              >
-                <span className="inline-block" style={{ width: n.depth * 12 }} />
-                {isDir ? (
-                  <span className="inline-block w-4 text-center">{n.expanded ? '▾' : '▸'}</span>
-                ) : (
-                  <span className="inline-block w-4" />
+                className={cn(
+                  'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
+                  'hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  selectedPath === n.path
+                    ? 'bg-muted font-medium text-foreground'
+                    : 'text-muted-foreground'
                 )}
-                <span className={`${isDir ? 'font-medium' : ''} ${selectedPath === n.path ? 'text-primary dark:text-white' : ''}`}>
+                style={{ paddingLeft: `${n.depth * 12 + 4}px` }}
+              >
+                {isDir ? (
+                  <ChevronRight
+                    className={cn(
+                      'size-3.5 shrink-0 text-muted-foreground transition-transform',
+                      n.expanded ? 'rotate-90 text-foreground' : undefined
+                    )}
+                  />
+                ) : (
+                  <span className="size-3.5 shrink-0" />
+                )}
+                {isDir ? (
+                  <Folder className="size-4 shrink-0 text-muted-foreground" />
+                ) : (
+                  <FileIcon className="size-4 shrink-0 text-muted-foreground" />
+                )}
+                <span className="truncate" title={n.path}>
                   {n.name}
                 </span>
+                {n.size != null && !isDir ? (
+                  <span className="ml-auto text-xs text-muted-foreground/70">
+                    {formatSize(n.size)}
+                  </span>
+                ) : null}
               </button>
-              {n.size != null && !isDir && (
-                <span className="text-xs opacity-50">{formatSize(n.size)}</span>
-              )}
             </li>
           )
         })}

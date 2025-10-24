@@ -1,0 +1,11 @@
+{
+  "events": [
+    { "method": "chat.turn.started", "params": { "turnSeq": 1 } },
+    { "method": "chat.tool.exec.begin", "params": { "callId": "c1", "command": ["bash", "-lc", "echo hi"], "cwd": "/tmp" } },
+    { "method": "chat.tool.exec.output", "params": { "callId": "c1", "text": "hi\n" } },
+    { "method": "chat.tool.exec.end", "params": { "callId": "c1", "exitCode": 0 } },
+    { "method": "chat.message.completed", "params": { "text": "done" } },
+    { "method": "chat.turn.complete", "params": { "turnSeq": 1 } }
+  ]
+}
+

@@ -4,9 +4,15 @@ import MarkdownPreview, { PreviewHandle } from '@/components/editor/MarkdownPrev
 import { Textarea } from '@/components/ui/textarea'
 import type { ViewerSelection } from '@/components/editor/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { listAnnotations, createAnnotation, updateAnnotation, deleteAnnotation } from '@/features/explorer/api/annotations'
+import {
+  listAnnotations,
+  createAnnotation,
+  updateAnnotation,
+  deleteAnnotation
+} from '@/features/explorer/api/annotations'
 import { fetchFileFull } from '@/features/explorer/api/files'
 import { ws } from '@/lib/ws/singleton'
+import type { FileChangedPayload } from '@/lib/ws/event-payloads'
 import type { Annotation } from '@/lib/api/types'
 import { useAppStore } from '@/stores/app'
 import { useExplorerStore } from '@/stores/explorer'
@@ -42,13 +48,20 @@ export default function EditorPanelMarkdown() {
   const lastEditedRef = useRef<Map<string, Annotation>>(new Map())
   // Markdown 绝对定位放置方向与抖动抑制
   const mdPlacementRef = useRef<'above' | 'below' | null>(null)
-  const mdStableRectRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null)
+  const mdStableRectRef = useRef<{ x: number; y: number; width: number; height: number } | null>(
+    null
+  )
   const MD_STICKY_PX = 3
   const MD_STABLE_MIN_FRAMES = 2
   // 首帧门控：仅在进入一帧 rAF 后再允许显示，避免首帧跳动可见
   const mdFirstFrameReadyRef = useRef(false)
   const [mdGateTick, setMdGateTick] = useState(0)
-  const mdStableStateRef = useRef<{ lastX: number; lastY: number; place: 'above' | 'below' | null; consecutive: number }>({ lastX: 0, lastY: 0, place: null, consecutive: 0 })
+  const mdStableStateRef = useRef<{
+    lastX: number
+    lastY: number
+    place: 'above' | 'below' | null
+    consecutive: number
+  }>({ lastX: 0, lastY: 0, place: null, consecutive: 0 })
 
   useEffect(() => {
     if (!showToolbar) {
@@ -63,7 +76,9 @@ export default function EditorPanelMarkdown() {
   // 注意：依赖 floating.hasAnchor，必须在 floating 定义之后声明此 effect
 
   const [containerEl, setContainerEl] = useState<HTMLElement | null>(null)
-  useEffect(() => { setContainerEl(containerRef.current) }, [])
+  useEffect(() => {
+    setContainerEl(containerRef.current)
+  }, [])
 
   const floating = useMarkdownFloatingAnnotation({
     containerEl,
@@ -105,7 +120,11 @@ export default function EditorPanelMarkdown() {
         setMdContent(null)
         const msg = String(e?.message || '')
         // WS 路径返回 MESSAGE_TOO_LARGE；REST 返回 HTTP_413
-        if (msg.startsWith('OVER_LIMIT') || msg.includes('MESSAGE_TOO_LARGE') || msg.startsWith('HTTP_413')) {
+        if (
+          msg.startsWith('OVER_LIMIT') ||
+          msg.includes('MESSAGE_TOO_LARGE') ||
+          msg.startsWith('HTTP_413')
+        ) {
           setMdError('预览不可用：文件过大，无法全量读取')
         } else if (msg.includes('NON_TEXT') || msg.startsWith('HTTP_415')) {
           setMdError('预览不可用：该文件不是文本')
@@ -122,7 +141,7 @@ export default function EditorPanelMarkdown() {
   // 监听 file.changed：当前为 Markdown 预览时，自动刷新预览内容（不覆盖其它模式逻辑）
   useEffect(() => {
     if (!selectedPath || !selectedPath.toLowerCase().endsWith('.md')) return
-    const sub = ws.notification$('file.changed').subscribe(async (p: any) => {
+    const sub = ws.notification$('file.changed').subscribe(async (p: FileChangedPayload) => {
       try {
         const path = String(p?.path || '')
         if (!path || path !== selectedPath) return
@@ -132,13 +151,24 @@ export default function EditorPanelMarkdown() {
       } catch (e: any) {
         // 保持原有错误映射
         const msg = String(e?.message || '')
-        if (msg.startsWith('OVER_LIMIT') || msg.includes('MESSAGE_TOO_LARGE') || msg.startsWith('HTTP_413')) setMdError('预览不可用：文件过大，无法全量读取')
-        else if (msg.includes('NON_TEXT') || msg.startsWith('HTTP_415')) setMdError('预览不可用：该文件不是文本')
-        else if (msg.includes('INVALID_PATH') || msg.startsWith('HTTP_400')) setMdError('预览不可用：文件不存在或路径无效')
+        if (
+          msg.startsWith('OVER_LIMIT') ||
+          msg.includes('MESSAGE_TOO_LARGE') ||
+          msg.startsWith('HTTP_413')
+        )
+          setMdError('预览不可用：文件过大，无法全量读取')
+        else if (msg.includes('NON_TEXT') || msg.startsWith('HTTP_415'))
+          setMdError('预览不可用：该文件不是文本')
+        else if (msg.includes('INVALID_PATH') || msg.startsWith('HTTP_400'))
+          setMdError('预览不可用：文件不存在或路径无效')
         else setMdError('预览加载失败')
       }
     })
-    return () => { try { sub.unsubscribe() } catch {} }
+    return () => {
+      try {
+        sub.unsubscribe()
+      } catch {}
+    }
   }, [selectedPath])
 
   // 浮层聚焦
@@ -152,7 +182,9 @@ export default function EditorPanelMarkdown() {
       try {
         ;(el as any).focus?.({ preventScroll: true })
       } catch {
-        try { el.focus() } catch {}
+        try {
+          el.focus()
+        } catch {}
       }
       try {
         const len = el.value?.length ?? 0
@@ -168,7 +200,8 @@ export default function EditorPanelMarkdown() {
     try {
       setTimeout(() => {
         try {
-          if ((window as any)?.localStorage?.getItem('AILOOM_DEBUG_MD_FLOAT')) console.log('[md-float] panel: setTimeout update')
+          if ((window as any)?.localStorage?.getItem('AILOOM_DEBUG_MD_FLOAT'))
+            console.log('[md-float] panel: setTimeout update')
           floating.update()
         } catch {}
       }, 0)
@@ -176,7 +209,8 @@ export default function EditorPanelMarkdown() {
     try {
       requestAnimationFrame(() => {
         try {
-          if ((window as any)?.localStorage?.getItem('AILOOM_DEBUG_MD_FLOAT')) console.log('[md-float] panel: rAF update')
+          if ((window as any)?.localStorage?.getItem('AILOOM_DEBUG_MD_FLOAT'))
+            console.log('[md-float] panel: rAF update')
           floating.update()
         } catch {}
       })
@@ -200,8 +234,12 @@ export default function EditorPanelMarkdown() {
       const dy = Math.abs(e.clientY - state.y)
       if (dx > 3 || dy > 3) state.moved = true
     }
-    const onPointerCancel = () => { state.scrolled = true }
-    const onAnyScroll = () => { if (state.down) state.scrolled = true }
+    const onPointerCancel = () => {
+      state.scrolled = true
+    }
+    const onAnyScroll = () => {
+      if (state.down) state.scrolled = true
+    }
     const onClick = (e: MouseEvent) => {
       const shouldConsider = state.down && !state.moved && !state.scrolled && e.button === 0
       state.down = false
@@ -265,7 +303,10 @@ export default function EditorPanelMarkdown() {
   const onSelectionChange = (s: ViewerSelection | null) => {
     if (showToolbar) return
     if (!s) return
-    try { if ((window as any)?.localStorage?.getItem('AILOOM_DEBUG_MD_FLOAT')) console.log('[md-float] panel:onSelectionChange', s) } catch {}
+    try {
+      if ((window as any)?.localStorage?.getItem('AILOOM_DEBUG_MD_FLOAT'))
+        console.log('[md-float] panel:onSelectionChange', s)
+    } catch {}
     if (s.anchorRect) floating.setAnchorRect(s.anchorRect)
     setSelection({
       startLine: s.startLine,
@@ -385,15 +426,21 @@ export default function EditorPanelMarkdown() {
 
   return (
     <div ref={containerRef} className="relative w-full h-full min-h-0">
-      {showToolbar && floating.hasAnchor && previewOverlayRef.current &&
+      {showToolbar &&
+        floating.hasAnchor &&
+        previewOverlayRef.current &&
         createPortal(
           <div
             ref={(node) => {
               toolbarRef.current = node
               ;(floating.refs.setFloating as any)?.(node)
-              try { setTimeout(() => floating.update(), 0) } catch {}
+              try {
+                setTimeout(() => floating.update(), 0)
+              } catch {}
             }}
-            className={'z-50 w-[360px] max-w-[80vw] rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl ring-1 ring-black/5 dark:ring-white/10 backdrop-blur-md p-3 pointer-events-auto'}
+            className={
+              'z-50 w-[360px] max-w-[80vw] rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl ring-1 ring-black/5 dark:ring-white/10 backdrop-blur-md p-3 pointer-events-auto'
+            }
             style={{
               position: floating.strategy,
               top: (() => {
@@ -422,26 +469,36 @@ export default function EditorPanelMarkdown() {
                   const spaceBelow = viewport.bottom - (r.y + (r.height || 0))
                   const needAbove = spaceAbove >= h + gap + 12
                   const needBelow = spaceBelow >= h + gap + 12
-                  ;(mdPlacementRef.current == null) && (mdPlacementRef.current = needAbove ? 'above' : 'below')
+                  mdPlacementRef.current == null &&
+                    (mdPlacementRef.current = needAbove ? 'above' : 'below')
                   if (mdPlacementRef.current === 'above') {
                     if (!needAbove && needBelow) mdPlacementRef.current = 'below'
-                    else if (!needAbove && !needBelow) mdPlacementRef.current = spaceBelow > spaceAbove ? 'below' : 'above'
+                    else if (!needAbove && !needBelow)
+                      mdPlacementRef.current = spaceBelow > spaceAbove ? 'below' : 'above'
                   } else {
                     if (!needBelow && needAbove) mdPlacementRef.current = 'above'
-                    else if (!needBelow && !needAbove) mdPlacementRef.current = spaceAbove > spaceBelow ? 'above' : 'below'
+                    else if (!needBelow && !needAbove)
+                      mdPlacementRef.current = spaceAbove > spaceBelow ? 'above' : 'below'
                   }
                   const place = mdPlacementRef.current
                   // 首帧稳定：需要连续两帧得到相同的 place 与近似坐标后再显示
                   try {
                     const st = mdStableStateRef.current
-                    if (st.place === place && Math.abs(st.lastX - r.x) < 1 && Math.abs(st.lastY - r.y) < 1) st.consecutive += 1
+                    if (
+                      st.place === place &&
+                      Math.abs(st.lastX - r.x) < 1 &&
+                      Math.abs(st.lastY - r.y) < 1
+                    )
+                      st.consecutive += 1
                     else st.consecutive = 1
                     st.place = place
                     st.lastX = r.x
                     st.lastY = r.y
                   } catch {}
                   // 定位依据“overlay”坐标系
-                  return place === 'above' ? r.y - overlay.top - h - gap : r.y - overlay.top + (r.height || 0) + gap
+                  return place === 'above'
+                    ? r.y - overlay.top - h - gap
+                    : r.y - overlay.top + (r.height || 0) + gap
                 }
                 return floating.coordsReady ? (floating.y ?? 0) : -10000
               })(),
@@ -460,7 +517,10 @@ export default function EditorPanelMarkdown() {
               opacity: (() => {
                 if (floating.strategy === 'absolute') {
                   const h = toolbarRef.current?.offsetHeight || 0
-                  const ok = h > 0 && mdFirstFrameReadyRef.current && (mdStableStateRef.current.consecutive >= MD_STABLE_MIN_FRAMES)
+                  const ok =
+                    h > 0 &&
+                    mdFirstFrameReadyRef.current &&
+                    mdStableStateRef.current.consecutive >= MD_STABLE_MIN_FRAMES
                   return ok ? 1 : 0
                 }
                 return floating.coordsReady ? 1 : 0
@@ -468,7 +528,10 @@ export default function EditorPanelMarkdown() {
               pointerEvents: (() => {
                 if (floating.strategy === 'absolute') {
                   const h = toolbarRef.current?.offsetHeight || 0
-                  const ok = h > 0 && mdFirstFrameReadyRef.current && (mdStableStateRef.current.consecutive >= MD_STABLE_MIN_FRAMES)
+                  const ok =
+                    h > 0 &&
+                    mdFirstFrameReadyRef.current &&
+                    mdStableStateRef.current.consecutive >= MD_STABLE_MIN_FRAMES
                   return ok ? 'auto' : 'none'
                 }
                 return floating.coordsReady ? 'auto' : 'none'
@@ -528,7 +591,10 @@ export default function EditorPanelMarkdown() {
               }))}
             onSelectionChange={onSelectionChange}
             onOpenMark={(m, rect) => {
-              try { if ((window as any)?.localStorage?.getItem('AILOOM_DEBUG_MD_FLOAT')) console.log('[md-float] panel:onOpenMark', { m, rect }) } catch {}
+              try {
+                if ((window as any)?.localStorage?.getItem('AILOOM_DEBUG_MD_FLOAT'))
+                  console.log('[md-float] panel:onOpenMark', { m, rect })
+              } catch {}
               setSelection({
                 startLine: m.startLine,
                 endLine: m.endLine,
@@ -539,8 +605,7 @@ export default function EditorPanelMarkdown() {
               const id = m.id || null
               setActiveAnnId(id)
               let ann =
-                (id && lastEditedRef.current.get(id)) ||
-                (anns ?? []).find((a) => a.id === id)
+                (id && lastEditedRef.current.get(id)) || (anns ?? []).find((a) => a.id === id)
               setComment(ann?.comment || '')
               if (rect) floating.setAnchorRect(rect)
               openToolbar()

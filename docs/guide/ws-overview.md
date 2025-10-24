@@ -198,6 +198,31 @@
 
 一句话：某方法一旦刚发生“传输/能力类错误”，在一个很短的时间窗口内（默认 1500ms）直接走 REST，暂不再尝试 WS，避免抖动和卡顿；窗口结束后自动恢复 WS 尝试。
 
+## 对照校验清单（Explorer × Codex × WS/REST）
+
+按下列清单逐项验证，可快速确认“读取优先 WS、写入默认 REST、事件命名空间隔离、增量恢复与缓存失效”是否全部生效。
+
+- 连接与路由
+  - [ ] `VITE_WS_DEBUG=1 VITE_WS_DEBUG_ROUTE=1` 启用后，面板状态 `online (up)` 且控制台能看到 `[wsPrefer] WS ...`
+  - [ ] 纯 WS 验证：`VITE_WS_NO_FALLBACK=1 VITE_WS_FUSE_MS=0` 下，读取类（树/文件/注解列表）均走 WS
+- Explorer 读取（WS）
+  - [ ] `tree.get` 经 WS 返回树；目录切换时 `tree.changed` 能触发当前根目录缓存失效
+  - [ ] `file.getChunk/getFull` 经 WS 返回内容；切换文件后 `file.changed` 可触发对应文件与其目录树的失效
+  - [ ] `annotations.list` 经 WS 返回列表；后续 `annotations.*` 事件能正确更新/失效缓存
+- Explorer 写入（REST/可切 WS）
+  - [ ] 默认保存走 REST，冲突能抛出（409/`CONFLICT:...`）并被前端识别
+  - [ ] 开 `VITE_WS_WRITE=1` 后保存走 WS；成功后 `file.changed`（带 `digest`）被收到并触发刷新
+- Codex 事件（WS）
+  - [ ] `chat.*` 事件正常渲染（delta/completed/failed/aborted、tool exec/patch/mcp、turn.complete）
+  - [ ] Explorer 的失效器仅监听 `file.*`/`tree.*`/`annotations.*`，不会被 `chat.*` 触发
+  - [ ] `chat.*` 与业务事件可共用同一条 WS 物理连接，互不阻塞（见面板速率与写出日志）
+- 断线恢复与环形缓冲
+  - [ ] 打开 `VITE_WS_RESUME=1`，刷新后仅补发 `file.*`/`tree.*`/`annotations.*`，不会重播 `chat.*`
+  - [ ] 面板 `ringSize/ringCap` 与 `droppedLowPri` 正常；压力下仅 `tree.changed` 可能被优先丢弃（仍 live 推送最新）
+- 监听与摘要
+  - [ ] 开 `AILOOM_FSWATCH_ENABLED=1` 后，本地文件更改能触发 `file.changed/tree.changed`；摘要超限时 `truncated: true`，前端退化为当前根目录粗粒度刷新
+  - [ ] 如需“保存即见”，开发期可开 `AILOOM_WS_EAGER_SAVE_ECHO=1`
+
 - 为什么需要
   - 首屏或弱网下，WS 可能还在握手（connecting），立即发 WS 常得到 `WS_DOWN/TIMEOUT`，体验抖动；先短暂走 REST 能更稳。
   - 瞬时异常（风暴/网络抖动）导致连续失败时，继续尝试 WS 大概率还是错；短时间直接回退 REST 能尽快给结果，保证“功能不退化”。

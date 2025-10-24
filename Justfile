@@ -27,6 +27,19 @@ web-build:
 web-dev:
   VITE_API_BASE="${VITE_API_BASE:-}" pnpm -C {{WEB_DIR}} dev
 
+# 前端类型检查（不生成产物）
+web-typecheck:
+  pnpm -C {{WEB_DIR}} exec tsc -p tsconfig.json --noEmit
+
+# Codex 类型生成（TS + JSON Schema）
+codex-codegen TS_DIR='packages/web/src/lib/codex-types' JSON_DIR='docs/specs/codex':
+  cargo run -p {{SERVER_BIN}} --bin codegen-codex-types -- --ts-out "{{TS_DIR}}" --json-out "{{JSON_DIR}}"
+  if [ -d {{WEB_DIR}}/node_modules ]; then \
+    pnpm -C {{WEB_DIR}} exec prettier "src/lib/codex-types/**/*.ts"; \
+  else \
+    echo "skip prettier (packages/web/node_modules missing)"; \
+  fi
+
 # --- Format ---
 
 # Rust 代码格式化
@@ -64,7 +77,7 @@ server-build:
 # 运行后端，静态托管前端 dist。
 # 用法：just server-run ROOT=. WEB_DIST=packages/web/dist
 server-run:
-  RUSTFLAGS="${RUSTFLAGS:-} -Awarnings" cargo run -p {{SERVER_BIN}} -- --root "${ROOT:-.}" --web-dist "${WEB_DIST:-packages/web/dist}" ${DB_PATH:+--db-path "$DB_PATH"}
+  RUSTFLAGS="${RUSTFLAGS:-} -Awarnings" cargo run -p {{SERVER_BIN}} --bin {{SERVER_BIN}} -- --root "${ROOT:-.}" --web-dist "${WEB_DIST:-packages/web/dist}" ${DB_PATH:+--db-path "$DB_PATH"}
 
 # 一键构建前端并启动后端（最常用）
 serve:
@@ -82,7 +95,7 @@ server-dev PORT='63000':
     -i packages/web \
     -i packages/npm \
     -i packages/web/dist \
-    -s "RUSTFLAGS=\"\${RUSTFLAGS:-} -Awarnings\" cargo run -p {{SERVER_BIN}} -- --root \"\${ROOT:-.}\" --web-dist \"\${WEB_DIST:-packages/web/dist}\" --db-path \"\${DB_PATH:-\${ROOT:-.}/.ailoom/ailoom.db}\" --port {{PORT}} 2>&1 | awk '{ print } /^AILOOM_PORT=/{ split(\$0,a,\"=\"); port=a[2]; printf(\"[server-dev] API: http://127.0.0.1:%s\\n\", port); fflush(); }'"
+    -s "RUSTFLAGS=\"\${RUSTFLAGS:-} -Awarnings\" cargo run -p {{SERVER_BIN}} --bin {{SERVER_BIN}} -- --root \"\${ROOT:-.}\" --web-dist \"\${WEB_DIST:-packages/web/dist}\" --db-path \"\${DB_PATH:-\${ROOT:-.}/.ailoom/ailoom.db}\" --port {{PORT}} 2>&1 | awk '{ print } /^AILOOM_PORT=/{ split(\$0,a,\"=\"); port=a[2]; printf(\"[server-dev] API: http://127.0.0.1:%s\\n\", port); fflush(); }'"
 
 # 前后端联调热更新（需要另开一个终端）
 # 终端A：just server-dev [PORT=63000]
@@ -94,6 +107,17 @@ dev PORT='63000':
 # 一键前后端联动热更新（单终端运行，Ctrl+C 同时退出前后端）
 dev-all PORT='63000':
   bash scripts/dev-all.sh {{PORT}}
+
+# 调试版：打开更详细的日志、WS 调试
+dev-all-debug PORT='63000':
+  RUST_LOG="${RUST_LOG:-info,ailoom_server=debug,codex=info}" \
+  VITE_WS_DEBUG="${VITE_WS_DEBUG:-1}" \
+  VITE_WS_DEBUG_ROUTE="${VITE_WS_DEBUG_ROUTE:-1}" \
+  bash scripts/dev-all.sh {{PORT}}
+
+# 单次前后端联动（不监听；Ctrl+C 同时退出前后端）
+dev-all-once PORT='63000':
+  bash scripts/dev-all-once.sh {{PORT}}
 
 # 清理可能的残留（cargo-watch / ailoom-server / 端口占用）
 dev-clean PORT='63000':
@@ -347,12 +371,7 @@ dev-all-ws PORT='63000':
   RUST_LOG="${RUST_LOG:-ws=info,fswatch=info}" \
   bash scripts/dev-all.sh {{PORT}}
 
-# 本地调试（与生产逻辑一致，只打开日志/面板/可选监听），推荐日常使用
-dev-all-debug PORT='63000':
-  RUST_LOG="${RUST_LOG:-ws=info,fswatch=info}" \
-  AILOOM_FSWATCH_ENABLED="${AILOOM_FSWATCH_ENABLED:-1}" \
-  VITE_WS_DEBUG=1 \
-  bash scripts/dev-all.sh {{PORT}}
+# （已合并至上方 dev-all-debug）
 
 
 # Phase 3：写路径灰度（读取 WS + 写入优先 WS，允许回退）

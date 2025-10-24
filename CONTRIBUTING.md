@@ -41,7 +41,7 @@
 - 写入默认 REST；如需验证保存经 WS，可临时开启 `VITE_WS_WRITE=1`（`file.save`）。
 - 订阅/推送：由服务端广播 `file.changed`、`tree.changed`、`annotations.*` 驱动缓存失效与 UI 同步。
 - 调试：`VITE_WS_DEBUG=1` 打开右下角 WS 面板；`VITE_WS_DEBUG_ROUTE=1` 显示每次调用的 WS/REST 路由决策。
-- 参考：`docs/guide/architecture.md`、`docs/specs/ws/client.md`、`docs/specs/ws/phase2-acceptance.md`
+- 参考：`docs/guide/architecture.md`、`docs/guide/ws-overview.md`、`docs/specs/ws/phase2-acceptance.md`
 
 ## 常用 just 任务
 - `just web-install` / `just web-build` / `just web-dev VITE_API_BASE=...`

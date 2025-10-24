@@ -8,4 +8,3 @@ export type ViewerSelection = {
   selectedText: string
   anchorRect?: AnchorRect
 }
-

@@ -1,14 +1,12 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
-
-type ActivePane = 'files' | 'annotations'
+import { devtools, persist } from 'zustand/middleware'
 
 type AppState = {
   currentRoot: string
   currentDir: string
   selectedPath: string | null
   pageSize: number
-  activePane: ActivePane
+  explorerSidebarTab: 'files' | 'annotations'
   wrap: boolean
   mdPreview: boolean
   theme: 'light' | 'dark'
@@ -16,7 +14,7 @@ type AppState = {
   setCurrentRoot: (r: string) => void
   setSelectedPath: (p: string | null) => void
   setPageSize: (n: number) => void
-  setActivePane: (p: ActivePane) => void
+  setExplorerSidebarTab: (tab: 'files' | 'annotations') => void
   toggleWrap: () => void
   toggleMdPreview: () => void
   setTheme: (t: 'light' | 'dark') => void
@@ -24,13 +22,14 @@ type AppState = {
 }
 
 export const useAppStore = create<AppState>()(
-  persist(
-    (set, get) => ({
-      currentRoot: '.',
-      currentDir: '.',
+  devtools(
+    persist(
+      (set, get) => ({
+        currentRoot: '.',
+        currentDir: '.',
       selectedPath: null,
       pageSize: 1000,
-      activePane: 'files',
+      explorerSidebarTab: 'files',
       wrap: false,
       mdPreview: false,
       theme: 'light',
@@ -38,12 +37,14 @@ export const useAppStore = create<AppState>()(
       setCurrentRoot: (r) => set({ currentRoot: r }),
       setSelectedPath: (p) => set({ selectedPath: p }),
       setPageSize: (n) => set({ pageSize: n }),
-      setActivePane: (p) => set({ activePane: p }),
+      setExplorerSidebarTab: (tab) => set({ explorerSidebarTab: tab }),
       toggleWrap: () => set({ wrap: !get().wrap }),
       toggleMdPreview: () => set({ mdPreview: !get().mdPreview }),
       setTheme: (t) => set({ theme: t }),
       toggleTheme: () => set({ theme: get().theme === 'dark' ? 'light' : 'dark' })
-    }),
-    { name: 'ailoom.app' }
+      }),
+      { name: 'ailoom.app' }
+    ),
+    { name: 'AppStore' }
   )
 )

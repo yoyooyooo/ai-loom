@@ -13,7 +13,11 @@ export type StatsSnap = {
   treeMovedTotal?: number
 }
 
-export function computeDelta(prev: StatsSnap | null, curr: StatsSnap | null, key: keyof StatsSnap): number {
+export function computeDelta(
+  prev: StatsSnap | null,
+  curr: StatsSnap | null,
+  key: keyof StatsSnap
+): number {
   if (!prev || !curr) return 0
   const a = (prev[key] as number | undefined) ?? 0
   const b = (curr[key] as number | undefined) ?? 0
@@ -26,4 +30,3 @@ export function updateSeries(series: number[], value: number, cap = 12): number[
   while (next.length > cap) next.shift()
   return next
 }
-

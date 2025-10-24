@@ -1,0 +1,10 @@
+{"type":"session_meta","payload":{"id":"sess_1","timestamp":"2025-10-01T00:00:00Z","cwd":"/tmp/project"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"hello"}}
+{"type":"event_msg","payload":{"type":"task_started"}}
+{"type":"event_msg","payload":{"type":"agent_reasoning_delta","delta":"thinking..."}}
+{"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":[\"bash\",\"-lc\",\"echo hi\"],\"timeout_ms\":10000}","call_id":"call_1"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"{\"output\":\"hi\\n\",\"metadata\":{\"exit_code\":0,\"duration_seconds\":0.01}}"}}
+{"type":"event_msg","payload":{"type":"agent_message_delta","delta":"answer"}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"final"}}
+{"type":"event_msg","payload":{"type":"task_complete"}}
+

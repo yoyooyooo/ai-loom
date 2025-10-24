@@ -3,16 +3,30 @@ import { describe, it, expect, vi } from 'vitest'
 vi.mock('./singleton', () => {
   let mode: 'ok' | 'business' | 'transport' | 'too_large' = 'ok'
   let firstCount = 0
-  function __setWsMode(m: any) { mode = m }
+  function __setWsMode(m: any) {
+    mode = m
+  }
   const ws = {
     enabled: true,
-    call: (_m: string, _p?: any, _t?: number) => ({} as any),
+    call: (_m: string, _p?: any, _t?: number) => ({}) as any,
     first: async (_obs: any) => {
       firstCount++
       if (mode === 'ok') return 42
-      if (mode === 'business') { const e: any = new Error('OVER_LIMIT'); e.code = 'OVER_LIMIT'; throw e }
-      if (mode === 'transport') { const e: any = new Error('WS_DOWN'); e.code = 'WS_DOWN'; throw e }
-      if (mode === 'too_large') { const e: any = new Error('MESSAGE_TOO_LARGE'); e.code = 'MESSAGE_TOO_LARGE'; throw e }
+      if (mode === 'business') {
+        const e: any = new Error('OVER_LIMIT')
+        e.code = 'OVER_LIMIT'
+        throw e
+      }
+      if (mode === 'transport') {
+        const e: any = new Error('WS_DOWN')
+        e.code = 'WS_DOWN'
+        throw e
+      }
+      if (mode === 'too_large') {
+        const e: any = new Error('MESSAGE_TOO_LARGE')
+        e.code = 'MESSAGE_TOO_LARGE'
+        throw e
+      }
       return 0
     }
   }

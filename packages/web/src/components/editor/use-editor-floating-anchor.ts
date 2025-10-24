@@ -33,4 +33,3 @@ export function useEditorFloatingAnchor(params: { show: boolean }) {
     setAnchorRange: (_range: Range | null) => {}
   }
 }
-

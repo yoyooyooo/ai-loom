@@ -16,6 +16,14 @@
 - 通用复用：与领域无关的通用 UI/编辑器放在 `src/components`，避免耦合到具体 feature。
 - 数据获取：服务端数据统一用 React Query，store 只承载 UI/偏好/协作本地态。
 
+### 1.1 多栏侧边栏框架（AppShell）
+
+- `packages/web/src/app.tsx` 统一承载应用外壳（AppShell），通过 `AppSidebar` 布局首栏导航 + 可选多栏内容。
+- 顶层模块导航配置集中在 `packages/web/src/components/app-sidebar-modules.ts`，依赖 `SidebarModuleConfig` 描述可见性、路径、栏位声明。
+- 首栏导航始终存在；第二、第三栏由模块按需提供 renderer，未声明的栏位自动隐藏且不保留占位。
+- 移动端（`< md`）由 `AppSidebarMobileTrigger` 控制抽屉式展开；桌面端保持多栏并遵循 `--sidebar-width` 变量。
+- Codex 聊天模块的历史列表/消息面板位于 `features/codex-chat/`，后续若引入多 Provider，再通过通用聊天层做聚合。
+
 ## 2. 目录结构（建议）
 
 ```
@@ -84,6 +92,13 @@ packages/web/src
 
 > React Query 继续承担：目录树、批注列表、文件内容等服务端数据；store 只放 UI/偏好与交互态。
 
+### 3.3 Slice-first Store 模式
+
+- 状态容器按“slice 工厂”拆分：每个 slice 负责一个明确的子域（如 `conversationSlice`、`messageSlice`、`exploreSlice`），在主 store 中通过 `create()` 合成。这样便于测试、类型推导与后续迁移到多 Provider。示例：`packages/web/src/features/codex-chat/stores/chat/`。
+- `features/codex-chat/stores/chat/index.ts` 仅负责组合 `createConversationSlice` + `createMessageSlice`，并导出 `codexChatActions`；实际业务逻辑位于 `message-slice.ts`、`helpers.ts` 等文件。
+- Provider 维度的状态（模型、额度、覆盖、token 统计）集中在 `packages/web/src/stores/codex-chat-provider.ts`，按 `conversationId` 分桶，缺省桶 `__default__` 代表待创建会话。未来扩展到多 Provider 时，可改造为 `sessions[providerId][conversationId]`。
+- 新增 store 时优先沿用此模式：`create<Domain>Slice(set, get)` + `create<State>` 入口文件，确保动作/状态归属清晰，便于 tree-shaking 与单元测试。
+
 ## 4. 命名约定（强制）
 
 - 文件与目录一律 `kebab-case`（a-b-c）。示例：`explorer-page.tsx`、`file-tree-panel.tsx`、`use-explorer-effects.ts`。
@@ -102,6 +117,7 @@ packages/web/src
 - 测试与示例：如引入测试，命名为 `*.test.ts[x]` 与 `*.spec.ts[x]`；示例/演示为 `*.demo.tsx`（可选）。
 
 建议逐步把通用编辑器组件重命名为 kebab-case：
+
 - `components/editor/MonacoViewer.tsx` → `components/editor/monaco-viewer.tsx`
 - `components/editor/MarkdownPreview.tsx` → `components/editor/markdown-preview.tsx`
 - `components/editor/MonacoEditorFull.tsx` → `components/editor/monaco-editor-full.tsx`

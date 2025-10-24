@@ -27,20 +27,16 @@ export async function fetchFileFull(
   path: string
 ): Promise<{ path: string; language: string; size: number; content: string; digest: string }> {
   try {
-    return await wsPrefer(
-      'file.getFull',
-      { path },
-      async (signal) => {
-        const res = await http.get('/api/file/full', { params: { path }, signal })
-        return res.data as {
-          path: string
-          language: string
-          size: number
-          content: string
-          digest: string
-        }
+    return await wsPrefer('file.getFull', { path }, async (signal) => {
+      const res = await http.get('/api/file/full', { params: { path }, signal })
+      return res.data as {
+        path: string
+        language: string
+        size: number
+        content: string
+        digest: string
       }
-    )
+    })
   } catch (e: any) {
     throw toHttpError(e, 'Failed to load full file')
   }
@@ -74,12 +70,9 @@ export async function saveFile(params: {
   }
   if (tryWsFirst) {
     // 通过 wsPrefer 走 WS，发生传输类错误时自动回退 REST；CONFLICT 等业务错误直接抛出
-    return await wsPrefer<{ ok: boolean; digest?: string }>(
-      'file.save',
-      params,
-      doRest,
-      { timeoutMs: 15000 }
-    ).catch((e: any) => {
+    return await wsPrefer<{ ok: boolean; digest?: string }>('file.save', params, doRest, {
+      timeoutMs: 15000
+    }).catch((e: any) => {
       if (String(e?.message || '').startsWith('CONFLICT:') || e?.code === 'CONFLICT') throw e
       throw e
     })

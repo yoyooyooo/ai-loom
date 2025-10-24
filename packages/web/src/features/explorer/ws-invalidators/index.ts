@@ -12,6 +12,11 @@ export function installExplorerInvalidators(
     installTreeInvalidator(qc, ctx),
     installAnnotationsInvalidator(qc)
   ]
-  return () => { for (const fn of cleanups) { try { fn?.() } catch {} } }
+  return () => {
+    for (const fn of cleanups) {
+      try {
+        fn?.()
+      } catch {}
+    }
+  }
 }
-

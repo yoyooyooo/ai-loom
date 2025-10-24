@@ -67,8 +67,8 @@
 ## 文档地图
 
 - 协议细节：`docs/specs/ws/protocol.md`
-- 服务端设计：`docs/specs/ws/server.md`
-- 前端设计：`docs/specs/ws/client.md`
+- 服务端/通道设计：`docs/guide/ws-overview.md`
+- 聊天事件 SSoT：`docs/guide/codex-chat-turn-ssot.md`
 - 文件监听：`docs/specs/ws/file-watch.md`
 - 实施路线：`docs/specs/ws/migration.md`
 - 风险与待决策：`docs/specs/ws/risks-and-decisions.md`

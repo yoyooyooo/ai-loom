@@ -54,7 +54,7 @@ WebSocket Behavior & Debugging
 - Default “WS‑prefer reads”: tree/file/annotations list go via WS when possible; on transport/ability errors a short‑fuse HTTP fallback kicks in. Writes go REST by default; enable `VITE_WS_WRITE=1` if you want to test saving over WS.
 - File watching (optional): set `AILOOM_FSWATCH_ENABLED=1` to enable backend FS watch and receive `file.changed`/`tree.changed`.
 - Debug panel: set `VITE_WS_DEBUG=1` to show the WS panel at bottom‑right; `VITE_WS_DEBUG_ROUTE=1` prints WS/REST routing decisions.
-- See `docs/guide/ws-overview.md` and `docs/specs/ws/client.md` for details.
+- See `docs/guide/ws-overview.md` and `docs/guide/codex-chat-turn-ssot.md` for details.
 
 API (for integrations)
 - Local server exposes `/api/*` endpoints:

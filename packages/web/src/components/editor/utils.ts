@@ -22,7 +22,11 @@ export function getBaseLeft(el: HTMLElement | null, tweak: number = ANCHOR_LEFT_
   }
 }
 
-export function getUnionRectByMarkId(hostEl: HTMLElement, markId: string, baseLeft?: number): DomRectLike | null {
+export function getUnionRectByMarkId(
+  hostEl: HTMLElement,
+  markId: string,
+  baseLeft?: number
+): DomRectLike | null {
   try {
     const nodes = hostEl.querySelectorAll(`[data-mark-id="${markId}"]`)
     if (!nodes || nodes.length === 0) return null
@@ -41,7 +45,9 @@ export function getUnionRectByMarkId(hostEl: HTMLElement, markId: string, baseLe
         firstLeft = r.left
       }
     })
-    const left = baseLeft ?? (isFinite(firstLeft) ? firstLeft : (nodes[0] as HTMLElement).getBoundingClientRect().left)
+    const left =
+      baseLeft ??
+      (isFinite(firstLeft) ? firstLeft : (nodes[0] as HTMLElement).getBoundingClientRect().left)
     return {
       x: left,
       y: top,
@@ -56,4 +62,3 @@ export function getUnionRectByMarkId(hostEl: HTMLElement, markId: string, baseLe
     return null
   }
 }
-

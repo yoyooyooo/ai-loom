@@ -1,0 +1,9 @@
+{
+  "events": [
+    { "method": "chat.turn.started", "params": { "turnSeq": 1 } },
+    { "method": "chat.message.completed", "params": { "text": "Answer" } },
+    { "method": "chat.turn.complete", "params": { "turnSeq": 1 } },
+    { "method": "chat.message.completed", "params": { "text": "Compact task completed" } }
+  ]
+}
+

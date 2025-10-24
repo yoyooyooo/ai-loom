@@ -25,7 +25,8 @@ const MonacoEditorFull = forwardRef<EditorFullHandle, Props>(function MonacoEdit
     if (!containerRef.current) return
     if (!editorRef.current) {
       modelRef.current = monaco.editor.createModel(content, language)
-      const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+      const isDark =
+        typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
       editorRef.current = monaco.editor.create(containerRef.current, {
         model: modelRef.current,
         readOnly: !editable,

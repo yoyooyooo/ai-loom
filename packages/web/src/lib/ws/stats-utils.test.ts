@@ -13,7 +13,6 @@ describe('stats-utils', () => {
     const s2 = updateSeries(s1, 2, 3)
     const s3 = updateSeries(s2, 3, 3)
     const s4 = updateSeries(s3, 4, 3)
-    expect(s4).toEqual([2,3,4])
+    expect(s4).toEqual([2, 3, 4])
   })
 })
-

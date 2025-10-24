@@ -1,4 +1,15 @@
 import { WsRxClient } from './rx-client'
+import type {
+  FileChangedPayload,
+  TreeChangedPayload,
+  AnnotationsCreatedPayload,
+  AnnotationsUpdatedPayload,
+  AnnotationsDeletedPayload,
+  AnnotationsVerifyDonePayload,
+  SessionResyncPayload
+} from '@/lib/ws/event-payloads'
+import { isCodexEventMethod } from '@/lib/ws/types'
+import { filter } from 'rxjs/operators'
 
 function deriveWsUrl(): string {
   const envUrl = (import.meta as any).env?.VITE_WS_URL as string | undefined
@@ -30,16 +41,55 @@ class WsSingleton {
     return !(s === '0' || s === 'false')
   })()
   url = deriveWsUrl()
-  private ensure() { if (!this.client) this.client = new WsRxClient(this.url); return this.client }
+  private ensure() {
+    if (!this.client) this.client = new WsRxClient(this.url)
+    return this.client
+  }
 
-  call<T>(method: string, params?: any, timeoutMs?: number) { return this.ensure().call<T>(method, params, timeoutMs) }
-  first<T>(obs$: import('rxjs').Observable<T>) { return this.ensure().first<T>(obs$) }
-  subscribeTopic$(topic: 'file'|'tree'|'annotations', filter?: any) { return this.ensure().subscribeTopic$(topic, filter) }
-  notification$(method: string) { return this.ensure().notification$(method) }
-  get online$() { return this.ensure().online$ }
-  get events$() { return (this.ensure() as any).events$ as import('rxjs').Observable<{ method:string; params:any }> }
-  get state() { return this.ensure().state }
-  get subscriptions() { return (this.ensure() as any).subscriptionsSnapshot?.() as Array<{topic:string; filter:any}> }
+  call<T>(method: string, params?: any, timeoutMs?: number) {
+    return this.ensure().call<T>(method, params, timeoutMs)
+  }
+  first<T>(obs$: import('rxjs').Observable<T>) {
+    return this.ensure().first<T>(obs$)
+  }
+  subscribeTopic$(topic: 'file' | 'tree' | 'annotations' | 'chat', filter?: any) {
+    return this.ensure().subscribeTopic$(topic, filter)
+  }
+  // Typed business notifications
+  notification$(method: 'file.changed'): import('rxjs').Observable<FileChangedPayload>
+  notification$(method: 'tree.changed'): import('rxjs').Observable<TreeChangedPayload>
+  notification$(method: 'annotations.created'): import('rxjs').Observable<AnnotationsCreatedPayload>
+  notification$(method: 'annotations.updated'): import('rxjs').Observable<AnnotationsUpdatedPayload>
+  notification$(method: 'annotations.deleted'): import('rxjs').Observable<AnnotationsDeletedPayload>
+  notification$(method: 'annotations.verify.done'): import('rxjs').Observable<AnnotationsVerifyDonePayload>
+  notification$(method: 'session.resync'): import('rxjs').Observable<SessionResyncPayload>
+  notification$(method: string): import('rxjs').Observable<any>
+  notification$(method: string) {
+    return (this.ensure() as any).notification$(method) as import('rxjs').Observable<any>
+  }
+  get online$() {
+    return this.ensure().online$
+  }
+  get events$() {
+    return (this.ensure() as any).events$ as import('rxjs').Observable<{
+      method: string
+      params: any
+    }>
+  }
+  codex$() {
+    return this.events$.pipe(
+      filter((ev) => typeof ev?.method === 'string' && isCodexEventMethod(ev.method))
+    )
+  }
+  chat$() {
+    return this.codex$()
+  }
+  get state() {
+    return this.ensure().state
+  }
+  get subscriptions() {
+    return (this.ensure() as any).subscriptionsSnapshot?.() as Array<{ topic: string; filter: any }>
+  }
 }
 
 export const ws = new WsSingleton()

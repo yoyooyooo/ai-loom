@@ -39,10 +39,11 @@ describe('file-invalidator', () => {
 
     const calls = spy.mock.calls.map((c) => c[0])
     const hasFile = calls.some((arg: any) => typeof arg?.predicate === 'function')
-    const hasTree = calls.some((arg: any) => JSON.stringify(arg?.queryKey) === JSON.stringify(['tree', '.', 'src']))
+    const hasTree = calls.some(
+      (arg: any) => JSON.stringify(arg?.queryKey) === JSON.stringify(['tree', '.', 'src'])
+    )
     expect(hasFile).toBe(true)
     expect(hasTree).toBe(true)
     cleanup()
   })
 })
-

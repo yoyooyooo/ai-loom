@@ -278,7 +278,7 @@ export default function AnnotationPanel({ onJump, currentFile }: Props) {
                         <div
                           className={`text-sm font-medium ${
                             wrapItems
-                              ? 'whitespace-pre-wrap break-words'
+                              ? 'whitespace-pre-wrap wrap-break-word'
                               : 'overflow-hidden text-ellipsis whitespace-nowrap'
                           }`}
                         >

@@ -28,7 +28,8 @@ export function createRafBatch() {
     }
     const shouldUseTimeout = (() => {
       try {
-        if (typeof document !== 'undefined' && (document as any).visibilityState === 'hidden') return true
+        if (typeof document !== 'undefined' && (document as any).visibilityState === 'hidden')
+          return true
       } catch {}
       return typeof requestAnimationFrame === 'undefined'
     })()
@@ -36,4 +37,3 @@ export function createRafBatch() {
     else requestAnimationFrame(run)
   }
 }
-
