@@ -52,6 +52,7 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
     generating: state.generating,
     turns: state.turns
   }))
+  const [stopping, setStopping] = useState(false)
   const sessionState = useCodexSessionState(conversationId)
   const providerState = useMemo(
     () => ({
@@ -254,9 +255,12 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
   async function onStop() {
     if (!conversationId) return
     try {
-      await chatApi.interrupt(conversationId)
+      setStopping(true)
+      // 等待 Codex 确认中止本轮，避免后续立即新轮被“注入旧轮”
+      await chatApi.interrupt(conversationId, { awaitTurnAborted: true, timeoutMs: 15_000 })
       chatTrace('chatPanel.interrupt', { conversationId })
     } finally {
+      setStopping(false)
       chatTurnActions.abortAssistant()
       chatTurnActions.completeTurn()
     }
@@ -333,10 +337,10 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
         {generating ? (
           <button
             onClick={onStop}
-            disabled={!conversationId}
+            disabled={!conversationId || stopping}
             className="inline-flex items-center justify-center rounded-md border border-input px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50"
           >
-            停止生成
+            {stopping ? '停止中…' : '停止生成'}
           </button>
         ) : null}
       </div>

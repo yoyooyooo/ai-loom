@@ -136,6 +136,17 @@ packages/web/src
   - 初始化：`npx shadcn@canary init -c packages/web`
   - 添加组件：`npx shadcn@canary add <component> -c packages/web`
 - Tailwind v4：确保接入 `@tailwindcss/vite`，并在 `styles/globals.css` 定义/映射 CSS 变量与 `@theme inline`，使 `bg-muted`、`text-muted-foreground` 等令牌生效。
+ - 文本换行：统一使用 `wrap-break-word`（替代旧的 `break-words`）。
+
+### 7.1 条件渲染选型：ts-pattern（强制）
+
+- 目的：提升可读性与类型安全，避免多层三元/if-else/switch 的嵌套复杂度。
+- 约定：组件内“按类型/状态分支”的渲染统一使用 `ts-pattern` 的 `match().with().otherwise()`。
+- 使用建议：
+  - 将复杂分支拆成小型纯函数，在 `match` 中组合调用，保持 JSX 简洁。
+  - 对新增枚举态，优先用 `with()` 明确覆盖，兜底用 `otherwise()`。
+  - 避免在 `match` 中直接编写过长 JSX，抽象后返回。
+- 依赖：`packages/web` 已添加 `ts-pattern`。
 
 ## 8. 导入顺序与路径规范
 
@@ -150,10 +161,49 @@ packages/web/src
 - 缓存策略：目录树设置 `staleTime/gcTime`，避免重复请求；写操作后用 `invalidateQueries` 精确失效。
 - 错误处理：在调用端对服务端错误进行用户可读提示；必要时在 `lib/api/client.ts` 统一封装错误类型。
 
+## 9.1 Query × RxJS 融合（偏好）
+
+- 分工清晰：
+  - React Query：用于“查询类接口”与快照（config/列表/history/snapshot 等）。
+  - RxJS：用于“流式/推送/轮询”类能力（WS、短时轮询、增量合并等）。
+- 融合方式：
+  - RxJS 产出的最新快照，应同时写入 QueryClient（`queryClient.setQueryData([...], snapshot)`），使“查询侧”也能直接消费最新状态（避免重复请求）。
+  - Query Key 统一命名：`['chat','session']`、`['chat','sessionSnapshot', conversationId]`、`['chat','history',{pageSize}]` 等。
+- 轮询偏好：
+  - 用 RxJS + `observable-hooks`（`useSubscription`）实现，避免组件里 `setInterval`。
+  - 必须具备双保险：最长时长（如 30s）与“连续无增量阈值”（如 4 次）二者任何满足即停止。
+  - 轮询间隔建议 2.5s（可通过 env 调整）。
+
+## 10. API 层
+
 ## 10. API 层
 
 - `lib/api/client.ts` 仅承载轻量请求封装与类型绑定；复杂拼接/组合逻辑下沉到 Feature 内部的 `services/` 或 hooks。
 - 所有 API 类型定义集中在 `lib/api/types.ts`，避免散落在组件中。
+
+## 10.1 恢复（resume）与实时（live）
+
+- 后端 `/api/chat/conversations/resume` 返回 base `history` 与归一化 `chat.*` 事件；并附带启发式 `inProgress`（是否“可能仍在进行中”）。
+- 前端在 Store Action（例如 `chat-resume.ts/processResumeResult`）中一次性：
+  - 幂等落地 base history + events（`chatTurnActions.loadSnapshot`）；
+  - 应用 provider `capabilities/overrides`；
+  - 如果 `inProgress=true`，则短时轮询 `/debug/codex` 或只读快照接口（推荐新增 `/api/chat/snapshot`），并合并进入时间线。
+- 轮询结果同时写入：
+  - Zustand：驱动时间线 UI（`chat-turns`）
+  - React Query 缓存：`['chat','sessionSnapshot', conversationId]`
+
+## 11. 组件封装与副作用（偏好）
+
+- 组件应尽量“无状态/无副作用”。复杂的副作用与状态迁移都收敛到 Store Action 或 Service Hook。
+- 模式：
+  - Store（Zustand）：集中承载 UI/跨组件状态，并提供动词化 Action（`startPolling`、`processResumeResult`、`setResumeBaseHistory`）。
+  - Service Hook：组合 Query/Rx 与 Store Action，导出最小接口供页面调用。
+  - 页面组件：仅读取 Store 状态，调用 Service Hook 提供的动作，不自行拼装副作用。
+- 命名与可读性：
+  - 动作用动词短语；Observable 以 `$` 结尾（如 `poll$`）。
+  - 避免长 `useEffect`；若逻辑超过 10 行，优先下沉到 Store/Service。
+
+## 12. 开发与验证
 
 ## 11. 命名与结构调整计划
 

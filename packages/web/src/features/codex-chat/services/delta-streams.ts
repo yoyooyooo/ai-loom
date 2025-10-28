@@ -68,6 +68,10 @@ export function ensureDeltaPipelines() {
       const st: any = (useChatTurnStore as any).getState?.()
       const cur = st?.conversationId
       if (cur && cur !== cid) return
+      // 缺失 turn.started 的隐式开启（规范：首条内容事件触发 beginTurn）
+      try {
+        if (!st?.activeTurnId) chatTurnActions.markTurnStarted({})
+      } catch {}
       chatTurnActions.appendReasoning(joined)
     })
 
@@ -94,6 +98,10 @@ export function ensureDeltaPipelines() {
       const st: any = (useChatTurnStore as any).getState?.()
       const cur = st?.conversationId
       if (cur && cur !== cid) return
+      // 缺失 turn.started 的隐式开启（规范：首条内容事件触发 beginTurn）
+      try {
+        if (!st?.activeTurnId) chatTurnActions.markTurnStarted({})
+      } catch {}
       chatTurnActions.appendAssistantDelta(joined)
     })
 }

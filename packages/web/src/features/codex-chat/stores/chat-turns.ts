@@ -58,8 +58,6 @@ export type Turn = {
   reasoning?: TurnReasoning
   steps: TurnStep[]
   meta?: {
-    working?: boolean
-    workingTitle?: string
     model?: string
     tokenCount?: any
     extra?: any

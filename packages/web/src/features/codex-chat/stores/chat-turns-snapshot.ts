@@ -1,6 +1,8 @@
 import { createId } from '@/lib/id'
 import type { Turn, TurnStep } from './chat-turns'
-import { summarizeFirstLine, nowISO } from './chat-turns-utils'
+import { summarizeFirstLine, nowISO, stripDuplicatedTitle } from './chat-turns-utils'
+import { renderPatchDiff } from '@/features/codex-chat/services/ws-render-utils'
+import { parseExploreActions } from '@/features/codex-chat/utils/explore-utils'
 
 export type SnapshotHistoryItem = {
   role: 'user' | 'assistant' | 'reasoning'
@@ -30,7 +32,6 @@ export function buildTurnsFromHistory(history: SnapshotHistoryItem[], conversati
     if (current.status !== 'failed' && current.status !== 'aborted') {
       current.status = 'completed'
     }
-    current.meta = { ...(current.meta || {}), working: false, workingTitle: 'Finished working' }
     turns.push(current)
     current = undefined
   }
@@ -47,8 +48,7 @@ export function buildTurnsFromHistory(history: SnapshotHistoryItem[], conversati
       status: 'streaming' as any,
       user: { text: userText ?? '', ts },
       assistant: { text: '' },
-      steps: [],
-      meta: { working: false, workingTitle: 'Finished working' }
+      steps: []
     } as Turn
     return current
   }
@@ -86,6 +86,8 @@ export function applyEventsToTurns(turns: Turn[], events: SnapshotEvent[]) {
   let target: Turn | undefined = turns[turnIdx]
   let nextSeq = Math.max(0, ...turns.map((t) => t.seq))
   const toolIndex = new Map<string, { turnIdx: number; stepIdx: number }>()
+  // 记录语义化（read/list/search）步骤索引，用于输出/收尾同步
+  const semanticIndex = new Map<string, { turnIdx: number; stepIdxs: number[] }>()
 
   const newTurn = (userText?: string): Turn => {
     const ts = nowISO()
@@ -97,8 +99,7 @@ export function applyEventsToTurns(turns: Turn[], events: SnapshotEvent[]) {
       status: 'streaming' as any,
       user: { text: userText ?? '', ts },
       assistant: { text: '' },
-      steps: [],
-      meta: { working: true, workingTitle: 'Working' }
+      steps: []
     } as Turn
   }
 
@@ -114,10 +115,7 @@ export function applyEventsToTurns(turns: Turn[], events: SnapshotEvent[]) {
     return target
   }
   const advanceTurn = () => {
-    if (target) {
-      const still = target.steps.some((s) => s.status === 'streaming')
-      target.meta = { ...(target.meta || {}), working: still, workingTitle: still ? 'Working' : 'Finished working' }
-    }
+    // 收尾：由 UI 侧按 status/steps 推导 working 状态
     target = undefined
     turnIdx += 1
     if (turnIdx < turns.length) target = turns[turnIdx]
@@ -226,25 +224,19 @@ export function applyEventsToTurns(turns: Turn[], events: SnapshotEvent[]) {
         }
       }
       if (method === 'chat.message.failed') {
-        if (target) {
-          target.status = 'failed' as any
-          target.meta = { ...(target.meta || {}), working: false, workingTitle: 'Failed' }
-        }
+        if (target) target.status = 'failed' as any
       } else if (method === 'chat.message.aborted') {
-        if (target) {
-          target.status = 'aborted' as any
-          target.meta = { ...(target.meta || {}), working: false, workingTitle: 'Aborted' }
-        }
+        if (target) target.status = 'aborted' as any
       } else if (method === 'chat.message.completed') {
         if (target) {
           const text = typeof (params as any)?.text === 'string' ? String((params as any).text) : ''
           const existing = target.assistant?.text || ''
           target.assistant = { text: text || existing, ts: nowISO() }
           target.status = (target.status as any) === 'failed' || (target.status as any) === 'aborted' ? (target.status as any) : 'completed'
-          const still = target.steps.some((s) => s.status === 'streaming')
-          target.meta = { ...(target.meta || {}), working: still, workingTitle: still ? 'Working' : 'Finished working' }
         }
       }
+      // 对齐实时路径：补齐 completedAt
+      if (target && !target.completedAt) target.completedAt = nowISO()
       advanceTurn()
       return
     }
@@ -272,8 +264,101 @@ export function applyEventsToTurns(turns: Turn[], events: SnapshotEvent[]) {
       const text = typeof (params as any)?.text === 'string' ? String((params as any).text) : ''
       if (text && !t.steps.some((s) => s.kind === 'thinking')) {
         const title = summarizeFirstLine(text)
-        t.steps.push({ id: createId('thinking'), kind: 'thinking', title: title ? `thinking: ${title}` : 'thinking', body: text, status: 'completed', ts: nowISO(), meta: { thinking: true } } as any)
+        // 移除正文中与封面标题重复的首行
+        const body = stripDuplicatedTitle(text, title)
+        t.steps.push({ id: createId('thinking'), kind: 'thinking', title: title ? `thinking: ${title}` : 'thinking', body, status: 'completed', ts: nowISO(), meta: { thinking: true } } as any)
       }
+      return
+    }
+    if (method === 'chat.info.turn_diff') {
+      const diff = typeof (params as any)?.diff === 'string' ? String((params as any).diff) : ''
+      if (diff) {
+        const body = `Turn diff 更新:\n\n\`\`\`diff\n${diff}\n\`\`\``
+        const step: TurnStep = { id: createId('info'), kind: 'info', title: body, status: 'completed', ts: nowISO() } as any
+        t.steps.push(step)
+      }
+      return
+    }
+    if (method === 'chat.info.plan_update') {
+      const plan = Array.isArray((params as any)?.plan) ? (params as any).plan : []
+      const explanation = typeof (params as any)?.explanation === 'string' ? (params as any).explanation : ''
+      const title = explanation ? `Plan 更新：${explanation}` : 'Plan 更新'
+      const lines = plan
+        .map((step: any, idx: number) => {
+          const text = typeof step?.step === 'string' ? step.step : `Step ${idx + 1}`
+          const status = typeof step?.status === 'string' ? step.status : 'unknown'
+          const mark = status === 'completed' ? '✔' : status === 'in_progress' ? '…' : '·'
+          return `${mark} ${text}`
+        })
+        .join('\n')
+      const body = lines
+      const step: TurnStep = { id: createId('plan'), kind: 'plan', title, body, status: 'completed', ts: nowISO(), meta: { plan } } as any
+      t.steps.push(step)
+      return
+    }
+    if (method === 'chat.info.approval.exec') {
+      const command = Array.isArray((params as any)?.command) ? (params as any).command.join(' ') : ''
+      const cwd = typeof (params as any)?.cwd === 'string' ? (params as any).cwd : ''
+      const reason = typeof (params as any)?.reason === 'string' ? (params as any).reason : ''
+      const summary = [`[审批请求] 执行命令 ${command || '(unknown)'}（已自动批准）`]
+      if (cwd) summary.push(`cwd=${cwd}`)
+      if (reason) summary.push(`理由：${reason}`)
+      const step: TurnStep = { id: createId('info'), kind: 'info', title: summary.join('\n'), status: 'completed', ts: nowISO() } as any
+      t.steps.push(step)
+      return
+    }
+    if (method === 'chat.info.approval.patch') {
+      const count = typeof (params as any)?.changeCount === 'number' ? (params as any).changeCount : undefined
+      const reason = typeof (params as any)?.reason === 'string' ? (params as any).reason : ''
+      const grant = typeof (params as any)?.grantRoot === 'string' ? (params as any).grantRoot : ''
+      const summary = [`[审批请求] 应用补丁${count != null ? ` (${count} files)` : ''}（已自动批准）`]
+      if (reason) summary.push(`理由：${reason}`)
+      if (grant) summary.push(`请求写入根：${grant}`)
+      const step: TurnStep = { id: createId('info'), kind: 'info', title: summary.join('\n'), status: 'completed', ts: nowISO() } as any
+      t.steps.push(step)
+      return
+    }
+    if (method === 'chat.info.background') {
+      const message = typeof (params as any)?.message === 'string' ? (params as any).message : ''
+      if (message) {
+        const step: TurnStep = { id: createId('info'), kind: 'info', title: `[系统] ${message}`, status: 'completed', ts: nowISO() } as any
+        t.steps.push(step)
+      }
+      return
+    }
+    if (method === 'chat.info.web_search.begin') {
+      const step: TurnStep = { id: createId('info'), kind: 'info', title: '[web-search] 开始检索…', status: 'completed', ts: nowISO() } as any
+      t.steps.push(step)
+      return
+    }
+    if (method === 'chat.info.web_search.end') {
+      const q = typeof (params as any)?.query === 'string' ? (params as any).query : ''
+      const step: TurnStep = { id: createId('info'), kind: 'info', title: `[web-search] 完成${q ? `：${q}` : ''}` as string, status: 'completed', ts: nowISO() } as any
+      t.steps.push(step)
+      return
+    }
+    if (method === 'chat.info.view_image') {
+      const path = typeof (params as any)?.path === 'string' ? (params as any).path : ''
+      const step: TurnStep = { id: createId('info'), kind: 'info', title: `[view-image] ${path}`, status: 'completed', ts: nowISO() } as any
+      t.steps.push(step)
+      return
+    }
+    if (method === 'chat.info.conversation_path') {
+      const path = typeof (params as any)?.path === 'string' ? (params as any).path : ''
+      if (path) {
+        const step: TurnStep = { id: createId('info'), kind: 'info', title: `[rollout] ${path}`, status: 'completed', ts: nowISO() } as any
+        t.steps.push(step)
+      }
+      return
+    }
+    if (method === 'chat.info.review.entered') {
+      const step: TurnStep = { id: createId('info'), kind: 'info', title: '[review] 进入审查模式', status: 'completed', ts: nowISO() } as any
+      t.steps.push(step)
+      return
+    }
+    if (method === 'chat.info.review.exited') {
+      const step: TurnStep = { id: createId('info'), kind: 'info', title: '[review] 退出审查模式', status: 'completed', ts: nowISO() } as any
+      t.steps.push(step)
       return
     }
     if (method === 'chat.tool.exec.begin') {
@@ -281,30 +366,138 @@ export function applyEventsToTurns(turns: Turn[], events: SnapshotEvent[]) {
       if (!callId || toolIndex.has(callId)) return
       const command = Array.isArray((params as any)?.command) ? (params as any).command.map((item: any) => String(item)) : []
       const cwd = typeof (params as any)?.cwd === 'string' ? (params as any).cwd : undefined
-      const step: TurnStep = { id: createId('exec'), kind: 'exec', title: `${command.join(' ')}${cwd ? ` (cwd=${cwd})` : ''}`, status: 'streaming', ts: nowISO(), meta: { command, cwd } } as any
-      t.steps.push(step)
-      const stepIdx = t.steps.length - 1
-      toolIndex.set(callId, { turnIdx: tIndex, stepIdx })
+      // 语义化：解析 read/list/search，并增加对应步骤（标题语义化；正文双栏与 exec 一致：入参=原始命令，输出=结果）
+      try {
+        const acts = parseExploreActions(command, cwd)
+        if (Array.isArray(acts) && acts.length > 0) {
+          const idxs: number[] = []
+          for (const action of acts) {
+            if (action.kind === 'read') {
+              const path = action.path
+              const name = path.replace(/\/+$/g, '').split('/').pop() || path
+              const title = `Read ${name} (lines: ${action.start}-${action.end})`
+              t.steps.push({ id: createId('read'), kind: 'read', title, status: 'completed', ts: nowISO(), meta: { file: path, start: action.start, end: action.end, command, cwd } } as any)
+              idxs.push(t.steps.length - 1)
+            } else if (action.kind === 'list') {
+              const target = action.target ? String(action.target).replace(/\/+$/g, '') : undefined
+              const name = target ? target.split('/').pop() || target : undefined
+              const title = name ? `${action.label} ${name}` : action.label
+              t.steps.push({ id: createId('list'), kind: 'list', title, status: 'completed', ts: nowISO(), meta: { target, label: action.label, command, cwd }, tags: name ? [name] : undefined } as any)
+              idxs.push(t.steps.length - 1)
+            } else if (action.kind === 'search') {
+              const target = action.target ? String(action.target).replace(/\/+$/g, '') : undefined
+              const name = target ? target.split('/').pop() || target : undefined
+              const base = `Search ${String((action as any).query)}`
+              const title = name ? `${base} in ${name}` : base
+              t.steps.push({ id: createId('search'), kind: 'search', title, status: 'completed', ts: nowISO(), meta: { target, query: (action as any).query, command, cwd }, tags: name ? [name] : undefined } as any)
+              idxs.push(t.steps.length - 1)
+            }
+          }
+          if (idxs.length > 0) {
+            semanticIndex.set(callId, { turnIdx: tIndex, stepIdxs: idxs })
+          }
+          // 命中语义化时不再生成原始 exec 步骤，避免重复
+          return
+        }
+      } catch {
+        // 忽略解析错误，不影响 exec 展示
+      }
+      // 未命中语义化时，尝试识别 apply_patch 作为 patch 步骤；否则回退到原始 exec
+      const src = command.join('\n')
+      const isApplyPatch = /apply_patch|applypatch|git\s+apply/i.test(src) || /\*\*\*\s+Begin Patch/.test(src)
+      if (isApplyPatch) {
+        let headPath: string | undefined
+        let adds = 0
+        let dels = 0
+        let patchText = ''
+        try {
+          const m = src.match(/\*\*\*\s+(?:Add|Update|Delete) File:\s+(.+)/)
+          headPath = m ? m[1].trim() : undefined
+          const patchBlockMatch = src.match(/\*\*\*\s+Begin Patch[\s\S]*?\*\*\*\s+End Patch/)
+          patchText = patchBlockMatch ? patchBlockMatch[0] : ''
+          if (patchText) {
+            const lines = patchText.split(/\n/)
+            for (const ln of lines) {
+              if (ln.startsWith('+')) adds += 1
+              else if (ln.startsWith('-')) dels += 1
+            }
+          }
+        } catch {}
+        const name = headPath ? headPath.replace(/\/+$/g, '').split('/').pop() || headPath : undefined
+        const title = name ? `patch ${name}` : `patch (apply_patch)`
+        const step: TurnStep = { id: createId('patch'), kind: 'patch', title, status: 'streaming', ts: nowISO(), tags: [`+${adds}-${dels}`], meta: { firstPath: headPath, adds, dels, command, cwd }, body: patchText } as any
+        t.steps.push(step)
+        const stepIdx = t.steps.length - 1
+        if (callId) toolIndex.set(callId, { turnIdx: tIndex, stepIdx })
+      } else {
+        const step: TurnStep = { id: createId('exec'), kind: 'exec', title: `${command.join(' ')}${cwd ? ` (cwd=${cwd})` : ''}`, status: 'streaming', ts: nowISO(), meta: { command, cwd } } as any
+        t.steps.push(step)
+        const stepIdx = t.steps.length - 1
+        toolIndex.set(callId, { turnIdx: tIndex, stepIdx })
+      }
       return
     }
     if (method === 'chat.tool.exec.output') {
       const callId = typeof (params as any)?.callId === 'string' ? (params as any).callId : undefined
       const text = typeof (params as any)?.text === 'string' ? (params as any).text : ''
-      if (!callId || !toolIndex.has(callId) || !text) return
-      const idx = toolIndex.get(callId)!
-      const step = turns[idx.turnIdx].steps[idx.stepIdx]
-      step.body = (step.body || '') + text
-      step.status = step.status === 'streaming' ? step.status : 'streaming'
+      if (!callId || !text) return
+      // 换行友好拼接
+      const mergeStepBody = (prev: string | undefined, next: string) => {
+        if (!prev) return next
+        if (!next) return prev
+        return prev.length === 0 ? next : `${prev}${prev.endsWith('\n') ? '' : '\n'}${next}`
+      }
+      if (toolIndex.has(callId)) {
+        const idx = toolIndex.get(callId)!
+        const step = turns[idx.turnIdx].steps[idx.stepIdx]
+        step.body = mergeStepBody(step.body, text)
+        step.status = step.status === 'streaming' ? step.status : 'streaming'
+        // 同步到语义化步骤（若存在）
+        const sem = semanticIndex.get(callId)
+        if (sem && sem.turnIdx === idx.turnIdx) {
+          for (const sIdx of sem.stepIdxs) {
+            const s = turns[sem.turnIdx].steps[sIdx]
+            s.body = mergeStepBody(s.body, text)
+          }
+        }
+      } else if (semanticIndex.has(callId)) {
+        const sem = semanticIndex.get(callId)!
+        for (const sIdx of sem.stepIdxs) {
+          const s = turns[sem.turnIdx].steps[sIdx]
+          s.body = mergeStepBody(s.body, text)
+          s.status = s.status === 'streaming' ? s.status : 'streaming'
+        }
+      }
       return
     }
     if (method === 'chat.tool.exec.end') {
       const callId = typeof (params as any)?.callId === 'string' ? (params as any).callId : undefined
-      if (!callId || !toolIndex.has(callId)) return
-      const idx = toolIndex.get(callId)!
-      const step = turns[idx.turnIdx].steps[idx.stepIdx]
-      step.status = 'completed'
-      ;(step as any).meta = { ...(step as any).meta, exitCode: (params as any)?.exitCode, stdout: (params as any)?.stdout, stderr: (params as any)?.stderr }
-      toolIndex.delete(callId)
+      if (!callId) return
+      if (toolIndex.has(callId)) {
+        const idx = toolIndex.get(callId)!
+        const step = turns[idx.turnIdx].steps[idx.stepIdx]
+        step.status = 'completed'
+        ;(step as any).meta = { ...(step as any).meta, exitCode: (params as any)?.exitCode, stdout: (params as any)?.stdout, stderr: (params as any)?.stderr }
+        // 同步到语义化步骤（若存在）
+        const sem = semanticIndex.get(callId)
+        if (sem && sem.turnIdx === idx.turnIdx) {
+          for (const sIdx of sem.stepIdxs) {
+            const s = turns[sem.turnIdx].steps[sIdx]
+            s.status = 'completed'
+            ;(s as any).meta = { ...(s as any).meta, exitCode: (params as any)?.exitCode, stdout: (params as any)?.stdout, stderr: (params as any)?.stderr }
+          }
+          semanticIndex.delete(callId)
+        }
+        toolIndex.delete(callId)
+      } else if (semanticIndex.has(callId)) {
+        const sem = semanticIndex.get(callId)!
+        for (const sIdx of sem.stepIdxs) {
+          const s = turns[sem.turnIdx].steps[sIdx]
+          s.status = 'completed'
+          ;(s as any).meta = { ...(s as any).meta, exitCode: (params as any)?.exitCode, stdout: (params as any)?.stdout, stderr: (params as any)?.stderr }
+        }
+        semanticIndex.delete(callId)
+      }
       return
     }
     if (method === 'chat.tool.mcp.begin') {
@@ -338,10 +531,13 @@ export function applyEventsToTurns(turns: Turn[], events: SnapshotEvent[]) {
       const headPath = p.firstPath as any
       const adds = p.adds as any
       const dels = p.dels as any
-      const head = headPath ? `${headPath} ${adds != null ? `+${adds}` : ''}${dels != null ? ` -${dels}` : ''}`.trim() : `${files} files`
+      const name = typeof headPath === 'string' ? headPath.replace(/\/+$/g, '').split('/').pop() || headPath : undefined
+      const addNum = typeof adds === 'number' ? adds : 0
+      const delNum = typeof dels === 'number' ? dels : 0
       const extra = headPath && files > 1 ? ` (+${files - 1})` : ''
-      const title = `[patch] ${head}${extra} (${auto})`
-      const step: TurnStep = { id: createId('patch'), kind: 'patch', title, status: 'streaming', ts: nowISO(), meta: { files, autoApproved: p.autoApproved, firstPath: headPath, adds, dels, changes: p.changes } } as any
+      const title = name ? `patch ${name}${extra}` : `patch ${files} files`
+      const body = renderPatchDiff(p.changes, Number.POSITIVE_INFINITY as any, Number.POSITIVE_INFINITY as any)
+      const step: TurnStep = { id: createId('patch'), kind: 'patch', title, status: 'streaming', ts: nowISO(), tags: [`+${addNum}-${delNum}`], meta: { files, autoApproved: p.autoApproved, firstPath: headPath, adds, dels, changes: p.changes }, body } as any
       t.steps.push(step)
       const stepIdx = t.steps.length - 1
       if (callId) toolIndex.set(callId, { turnIdx: tIndex, stepIdx })

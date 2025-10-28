@@ -1,6 +1,7 @@
 #![cfg(test)]
 use super::history::convert_history_item;
 use super::rollout_parser::parse_rollout;
+use super::rollout_parser::rollout_in_progress;
 use super::config::build_resume_config;
 use crate::ws::chat_events::{event, ChatEvent};
 use codex_protocol::config_types::SandboxMode;
@@ -230,6 +231,39 @@ fn mcp_response_item_legacy_name_mcp_prefix_double_underscore() {
 }
 
 #[test]
+fn in_progress_true_on_unmatched_function_call_begin() {
+    use std::fs;
+    let dir = std::env::temp_dir().join(format!("ailoom_inprogress_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("d.jsonl");
+    // 有 function_call 开始，但没有 function_call_output
+    let content = r#"
+{"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":[\"bash\",\"-lc\",\"sleep 5\"]}","call_id":"sid"}}
+"#;
+    fs::write(&path, content.trim_start()).unwrap();
+    // 即使 idle 超过阈值，仍应视为进行中（未匹配到输出）
+    std::env::set_var("AILOOM_CODEX_ROLLOUT_IDLE_MS", "1");
+    let res = rollout_in_progress(path.to_string_lossy().as_ref());
+    assert_eq!(res, Some(true));
+}
+
+#[test]
+fn in_progress_true_on_unmatched_exec_begin() {
+    use std::fs;
+    let dir = std::env::temp_dir().join(format!("ailoom_inprogress_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("e.jsonl");
+    // 有 exec_command_begin，但没有 exec_command_end
+    let content = r#"
+{"type":"event_msg","payload":{"type":"exec_command_begin","call_id":"c1","command":["bash","-lc","sleep 10"]}}
+"#;
+    fs::write(&path, content.trim_start()).unwrap();
+    std::env::set_var("AILOOM_CODEX_ROLLOUT_IDLE_MS", "1");
+    let res = rollout_in_progress(path.to_string_lossy().as_ref());
+    assert_eq!(res, Some(true));
+}
+
+#[test]
 fn mcp_response_item_legacy_name_colon_slash() {
     // legacy name format: mcp:server/tool
     let content = r#"
@@ -282,3 +316,41 @@ fn parse_real_codex_sessions_if_available() {
     // 如果没有找到任何 jsonl，直接返回不失败
     if !ok { return; }
 }
+
+#[test]
+fn in_progress_false_on_task_complete() {
+    use std::fs;
+    use std::time::Duration;
+    let dir = std::env::temp_dir().join(format!("ailoom_inprogress_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("a.jsonl");
+    let content = r#"
+{"type":"event_msg","payload":{"type":"user_message","message":"hi"}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"ok"}}
+{"type":"event_msg","payload":{"type":"task_complete"}}
+"#;
+    fs::write(&path, content.trim_start()).unwrap();
+    // 即刻判断：应为 false（已完成）
+    let res = rollout_in_progress(path.to_string_lossy().as_ref());
+    assert_eq!(res, Some(false));
+}
+
+#[test]
+fn in_progress_true_on_recent_delta() {
+    use std::fs;
+    let dir = std::env::temp_dir().join(format!("ailoom_inprogress_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("b.jsonl");
+    let content = r#"
+{"type":"event_msg","payload":{"type":"user_message","message":"hi"}}
+{"type":"event_msg","payload":{"type":"agent_message_delta","delta":"..."}}
+"#;
+    fs::write(&path, content.trim_start()).unwrap();
+    // 提高阈值，确保视为“活跃”
+    std::env::set_var("AILOOM_CODEX_ROLLOUT_IDLE_MS", "60000");
+    let res = rollout_in_progress(path.to_string_lossy().as_ref());
+    assert_eq!(res, Some(true));
+}
+
+// 备注：关于“非终结事件 + idle 阈值”判断由于不同文件系统的 mtime 粒度差异，
+// 在单测环境容易产生非确定性，这里不做时间阈值的断言，仅通过运行时逻辑保障。

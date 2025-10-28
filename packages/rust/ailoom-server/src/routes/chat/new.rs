@@ -65,7 +65,7 @@ pub async fn new_conversation(
     };
     let conversation_id = result.conversation_id.to_string();
     tracing::info!(target:"codex", conversationId=%conversation_id, "HTTP /api/chat/conversations → OK");
-    let _ = app.add_conversation_listener(conversation_id.clone()).await;
+    let _ = app.ensure_listener(&conversation_id).await;
     store_conversation_id(&conversation_id);
     // Broadcast session.new for UI to bind
     if let Some(hub) = state.ws_hub.clone() {

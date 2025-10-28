@@ -72,6 +72,26 @@
   - 推理折叠：`turn.reasoning`（标题取首行摘要）
   - 正文：`turn.assistant.text`（常显）
 
+#### 实时 vs 恢复的“仅推理”展示差异（避免错觉）
+
+- 实时（WS）：当本轮仅有推理（`reasoning.delta` 尚未形成任何 `steps`）时，依然显示“Working”折叠区，并把当前推理作为临时项置于该折叠区中；一旦收到 `chat.reasoning.end` 或其它工具步骤开始，按正常步骤列表渲染。
+- 恢复（resume）：保持原有行为——当没有任何步骤时，显示独立的“thinking”折叠块（不显示 Working 头部）。
+- 目的：解决“实时初始阶段只见 thinking --- 而非 Working”的体验断层，同时不改变已回放历史的既有视觉。
+
+### 前端 Working 推导规则（无冗余字段）
+
+- 移除每个 Turn 内的 `meta.working`、`meta.workingTitle` 等冗余字段，遵循 SSoT 原则，仅由现有状态推导：
+  - `working = (turn.status === 'streaming') || turn.steps.some(s => s.status === 'streaming')`
+  - `workingTitle = turn.status==='failed' ? 'Failed' : turn.status==='aborted' ? 'Aborted' : working ? 'Working' : 'Finished working'`
+- Store 提供 `deriveWorkingState(turnId)` 便捷方法，UI 读取并渲染；不在 Store 中落盘冗余工作态。
+- 唯一活跃 Turn 由 `activeTurnId` 表示；完成（`chat.turn.complete`）后清理该索引并清空工具步骤索引（避免跨轮污染）。
+- 交互约定：Working 折叠区默认收起（`defaultOpen=false`）；生成中不强制展开，结束后标题自动从 `Working` 变为 `Finished working`。
+
+### Rx 批处理与缺失 started 的隐式开启
+
+- 在启用 Rx 微批（agent_message_delta/agent_reasoning_delta）时，若未收到 `chat.turn.started`，首条“内容事件”（delta）到达即隐式触发 `beginTurn()`，确保与“开始优先级”一致。
+- `agent_message.completed`（非 Compact）到达时，立即完成助手文本并结束本轮（`completeAssistant` + `completeTurn`）；`chat.turn.complete` 作为确认型收尾（幂等）。
+
 实现差异说明（与历史描述的偏差）
 - 结束边界：当前前端在 WS 路径以 `chat.turn.complete` 作为“确认型收尾”，`chat.message.completed` 仅完成本轮助手正文，不强制结束 turn（若仍有工具步骤 streaming，会保持 Working）。Resume 路径按本文档“结束优先级”同样产出 `chat.turn.complete`；如缺失，则以 `chat.message.completed` 收尾由 reducer 兜底。
 - Compact 特例：文本为 `Compact task completed` 的 `chat.message.completed` 不结束 turn，并转为 info 步骤插入当前活跃 turn；若刚刚创建了空转（仅由 started 打开），会合并回上一轮。

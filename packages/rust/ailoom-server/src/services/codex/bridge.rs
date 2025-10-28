@@ -1,8 +1,7 @@
+use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
-use codex_app_server_protocol::{
-    JSONRPCNotification, ServerNotification, SessionConfiguredNotification,
-};
+use codex_app_server_protocol::{JSONRPCNotification, ServerNotification, SessionConfiguredNotification};
 use codex_protocol::protocol::RateLimitSnapshot;
 use serde_json::{Map, Value};
 
@@ -12,22 +11,26 @@ pub struct BroadcastEvent {
     pub params: Value,
 }
 
-fn conversation_state() -> &'static Mutex<Option<String>> {
-    static STATE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-    STATE.get_or_init(|| Mutex::new(None))
+// Track all active conversations for multi-session broadcasting.
+fn active_conversations() -> &'static Mutex<HashSet<String>> {
+    static STATE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
 pub(crate) fn store_conversation_id(id: &str) {
-    if let Ok(mut guard) = conversation_state().lock() {
-        *guard = Some(id.to_string());
+    if let Ok(mut guard) = active_conversations().lock() {
+        guard.insert(id.to_string());
     }
 }
 
-fn current_conversation_id() -> Option<String> {
-    conversation_state()
-        .lock()
-        .ok()
-        .and_then(|guard| guard.clone())
+fn remove_conversation_id(id: &str) {
+    if let Ok(mut guard) = active_conversations().lock() {
+        guard.remove(id);
+    }
+}
+
+fn any_conversation_id() -> Option<String> {
+    active_conversations().lock().ok().and_then(|set| set.iter().next().cloned())
 }
 
 pub fn map_notification(notification: &JSONRPCNotification) -> Vec<BroadcastEvent> {
@@ -43,9 +46,7 @@ fn map_server_notification(notification: ServerNotification) -> Vec<BroadcastEve
         ServerNotification::SessionConfigured(payload) => {
             vec![map_session_configured(payload)]
         }
-        ServerNotification::AccountRateLimitsUpdated(snapshot) => {
-            vec![map_rate_limits_snapshot(snapshot)]
-        }
+        ServerNotification::AccountRateLimitsUpdated(snapshot) => map_rate_limits_snapshot(snapshot),
         ServerNotification::AuthStatusChange(payload) => {
             let params = provider_payload(
                 Some(serde_json::to_value(payload).unwrap_or(Value::Null)),
@@ -109,20 +110,37 @@ fn map_session_configured(payload: SessionConfiguredNotification) -> BroadcastEv
     }
 }
 
-fn map_rate_limits_snapshot(snapshot: RateLimitSnapshot) -> BroadcastEvent {
-    let mut map = Map::new();
-    if let Some(cid) = current_conversation_id() {
+fn map_rate_limits_snapshot(snapshot: RateLimitSnapshot) -> Vec<BroadcastEvent> {
+    let set = active_conversations().lock().unwrap().clone();
+    let mut out: Vec<BroadcastEvent> = Vec::new();
+    if set.is_empty() {
+        // Fallback: no active conversation; send a single global-style event without conversationId.
+        let mut map = Map::new();
+        map.insert("provider".into(), Value::String("codex".into()));
+        map.insert(
+            "rateLimits".into(),
+            serde_json::to_value(snapshot).unwrap_or(Value::Null),
+        );
+        out.push(BroadcastEvent {
+            method: "codex/account/rateLimits/updated".into(),
+            params: Value::Object(map),
+        });
+        return out;
+    }
+    for cid in set.into_iter() {
+        let mut map = Map::new();
         map.insert("conversationId".into(), Value::String(cid));
+        map.insert("provider".into(), Value::String("codex".into()));
+        map.insert(
+            "rateLimits".into(),
+            serde_json::to_value(&snapshot).unwrap_or(Value::Null),
+        );
+        out.push(BroadcastEvent {
+            method: "codex/account/rateLimits/updated".into(),
+            params: Value::Object(map),
+        });
     }
-    map.insert("provider".into(), Value::String("codex".into()));
-    map.insert(
-        "rateLimits".into(),
-        serde_json::to_value(snapshot).unwrap_or(Value::Null),
-    );
-    BroadcastEvent {
-        method: "codex/account/rateLimits/updated".into(),
-        params: Value::Object(map),
-    }
+    out
 }
 
 fn map_generic_notification(notification: &JSONRPCNotification) -> Vec<BroadcastEvent> {
@@ -131,7 +149,7 @@ fn map_generic_notification(notification: &JSONRPCNotification) -> Vec<Broadcast
         .params
         .as_ref()
         .and_then(extract_conversation_id)
-        .or_else(current_conversation_id);
+        .or_else(any_conversation_id);
 
     if let Some(ref cid) = conversation_id {
         store_conversation_id(cid);
@@ -155,6 +173,19 @@ fn map_generic_notification(notification: &JSONRPCNotification) -> Vec<Broadcast
             method: "codex/account/rateLimits/updated".into(),
             params: payload,
         });
+    }
+
+    // If this is a shutdown_complete, drop from active set.
+    if let Some(params) = notification.params.as_ref() {
+        if let Some(obj) = params.as_object() {
+            if let Some(msg) = obj.get("msg").and_then(|v| v.as_object()) {
+                if matches!(msg.get("type").and_then(|v| v.as_str()), Some("shutdown_complete")) {
+                    if let Some(cid) = extract_conversation_id(params) {
+                        remove_conversation_id(&cid);
+                    }
+                }
+            }
+        }
     }
 
     events

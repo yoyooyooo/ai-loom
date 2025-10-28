@@ -139,5 +139,7 @@ pub struct ResumeResponsePayload {
     pub events: Vec<ResumeEventPayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<ResumeConfigResponse>,
+    /// 仅用于提示：根据 rollout JSONL 最近事件粗略判断是否仍在进行中（CLI 会话场景）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_progress: Option<bool>,
 }
-

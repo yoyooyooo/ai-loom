@@ -109,7 +109,7 @@ async fn resume_from_path(
         }
     }
 
-    let _ = app.add_conversation_listener(conversation_id.clone()).await;
+    let _ = app.ensure_listener(&conversation_id).await;
     Ok((
         conversation_id,
         history_messages,
@@ -127,6 +127,10 @@ pub async fn resume_conversation(
         Ok(c) => c,
         Err(e) => return (StatusCode::BAD_GATEWAY, format!("Codex 未就绪：{}", e)).into_response(),
     };
+    // 确保将 WS Hub 注入到 Codex 客户端，以便把 codex 通知经由 Hub 广播给前端 WS
+    if let Some(hub) = state.ws_hub.clone() {
+        client.register_ws_hub(hub);
+    }
 
     let body = maybe_body.map(|b| b.0).unwrap_or_default();
     let app = client.app();
@@ -135,6 +139,8 @@ pub async fn resume_conversation(
         tracing::info!(target:"codex", path=%path, "HTTP resume → resumeConversation(explicit)");
         return match resume_from_path(&app, &state, path).await {
             Ok((conversation_id, history, events, config)) => {
+                // 尝试判断该 rollout 是否仍在进行中（CLI 驱动场景提示用）
+                let in_progress = super::rollout_parser::rollout_in_progress(path).or(Some(false));
                 broadcast_resume(&state, &conversation_id, &history);
                 (
                     StatusCode::OK,
@@ -147,6 +153,7 @@ pub async fn resume_conversation(
                         },
                         events: events.into_iter().map(into_resume_event_payload).collect(),
                         config,
+                        in_progress,
                     }),
                 )
                     .into_response()
@@ -164,6 +171,7 @@ pub async fn resume_conversation(
         if let Some(path) = lookup_path_by_conversation_id(&app, conversation_id).await {
             return match resume_from_path(&app, &state, &path).await {
                 Ok((conversation_id, history, events, config)) => {
+                    let in_progress = super::rollout_parser::rollout_in_progress(&path).or(Some(false));
                     broadcast_resume(&state, &conversation_id, &history);
                     (
                         StatusCode::OK,
@@ -176,6 +184,7 @@ pub async fn resume_conversation(
                             },
                             events: events.into_iter().map(into_resume_event_payload).collect(),
                             config,
+                            in_progress,
                         }),
                     )
                         .into_response()
@@ -208,6 +217,7 @@ pub async fn resume_conversation(
                     tracing::info!(target:"codex", path=%path, "HTTP resume → resumeConversation(latest)");
                     return match resume_from_path(&app, &state, &path).await {
                         Ok((conversation_id, history, events, config)) => {
+                            let in_progress = super::rollout_parser::rollout_in_progress(&path).or(Some(false));
                             broadcast_resume(&state, &conversation_id, &history);
                             (
                                 StatusCode::OK,
@@ -223,6 +233,7 @@ pub async fn resume_conversation(
                                         .map(into_resume_event_payload)
                                         .collect(),
                                     config,
+                                    in_progress,
                                 }),
                             )
                                 .into_response()

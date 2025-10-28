@@ -182,6 +182,27 @@
 - `chat.message.completed`：只就地完成占位并写入最终文本，不再尾插“最终总结”气泡，避免双 AI。
 - `guardConversation`：仅消费当前激活 `conversationId` 的事件，避免多会话串扰。
 
+### 恢复（resume）与短时轮询（前端策略）
+
+- `/api/chat/conversations/resume` 返回 base `history` + 归一化 `events` 与启发式 `inProgress`。
+- 前端在 Store Action（建议：`chat-resume.ts/processResumeResult`）中：
+  - 幂等落地 base history + events（`chatTurnActions.loadSnapshot`）；
+  - 应用 provider 能力与覆盖（`codex-chat-provider`）；
+  - 若 `inProgress=true`，启动短时轮询：
+    - 源：推荐只读快照接口（可选）或 `/debug/codex?includeChat=1`；
+    - 间隔：2.5s；连续 4 次无增量或 30s 超时即停止；
+    - 结果双写：Zustand（驱动 UI）+ React Query 缓存（Key：`['chat','sessionSnapshot', conversationId]`）。
+
+> 注：当 Codex CLI 与本后端自启 App Server 分属不同进程时，页面无法直接接收 CLI 那份实时事件。短时轮询用于“只读观察”，生产态建议尽量在页面内新建/继续会话以获得 WS 实时。
+
+### 环境变量与阈值（建议）
+
+- 服务端：`AILOOM_CODEX_ROLLOUT_IDLE_MS`（默认 8000）用于判断 rollout 文件“静默时间”是否超过阈值，从而辅助 `inProgress` 判定。
+- 前端（可选）：
+  - `VITE_CHAT_POLL_MS`（默认 2500）轮询间隔；
+  - `VITE_CHAT_POLL_MAX_MS`（默认 30000）最长轮询时长；
+  - `VITE_CHAT_POLL_NOCHANGE_MAX`（默认 4）无增量阈值。
+
 ## 调试与排障
 
 - 设置 `VITE_WS_DEBUG=1` 可在浏览器控制台打印所有 `codex/*` 与 `chat.*` 事件；`VITE_WS_DEBUG_ROUTE=1` 可查看 subscribe 选项。

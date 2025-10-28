@@ -27,7 +27,7 @@ pub async fn send_message(
     }
     let app = client.app();
     // 确保已监听该会话的事件（即使会话不是由本服务 new/resume 创建）
-    let _ = app.add_conversation_listener(conversation_id.clone()).await;
+    let _ = app.ensure_listener(&conversation_id).await;
     tracing::info!(target:"codex", conversationId=%conversation_id, len=text.len(), preview=%text.chars().take(40).collect::<String>(), "HTTP send → sendUserMessage");
     let _ = app
         .send_user_message(conversation_id.clone(), text)

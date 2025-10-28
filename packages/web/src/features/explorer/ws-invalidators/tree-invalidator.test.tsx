@@ -4,23 +4,12 @@ import { Subject } from 'rxjs'
 
 vi.useFakeTimers()
 
-vi.mock('@/lib/ws/singleton', () => {
-  const subjects = new Map<string, Subject<any>>()
-  const ws = {
-    enabled: true,
-    notification$: (m: string) => {
-      if (!subjects.has(m)) subjects.set(m, new Subject<any>())
-      return subjects.get(m)!.asObservable()
-    },
-    __get: (m: string) => subjects.get(m) || null
-  }
-  return { ws }
-})
+vi.mock('@/lib/ws/singleton')
 
 import { installTreeInvalidator } from './tree-invalidator'
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore test-only access
-import { ws as mockedWs } from '@/lib/ws/singleton'
+import { __emit } from '@/lib/ws/singleton'
 
 describe('tree-invalidator', () => {
   let qc: QueryClient
@@ -31,8 +20,7 @@ describe('tree-invalidator', () => {
   it('truncated tree.changed invalidates current dir', async () => {
     const spy = vi.spyOn(qc, 'invalidateQueries')
     installTreeInvalidator(qc, { getCurrentRoot: () => '.', getCurrentDir: () => 'docs' })
-    const treeChanged = (mockedWs as any).__get('tree.changed') as Subject<any>
-    treeChanged.next({ summary: { truncated: true } })
+    __emit('tree.changed', { summary: { truncated: true } })
     vi.runAllTimers()
     await Promise.resolve()
     const hasTree = spy.mock.calls.some(
@@ -44,8 +32,7 @@ describe('tree-invalidator', () => {
   it('impactedPaths invalidates minimal set of dirs', async () => {
     const spy = vi.spyOn(qc, 'invalidateQueries')
     installTreeInvalidator(qc, { getCurrentRoot: () => '.', getCurrentDir: () => '.' })
-    const treeChanged = (mockedWs as any).__get('tree.changed') as Subject<any>
-    treeChanged.next({ dir: 'src', impactedPaths: ['src/a', 'src/a/b', 'src/c'] })
+    __emit('tree.changed', { dir: 'src', impactedPaths: ['src/a', 'src/a/b', 'src/c'] })
     vi.runAllTimers()
     const calls = spy.mock.calls.map((c) => c[0])
     // 按当前实现，impactedPaths 的父目录会被 calcMinimalDirs 折叠成最小集合，
@@ -60,8 +47,7 @@ describe('tree-invalidator', () => {
   it('session.resync triggers coarse refresh', async () => {
     const spy = vi.spyOn(qc, 'invalidateQueries')
     installTreeInvalidator(qc, { getCurrentRoot: () => '.', getCurrentDir: () => 'src' })
-    const resync = (mockedWs as any).__get('session.resync') as Subject<any>
-    resync.next({})
+    __emit('session.resync', {})
     await Promise.resolve()
     const has = spy.mock.calls.some(
       (c) => JSON.stringify(c[0]?.queryKey) === JSON.stringify(['tree', '.', 'src'])

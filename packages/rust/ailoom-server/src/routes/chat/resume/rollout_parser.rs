@@ -188,3 +188,90 @@ pub async fn load_rollout_snapshot(path: &str) -> Option<RolloutParseResult> {
         }
     }
 }
+
+/// 粗略判定某个 rollout JSONL 是否“仍在进行中”。
+/// 逻辑：从文件尾部向前扫描，找到最近一条 `event_msg`，根据其 `payload.type` 判断：
+/// - 如果为 `shutdown_complete`/`task_complete`/`turn_aborted`/`error`/`stream_error` → 认为已结束。
+/// - 其它类型（如 `agent_message_delta`/`agent_reasoning_delta`/`exec_*` 等） → 认为仍在进行。
+/// 若无法解析，返回 None（由调用方决定默认值）。
+pub fn rollout_in_progress(path: &str) -> Option<bool> {
+    use std::io::BufRead;
+    // 读取文件末尾若干行，找到最近一条 event_msg
+    let file = std::fs::File::open(path).ok()?;
+    let reader = std::io::BufReader::new(file);
+    let mut lines: Vec<String> = Vec::new();
+    for line in reader.lines().flatten() {
+        let s = line.trim();
+        if !s.is_empty() {
+            lines.push(s.to_string());
+        }
+    }
+    use std::collections::HashSet;
+    let mut closed_fn_calls: HashSet<String> = HashSet::new();
+    let mut closed_exec_calls: HashSet<String> = HashSet::new();
+    for raw in lines.iter().rev().take(4096) {
+        let s = raw.trim();
+        if s.is_empty() { continue; }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(s) else { continue };
+        let kind = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
+        if kind == "response_item" {
+            let Some(payload) = v.get("payload") else { continue };
+            let ptype = payload.get("type").and_then(|x| x.as_str()).unwrap_or("");
+            match ptype {
+                "function_call_output" => {
+                    if let Some(cid) = payload.get("call_id").and_then(|x| x.as_str()) {
+                        closed_fn_calls.insert(cid.to_string());
+                    }
+                }
+                "function_call" => {
+                    if let Some(cid) = payload.get("call_id").and_then(|x| x.as_str()) {
+                        if !closed_fn_calls.contains(cid) {
+                            return Some(true);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
+        if kind != "event_msg" { continue; }
+        let Some(payload) = v.get("payload") else { continue };
+        let ptype = payload.get("type").and_then(|x| x.as_str()).unwrap_or("");
+        match ptype {
+            "shutdown_complete" | "task_complete" | "turn_aborted" | "error" | "stream_error" => {
+                return Some(false);
+            }
+            "exec_command_end" => {
+                if let Some(cid) = payload.get("call_id").and_then(|x| x.as_str()) {
+                    closed_exec_calls.insert(cid.to_string());
+                }
+            }
+            "exec_command_begin" => {
+                if let Some(cid) = payload.get("call_id").and_then(|x| x.as_str()) {
+                    if !closed_exec_calls.contains(cid) {
+                        return Some(true);
+                    }
+                }
+            }
+            _ => {
+                // 不是显式结束类事件：再结合文件空闲时长判断
+                let threshold_ms: u64 = std::env::var("AILOOM_CODEX_ROLLOUT_IDLE_MS")
+                    .ok()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(8000);
+                let idle_ms: u64 = match std::fs::metadata(path).and_then(|m| m.modified()) {
+                    Ok(modified) => match std::time::SystemTime::now().duration_since(modified) {
+                        Ok(dur) => dur.as_millis() as u64,
+                        // 系统时间回退或精度问题：保守地视为超过阈值（避免误报进行中）
+                        Err(_) => threshold_ms + 1,
+                    },
+                    // 无法读取修改时间：保守地视为超过阈值
+                    Err(_) => threshold_ms + 1,
+                };
+                if idle_ms >= threshold_ms { return Some(false); }
+                return Some(true);
+            }
+        }
+    }
+    None
+}

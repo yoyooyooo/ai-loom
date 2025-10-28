@@ -36,8 +36,7 @@ function createStreamingTurn(state: any, userText?: string) {
     user: { text: userText ?? '', ts },
     assistant: { text: '' },
     reasoning: undefined,
-    steps: [],
-    meta: { working: true, workingTitle: 'Working' }
+    steps: []
   }
 }
 
@@ -104,16 +103,9 @@ export function createCoreSlice(set: any, get: any) {
           status: 'streaming',
           user: { text: trimmed, ts },
           assistant: { text: '' },
-          steps: [],
-          meta: { working: true, workingTitle: 'Working' }
+          steps: []
         }
-        return {
-          ...state,
-          turns: state.turns.concat(turn),
-          activeTurnId: id,
-          nextSeq: seq,
-          generating: true
-        }
+        return { ...state, turns: state.turns.concat(turn), activeTurnId: id, nextSeq: seq, generating: true }
       }, false, 'turns/addUserTurn')
       return id
     },
@@ -135,9 +127,7 @@ export function createCoreSlice(set: any, get: any) {
           }
         }
         const ts = nowISO()
-        const nextTurns = turns.map((turn) =>
-          turn.id === targetId ? { ...turn, user: { text: trimmed, ts }, meta: { ...(turn.meta || {}), working: true, workingTitle: 'Working' } } : turn
-        )
+        const nextTurns = turns.map((turn) => (turn.id === targetId ? { ...turn, user: { text: trimmed, ts } } : turn))
         return {
           ...state,
           turns: nextTurns,
@@ -165,9 +155,7 @@ export function createCoreSlice(set: any, get: any) {
           }
         }
         ensuredId = targetId
-        const nextTurns = turns.map((turn) =>
-          turn.id === targetId ? { ...turn, startedAt: ts, meta: { ...(turn.meta || {}), working: true, workingTitle: 'Working' } } : turn
-        )
+        const nextTurns = turns.map((turn) => (turn.id === targetId ? { ...turn, startedAt: ts } : turn))
         return {
           ...state,
           turns: nextTurns,
@@ -205,13 +193,7 @@ export function createCoreSlice(set: any, get: any) {
       set((state: any) => {
         const targetId = state.activeTurnId
         if (!targetId) return state
-        const nextTurns = state.turns.map((turn: any) => {
-          if (turn.id !== targetId) return turn
-          const finalText = typeof text === 'string' ? text : turn.assistant.text
-          const status = turn.status === 'failed' || turn.status === 'aborted' ? turn.status : 'completed'
-          const hasStreamingSteps = Array.isArray(turn.steps) && turn.steps.some((s: any) => s.status === 'streaming')
-          return { ...turn, assistant: { text: finalText ?? '', ts: nowISO() }, status, meta: { ...(turn.meta || {}), working: hasStreamingSteps, workingTitle: hasStreamingSteps ? 'Working' : 'Finished working' } }
-        })
+        const nextTurns = state.turns.map((turn: any) => (turn.id !== targetId ? turn : { ...turn, assistant: { text: (typeof text === 'string' ? text : turn.assistant.text) ?? '', ts: nowISO() }, status: (turn.status === 'failed' || turn.status === 'aborted') ? turn.status : 'completed' }))
         return { ...state, turns: nextTurns, generating: calcGenerating({ turns: nextTurns }) }
       }, false, 'turns/completeAssistant')
     },
@@ -220,7 +202,7 @@ export function createCoreSlice(set: any, get: any) {
       set((state: any) => {
         const targetId = state.activeTurnId
         if (!targetId) return state
-        const nextTurns = state.turns.map((turn: any) => (turn.id === targetId ? { ...turn, assistant: { text: message ? String(message) : turn.assistant.text, ts: nowISO() }, status: 'failed', meta: { ...(turn.meta || {}), working: false, workingTitle: 'Failed' } } : turn))
+        const nextTurns = state.turns.map((turn: any) => (turn.id === targetId ? { ...turn, assistant: { text: message ? String(message) : turn.assistant.text, ts: nowISO() }, status: 'failed' } : turn))
         return { ...state, turns: nextTurns, generating: calcGenerating({ turns: nextTurns }) }
       }, false, 'turns/failAssistant')
     },
@@ -229,7 +211,7 @@ export function createCoreSlice(set: any, get: any) {
       set((state: any) => {
         const targetId = state.activeTurnId
         if (!targetId) return state
-        const nextTurns = state.turns.map((turn: any) => (turn.id === targetId ? { ...turn, status: 'aborted', meta: { ...(turn.meta || {}), working: false, workingTitle: 'Aborted' }, assistant: { text: turn.assistant.text, ts: nowISO() } } : turn))
+        const nextTurns = state.turns.map((turn: any) => (turn.id === targetId ? { ...turn, status: 'aborted', assistant: { text: turn.assistant.text, ts: nowISO() } } : turn))
         return { ...state, turns: nextTurns, generating: calcGenerating({ turns: nextTurns }) }
       }, false, 'turns/abortAssistant')
     },
@@ -276,9 +258,23 @@ export function createCoreSlice(set: any, get: any) {
         let targetId = state.activeTurnId
         let turns = state.turns as any[]
         if (!targetId || !turns.some((t) => t.id === targetId)) {
-          const fallback = [...turns].reverse().find((t) => t.status === 'streaming') ?? turns[turns.length - 1]
-          if (!fallback) return state
-          targetId = fallback.id
+          const fallbackStreaming = [...turns].reverse().find((t) => t.status === 'streaming')
+          if (fallbackStreaming) {
+            targetId = fallbackStreaming.id
+          } else {
+            // 无活跃 turn：
+            // - info/plan 这类语义型步骤优先附加到上一轮（保持历史语义），无上一轮则忽略
+            // - 其余（exec/mcp/patch...）隐式开启新一轮，避免写入已完成的上一轮
+            if (kind === 'info' || kind === 'plan') {
+              const last = turns[turns.length - 1]
+              if (!last) return state
+              targetId = last.id
+            } else {
+              const newTurn = createStreamingTurn(state)
+              turns = turns.concat(newTurn)
+              targetId = newTurn.id
+            }
+          }
         }
         const stepStatus = options?.status ?? 'streaming'
         const nextTurns = turns.map((turn) => {
@@ -293,9 +289,7 @@ export function createCoreSlice(set: any, get: any) {
             tags: options?.tags,
             meta: options?.meta
           }
-          const hasStreaming = stepStatus === 'streaming' || (turn.steps || []).some((existing: any) => existing.status === 'streaming')
-          const workingTitle = hasStreaming ? 'Working' : turn.meta?.workingTitle ?? 'Finished working'
-          return { ...turn, steps: (turn.steps || []).concat(step), meta: { ...(turn.meta || {}), working: hasStreaming, workingTitle } }
+          return { ...turn, steps: (turn.steps || []).concat(step) }
         })
         const nextToolIndex = { ...(state.toolIndex || {}) }
         if (callId) nextToolIndex[callId] = { turnId: targetId, stepId: detailId }
@@ -329,7 +323,7 @@ export function createCoreSlice(set: any, get: any) {
             step.id === entry.stepId ? { ...step, status: (patch?.status ?? 'completed'), body: patch?.body ?? step.body, meta: patch?.meta ? { ...(step.meta || {}), ...patch.meta } : step.meta } : step
           )
         
-          return { ...turn, steps, meta: { ...(turn.meta || {}), working: steps.some((s: any) => s.status === 'streaming'), workingTitle: steps.some((s: any) => s.status === 'streaming') ? 'Working' : 'Finished working' } }
+          return { ...turn, steps }
         })
         const { [callId]: _removed, ...rest } = state.toolIndex
         return { ...state, turns: nextTurns, toolIndex: rest, generating: calcGenerating({ turns: nextTurns }) }
@@ -349,9 +343,13 @@ export function createCoreSlice(set: any, get: any) {
         const nextTurns = turns.map((turn) => {
           if (turn.id !== targetId) return turn
           const step = { id: createId('info'), kind: 'info', title, body, status: 'completed', ts }
-          return { ...turn, steps: (turn.steps || []).concat(step), meta: { ...(turn.meta || {}) } }
+          return { ...turn, steps: (turn.steps || []).concat(step) }
         })
-        return { ...state, turns: nextTurns, activeTurnId: targetId, generating: calcGenerating({ turns: nextTurns }) }
+        // 仅在写入到“流转中的 turn”时才保持/设置 activeTurnId；若写入到已完成 turn，不改变 activeTurnId（避免误将已完成 turn 设为 active）
+        const written = nextTurns.find((t: any) => t.id === targetId)
+        const keepActive = written?.status === 'streaming'
+        const nextActive = keepActive ? targetId : state.activeTurnId
+        return { ...state, turns: nextTurns, activeTurnId: nextActive, generating: calcGenerating({ turns: nextTurns }) }
       }, false, 'turns/addInfo')
     },
 
@@ -363,12 +361,10 @@ export function createCoreSlice(set: any, get: any) {
         const nextTurns = state.turns.map((turn: any) => {
           if (turn.id !== targetId) return turn
           const status = turn.status === 'failed' || turn.status === 'aborted' ? turn.status : 'completed'
-          const hasStreamingSteps = Array.isArray(turn.steps) && turn.steps.some((step: any) => step.status === 'streaming')
-          let workingTitle = turn.meta?.workingTitle
-          if (status === 'failed') workingTitle = 'Failed'
-          else if (status === 'aborted') workingTitle = 'Aborted'
-          else if (!workingTitle) workingTitle = hasStreamingSteps ? 'Working' : 'Finished working'
-          return { ...turn, status, completedAt, meta: { ...(turn.meta || {}), working: hasStreamingSteps, workingTitle } }
+          const patchedSteps = Array.isArray(turn.steps)
+            ? turn.steps.map((s: any) => (s?.status === 'streaming' ? { ...s, status: 'completed' } : s))
+            : turn.steps
+          return { ...turn, status, completedAt, steps: patchedSteps }
         })
         const cleanedIndex = Object.fromEntries(Object.entries(state.toolIndex).filter(([, v]: any) => v?.turnId !== targetId)) as Record<string, { turnId: string; stepId: string }>
         return { ...state, turns: nextTurns, activeTurnId: undefined, toolIndex: cleanedIndex, generating: calcGenerating({ turns: nextTurns }) }
@@ -381,11 +377,10 @@ export function createCoreSlice(set: any, get: any) {
       if (!turn) {
         return { working: false, detailsCount: 0, workingTitle: 'Finished working' }
       }
-      const working = turn.meta?.working ?? turn.steps.some((step: any) => step.status === 'streaming')
-      const detailsCount = turn.steps.length
-      const workingTitle = turn.meta?.workingTitle ?? (working ? 'Working' : 'Finished working')
+      const working = turn.status === 'streaming' || (turn.steps || []).some((step: any) => step.status === 'streaming')
+      const detailsCount = (turn.steps || []).length
+      const workingTitle = turn.status === 'failed' ? 'Failed' : turn.status === 'aborted' ? 'Aborted' : working ? 'Working' : 'Finished working'
       return { working, detailsCount, workingTitle }
     }
   }
 }
-

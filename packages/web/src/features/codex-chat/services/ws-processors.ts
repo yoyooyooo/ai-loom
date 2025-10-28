@@ -1,4 +1,5 @@
 import { chatTurnActions, useChatTurnStore } from '../stores/chat-turns'
+import { stripDuplicatedTitle } from '@/features/codex-chat/stores/chat-turns-utils'
 import { parseExploreActions } from '@/features/codex-chat/utils/explore-utils'
 import { createId } from '@/lib/id'
 import { renderPatchDiff } from './ws-render-utils'
@@ -53,12 +54,22 @@ export function createProcessChatEvent(opts: ProcessOptions) {
       }
       case 'chat.message.completed': {
         const text = typeof params.text === 'string' ? params.text : undefined
-        chatTurnActions.completeAssistant(text)
-        // 特殊：Compact task completed 高亮标记
+        // 特殊：Compact task completed → 不结束 turn、不新建 turn，作为 info 步骤插入当前 Turn（不写入 assistant 正文）
         const isCompactDone = (text || '').trim().toLowerCase() === 'compact task completed'
         if (isCompactDone) {
           chatTurnActions.addStep('info', undefined, '[Compact] 任务完成', { status: 'completed', meta: { compactDone: true } })
+          break
         }
+        // 标准：完成 assistant 文本并立即结束该轮（与 Resume 规则一致）
+        try {
+          const st: any = (useChatTurnStore as any).getState?.()
+          const hasActive = !!st?.activeTurnId
+          if (!hasActive) {
+            chatTurnActions.markTurnStarted({})
+          }
+        } catch {}
+        chatTurnActions.completeAssistant(text)
+        chatTurnActions.completeTurn()
         break
       }
       case 'chat.message.failed': {
@@ -86,12 +97,14 @@ export function createProcessChatEvent(opts: ProcessOptions) {
           const st: any = (useChatTurnStore as any).getState?.()
           const turns: any[] = Array.isArray(st?.turns) ? st.turns : []
           const active = turns[turns.length - 1]
-          const dup = !!active?.steps?.some((s: any) => s?.kind === 'thinking' && String(s?.body || '') === text)
+          const first = String(text || '').replace(/\r/g, '').split(/\n/).find((ln) => ln.trim().length > 0) || ''
+          const cleaned = first.replace(/^[\s#>*_`]+/, '').replace(/[\s#*_`]+$/, '').trim()
+          const titleOnly = cleaned || ''
+          const normalizedBody = stripDuplicatedTitle(text, titleOnly)
+          const dup = !!active?.steps?.some((s: any) => s?.kind === 'thinking' && String(s?.body || '') === normalizedBody)
           if (!dup && text) {
-            const first = String(text || '').replace(/\r/g, '').split(/\n/).find((ln) => ln.trim().length > 0) || ''
-            const cleaned = first.replace(/^[\s#>*_`]+/, '').replace(/[\s#*_`]+$/, '').trim()
-            const title = cleaned ? `thinking: ${cleaned}` : 'thinking'
-            chatTurnActions.addStep('thinking', undefined, title, { status: 'completed', body: text, meta: { thinking: true } })
+            const title = titleOnly ? `thinking: ${titleOnly}` : 'thinking'
+            chatTurnActions.addStep('thinking', undefined, title, { status: 'completed', body: normalizedBody, meta: { thinking: true } })
           }
         } catch {
           // 忽略
@@ -104,44 +117,85 @@ export function createProcessChatEvent(opts: ProcessOptions) {
       }
       // Exec tool
       case 'chat.tool.exec.begin': {
+        // 若当前没有活跃 turn，则隐式开启一轮，避免步骤写入已完成的上一轮
+        try {
+          const st: any = (useChatTurnStore as any).getState?.()
+          const active = st?.activeTurnId
+          const last = Array.isArray(st?.turns) && st.turns.length > 0 ? st.turns[st.turns.length - 1] : undefined
+          const hasStreaming = !!(last && last.status === 'streaming')
+          if (!active && !hasStreaming) chatTurnActions.markTurnStarted({})
+        } catch { chatTurnActions.markTurnStarted({}) }
         const command = Array.isArray(params.command) ? params.command.map(String) : []
         const cmdStr = command.join(' ')
         const cwd = typeof params.cwd === 'string' ? params.cwd : ''
         const callId = typeof params.callId === 'string' ? params.callId : createId('exec')
         const acts = parseExploreActions(command, cwd)
         if (acts.length > 0) {
+          let first = true
           for (const action of acts) {
             if (action.kind === 'read') {
               const path = action.path
               const name = path.replace(/\/+$|\/+$/g, '').split('/').pop() || path
               const title = `Read ${name} (lines: ${action.start}-${action.end})`
-              chatTurnActions.addStep('read', undefined, title, {
-                meta: { file: path, start: action.start, end: action.end },
+              chatTurnActions.addStep('read', first ? callId : undefined, title, {
+                meta: { file: path, start: action.start, end: action.end, command, cwd },
                 tags: [name],
                 status: 'completed'
               })
+              first = false
             } else if (action.kind === 'list') {
               const target = action.target ? String(action.target).replace(/\/+$|\/+$/g, '') : undefined
               const name = target ? target.split('/').pop() || target : undefined
               const title = name ? `${action.label} ${name}` : action.label
-              chatTurnActions.addStep('list', undefined, title, {
+              chatTurnActions.addStep('list', first ? callId : undefined, title, {
+                meta: { target, label: action.label, command, cwd },
                 tags: name ? [name] : undefined,
                 status: 'completed'
               })
+              first = false
             } else if (action.kind === 'search') {
               const target = action.target ? String(action.target).replace(/\/+$|\/+$/g, '') : undefined
               const name = target ? target.split('/').pop() || target : undefined
               const base = `Search ${String((action as any).query)}`
               const title = name ? `${base} in ${name}` : base
-              chatTurnActions.addStep('search', undefined, title, {
+              chatTurnActions.addStep('search', first ? callId : undefined, title, {
+                meta: { target, query: (action as any).query, command, cwd },
                 tags: name ? [name] : undefined,
                 status: 'completed'
               })
+              first = false
             }
           }
         }
-        const title = `${cmdStr}${cwd ? ` (cwd=${cwd})` : ''}`
-        chatTurnActions.addStep('exec', callId, title, { meta: { command, cwd } })
+        if (acts.length === 0) {
+          const src = command.join('\n')
+          const isApplyPatch = /apply_patch|applypatch|git\s+apply/i.test(src) || /\*\*\*\s+Begin Patch/.test(src)
+          if (isApplyPatch) {
+            let headPath: string | undefined
+            let adds = 0
+            let dels = 0
+            let patchText = ''
+            try {
+              const m = src.match(/\*\*\*\s+(?:Add|Update|Delete) File:\s+(.+)/)
+              headPath = m ? m[1].trim() : undefined
+              const patchBlockMatch = src.match(/\*\*\*\s+Begin Patch[\s\S]*?\*\*\*\s+End Patch/)
+              patchText = patchBlockMatch ? patchBlockMatch[0] : ''
+              if (patchText) {
+                const lines = patchText.split(/\n/)
+                for (const ln of lines) {
+                  if (ln.startsWith('+')) adds += 1
+                  else if (ln.startsWith('-')) dels += 1
+                }
+              }
+            } catch {}
+            const name = headPath ? headPath.replace(/\/+$/g, '').split('/').pop() || headPath : undefined
+            const title = name ? `patch ${name}` : `patch (apply_patch)`
+            chatTurnActions.addStep('patch', callId, title, { body: patchText, tags: [`+${adds}-${dels}`], meta: { firstPath: headPath, adds, dels, command, cwd } })
+          } else {
+            const title = `${cmdStr}${cwd ? ` (cwd=${cwd})` : ''}`
+            chatTurnActions.addStep('exec', callId, title, { meta: { command, cwd } })
+          }
+        }
         break
       }
       case 'chat.tool.exec.output': {
@@ -160,6 +214,13 @@ export function createProcessChatEvent(opts: ProcessOptions) {
       }
       // Patch tool
       case 'chat.tool.patch.begin': {
+        try {
+          const st: any = (useChatTurnStore as any).getState?.()
+          const active = st?.activeTurnId
+          const last = Array.isArray(st?.turns) && st.turns.length > 0 ? st.turns[st.turns.length - 1] : undefined
+          const hasStreaming = !!(last && last.status === 'streaming')
+          if (!active && !hasStreaming) chatTurnActions.markTurnStarted({})
+        } catch { chatTurnActions.markTurnStarted({}) }
         const p = params as any
         const files = p.files ?? 0
         const callId = typeof p.callId === 'string' ? p.callId : createId('patch')
@@ -167,12 +228,14 @@ export function createProcessChatEvent(opts: ProcessOptions) {
         const headPath = p.firstPath as any
         const adds = p.adds as any
         const dels = p.dels as any
-        const head = headPath ? `${headPath} ${adds != null ? `+${adds}` : ''}${dels != null ? ` -${dels}` : ''}`.trim() : `${files} files`
+        const name = typeof headPath === 'string' ? headPath.replace(/\/+$/g, '').split('/').pop() || headPath : undefined
+        const addNum = typeof adds === 'number' ? adds : 0
+        const delNum = typeof dels === 'number' ? dels : 0
         const extra = headPath && files > 1 ? ` (+${files - 1})` : ''
-        const title = `[patch] ${head}${extra} (${auto})`
+        const title = name ? `patch ${name}${extra}` : `patch ${files} files`
         const changes = p.changes as any
-        // 暂不渲染 diff 正文；后续用 diff editor 替代
-        chatTurnActions.addStep('patch', callId, title, { meta: { files, autoApproved: p.autoApproved, firstPath: headPath, adds, dels, changes } })
+        const body = renderPatchDiff(changes, PATCH_MAX_FILES, PATCH_MAX_CHARS)
+        chatTurnActions.addStep('patch', callId, title, { body, tags: [`+${addNum}-${delNum}`], meta: { files, autoApproved: p.autoApproved, firstPath: headPath, adds, dels, changes } })
         break
       }
       case 'chat.tool.patch.end': {
@@ -183,6 +246,13 @@ export function createProcessChatEvent(opts: ProcessOptions) {
       }
       // MCP
       case 'chat.tool.mcp.begin': {
+        try {
+          const st: any = (useChatTurnStore as any).getState?.()
+          const active = st?.activeTurnId
+          const last = Array.isArray(st?.turns) && st.turns.length > 0 ? st.turns[st.turns.length - 1] : undefined
+          const hasStreaming = !!(last && last.status === 'streaming')
+          if (!active && !hasStreaming) chatTurnActions.markTurnStarted({})
+        } catch { chatTurnActions.markTurnStarted({}) }
         const server = typeof params.server === 'string' ? params.server : ''
         const tool = typeof params.tool === 'string' ? params.tool : ''
         const args = params.arguments

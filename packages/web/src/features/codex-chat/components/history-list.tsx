@@ -14,6 +14,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger
 } from '@/components/ui/alert-dialog'
+import { Button } from '@/components/ui/button'
 import type { ConversationListItem } from '../services/api'
 import { chatApi } from '../services/api'
 import type { HistoryTreeNode } from '../utils/history-tree'
@@ -167,8 +168,7 @@ export function HistoryList({
                     <button
                       className={cn(
                         'relative flex w-full flex-col gap-1 py-3 pr-4 md:pr-6 text-left text-sm',
-                        'transition-[padding,color] duration-200 ease-in-out',
-                        'group-hover:pr-10 group-focus-within:pr-10',
+                        'transition-[color] duration-200 ease-in-out',
                         'hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                         isActive ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground'
                       )}
@@ -177,6 +177,17 @@ export function HistoryList({
                       onClick={() => onSelect?.(item)}
                       title={lineageTip}
                     >
+                      {/* 右侧渐变遮罩：仅在 hover/focus 时出现，避免文字干扰删除按钮视觉 */}
+                      <span
+                        aria-hidden
+                        className={cn(
+                          'pointer-events-none absolute right-0 top-0 h-full w-14',
+                          'bg-gradient-to-l from-background to-transparent',
+                          'opacity-0 transition-opacity duration-200 ease-in-out',
+                          'group-hover:opacity-100 group-focus-within:opacity-100',
+                          'z-10'
+                        )}
+                      />
                       {depth > 0 ? (
                         <span
                           className="pointer-events-none absolute left-3 top-0 h-full border-l border-border/60"
@@ -186,7 +197,9 @@ export function HistoryList({
                       <div className="flex items-center gap-2 text-xs text-muted-foreground/70">
                         {depth > 0 ? <span className="text-muted-foreground">↳</span> : null}
                         {item.model ? <span>{item.model}</span> : null}
-                        {item.parentId ? <span className="text-[10px] uppercase">branch</span> : null}
+                        {item.parentId && depth > 0 ? (
+                          <span className="text-[10px] uppercase">branch</span>
+                        ) : null}
                       </div>
                       <div className="line-clamp-3 text-sm text-foreground">
                         {item.preview || '（无预览）'}
@@ -200,7 +213,7 @@ export function HistoryList({
                         ) : null}
                       </div>
                       {isInProgress ? (
-                        <Loader2 className="absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" />
+                        <Loader2 className="absolute right-4 top-1/2 z-20 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" />
                       ) : null}
                     </button>
                     {onDelete ? (
@@ -234,24 +247,37 @@ export function HistoryList({
                         }}
                       >
                         <AlertDialogTrigger asChild>
-                          <button
-                            type="button"
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
                             className={cn(
-                              'absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground/60',
+                              'absolute right-2 top-1/2 -translate-y-1/2 z-20',
+                              'text-muted-foreground/60',
                               'transition-opacity transition-colors duration-200 ease-in-out',
-                              'hover:bg-muted hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                              'flex opacity-0 pointer-events-none group-hover:opacity-100 group-focus-within:opacity-100 group-hover:pointer-events-auto group-focus-within:pointer-events-auto cursor-pointer'
+                              'hover:text-destructive',
+                              'focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0 focus-visible:border-transparent',
+                              'opacity-0 pointer-events-none group-hover:opacity-100 group-focus-within:opacity-100 group-hover:pointer-events-auto group-focus-within:pointer-events-auto'
                             )}
+                            tabIndex={-1}
+                            onMouseDown={(e) => {
+                              // 阻止默认的 focus 行为，避免按钮获得焦点
+                              e.preventDefault()
+                            }}
                             onClick={(event) => {
-                              event.stopPropagation()
+                              // Shift + 点击：跳过二次确认，直接删除
                               if (event.shiftKey) {
+                                event.preventDefault()
+                                event.stopPropagation()
                                 handleDelete(item, { skipConfirm: true })
+                                return
                               }
+                              // 常规点击：走 AlertDialog 确认
+                              event.stopPropagation()
                             }}
                             aria-label="删除会话"
                           >
                             <Trash2 className="h-4 w-4" />
-                          </button>
+                          </Button>
                         </AlertDialogTrigger>
                         <AlertDialogContent onClick={(event) => event.stopPropagation()}>
                           <AlertDialogHeader>

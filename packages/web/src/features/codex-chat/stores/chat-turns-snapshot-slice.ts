@@ -1,7 +1,7 @@
 import type { Turn, TurnStep } from './chat-turns'
 import { createId } from '@/lib/id'
 import { buildTurnsFromHistory as buildTurnsFromHistoryExternal, applyEventsToTurns as applyEventsToTurnsExternal } from './chat-turns-snapshot'
-import { summarizeFirstLine, nowISO } from './chat-turns-utils'
+import { summarizeFirstLine, nowISO, stripDuplicatedTitle } from './chat-turns-utils'
 
 export function createSnapshotSlice(set: any, get: any) {
   return {
@@ -38,11 +38,12 @@ export function createSnapshotSlice(set: any, get: any) {
         const hasThinking = hasSteps && turn.steps.some((s) => s.kind === 'thinking')
         if (hasReasoning && hasSteps && !hasThinking) {
           const title = summarizeFirstLine(turn.reasoning!.content)
+          const body = stripDuplicatedTitle(turn.reasoning!.content, title)
           turn.steps.push({
             id: createId('thinking'),
             kind: 'thinking',
             title: title ? `thinking: ${title}` : 'thinking',
-            body: turn.reasoning!.content,
+            body,
             status: 'completed',
             ts: nowISO(),
             meta: { thinking: true }

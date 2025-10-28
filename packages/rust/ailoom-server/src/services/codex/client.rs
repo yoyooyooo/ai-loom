@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{anyhow, Result};
@@ -7,8 +8,9 @@ use codex_app_server_protocol::{
     InitializeResponse, InterruptConversationParams, InterruptConversationResponse, JSONRPCError,
     JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, ListConversationsParams,
     ListConversationsResponse, ListModelsParams, ListModelsResponse, NewConversationParams,
-    NewConversationResponse, RequestId, ResumeConversationParams, ResumeConversationResponse,
-    SendUserMessageParams, SendUserMessageResponse, ServerRequest,
+    NewConversationResponse, RemoveConversationListenerParams, RemoveConversationSubscriptionResponse,
+    RequestId, ResumeConversationParams, ResumeConversationResponse, SendUserMessageParams,
+    SendUserMessageResponse, ServerRequest,
 };
 use codex_app_server_protocol::{ExecCommandApprovalResponse, InputItem};
 use codex_protocol::protocol::ReviewDecision;
@@ -26,6 +28,10 @@ use super::transport::{JsonRpcCallbacks, JsonRpcPeer};
 pub struct AppServerClient {
     rpc: OnceLock<JsonRpcPeer>,
     hub: Arc<Mutex<Option<Hub>>>,
+    // conversation_id -> (subscription_id, refcount)
+    subscriptions: Arc<Mutex<HashMap<String, (uuid::Uuid, usize)>>>,
+    // best-effort active set; used for lifecycle hints (release on shutdown)
+    active_conversations: Arc<Mutex<HashSet<String>>>,
 }
 
 impl AppServerClient {
@@ -33,6 +39,8 @@ impl AppServerClient {
         Arc::new(Self {
             rpc: OnceLock::new(),
             hub: Arc::new(Mutex::new(None)),
+            subscriptions: Arc::new(Mutex::new(HashMap::new())),
+            active_conversations: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 
@@ -68,6 +76,57 @@ impl AppServerClient {
         let notification = client_notification(ClientNotification::Initialized)?;
         self.rpc().send_notification(notification).await?;
         Ok(response)
+    }
+
+    /// Ensure a single listener is registered per conversation; increments a refcount.
+    pub async fn ensure_listener(&self, conversation_id: &str) -> Result<()> {
+        // fast path: already subscribed
+        {
+            let mut guard = self.subscriptions.lock().unwrap();
+            if let Some((_sub_id, refcnt)) = guard.get_mut(conversation_id) {
+                *refcnt = refcnt.saturating_add(1);
+                return Ok(());
+            }
+        }
+
+        // register a new listener
+        let resp = self
+            .add_conversation_listener(conversation_id.to_string())
+            .await?;
+        let sub_id = resp.subscription_id;
+        let mut guard = self.subscriptions.lock().unwrap();
+        guard.insert(conversation_id.to_string(), (sub_id, 1));
+        // track as active (best-effort)
+        let mut act = self.active_conversations.lock().unwrap();
+        act.insert(conversation_id.to_string());
+        Ok(())
+    }
+
+    /// Decrement refcount; when reaches zero, remove listener at server.
+    pub async fn release_listener(&self, conversation_id: &str) -> Result<()> {
+        let maybe = {
+            let mut guard = self.subscriptions.lock().unwrap();
+            if let Some((sub_id, refcnt)) = guard.get_mut(conversation_id) {
+                if *refcnt > 1 {
+                    *refcnt -= 1;
+                    return Ok(());
+                }
+                // refcnt == 1: will remove below
+                Some(*sub_id)
+            } else {
+                None
+            }
+        };
+        if let Some(sub_id) = maybe {
+            // best-effort RPC
+            let _ = self.remove_conversation_listener(sub_id).await;
+            let mut guard = self.subscriptions.lock().unwrap();
+            guard.remove(conversation_id);
+        }
+        // also drop from active set
+        let mut act = self.active_conversations.lock().unwrap();
+        act.remove(conversation_id);
+        Ok(())
     }
 
     #[instrument(level = "info", target = "codex.rpc", skip(self, params), fields(model = %params.model.clone().unwrap_or_default()))]
@@ -114,6 +173,21 @@ impl AppServerClient {
             params: Some(serde_json::to_value(params)?),
         };
         self.rpc().request(request, "addConversationListener").await
+    }
+
+    #[instrument(level = "info", target = "codex.rpc", skip(self))]
+    pub async fn remove_conversation_listener(
+        &self,
+        subscription_id: uuid::Uuid,
+    ) -> Result<RemoveConversationSubscriptionResponse> {
+        let id = self.rpc().next_request_id();
+        let params = RemoveConversationListenerParams { subscription_id };
+        let request = JSONRPCRequest {
+            id,
+            method: "removeConversationListener".into(),
+            params: Some(serde_json::to_value(params)?),
+        };
+        self.rpc().request(request, "removeConversationListener").await
     }
 
     #[instrument(level = "info", target = "codex.rpc", skip(self, text), fields(conversation_id = %conversation_id))]
@@ -238,6 +312,41 @@ impl JsonRpcCallbacks for AppServerClient {
         notification: JSONRPCNotification,
     ) -> Result<bool> {
         tracing::info!(target:"codex.rpc", method=%notification.method, "rpc ⇐ notification");
+        // Lifecycle tracking: add/remove active conversations & auto-release listeners on shutdown
+        // We inspect the raw notification before mapping/broadcasting.
+        if notification.method == "codex/sessionConfigured" {
+            if let Some(params) = notification.params.as_ref() {
+                if let Some(cid) = params
+                    .as_object()
+                    .and_then(|m| m.get("conversationId"))
+                    .and_then(|v| v.as_str())
+                {
+                    let mut act = self.active_conversations.lock().unwrap();
+                    act.insert(cid.to_string());
+                }
+            }
+        }
+        if notification.method.starts_with("codex/event/") {
+            // Expect params like { conversationId, msg: { type: "shutdown_complete", ... }, ... }
+            if let Some(params) = notification.params.as_ref() {
+                let obj = params.as_object();
+                let cid_opt = obj
+                    .and_then(|m| m.get("conversationId"))
+                    .and_then(|v| v.as_str());
+                let msg_type = obj
+                    .and_then(|m| m.get("msg"))
+                    .and_then(|v| v.as_object())
+                    .and_then(|m| m.get("type"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if msg_type == "shutdown_complete" {
+                    if let Some(cid) = cid_opt {
+                        // best-effort: release listener when session shuts down
+                        let _ = self.release_listener(cid).await;
+                    }
+                }
+            }
+        }
         if let Some(hub) = self.hub.lock().unwrap().clone() {
             for BroadcastEvent { method, params } in map_notification(&notification) {
                 hub.broadcast(method, params);

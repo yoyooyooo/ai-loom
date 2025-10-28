@@ -1,19 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { useInfiniteQuery, useQuery, type InfiniteData } from '@tanstack/react-query'
+import { useInfiniteQuery, type InfiniteData } from '@tanstack/react-query'
 import { HistoryList } from '@/features/codex-chat/components/history-list'
 import { CodexChatPanel } from '@/features/codex-chat/components/chat-panel'
-import type {
-  ConversationListItem,
-  ChatHistoryItem,
-  ResumeConversationResponse
-} from '@/features/codex-chat/services/api'
+import type { ConversationListItem } from '@/features/codex-chat/services/api'
 import { chatApi } from '@/features/codex-chat/services/api'
 import { chatTurnActions, useChatTurnStore } from '@/features/codex-chat/stores/chat-turns'
 import type { ResumeBanner } from '@/features/codex-chat/types'
 import { buildHistoryTree } from '@/features/codex-chat/utils/history-tree'
 import { codexChatProviderActions } from '@/stores/codex-chat-provider'
-import { deriveResumeCapabilities, deriveResumeOverrides } from '@/features/codex-chat/utils/resume-config'
+import { useResumeAndPoll } from '@/features/codex-chat/services/resume-manager'
 
 type ConversationListPage = { items: ConversationListItem[]; nextCursor?: string | null }
 const encodeParam = (segment: string) => encodeURIComponent(segment)
@@ -33,9 +29,11 @@ export default function ChatPage() {
     conversationId: state.conversationId,
     generating: state.generating
   }))
-  const [banner, setBanner] = useState<ResumeBanner>(null)
-  const skipResumeRef = useRef<string | null>(null)
-  const resumeProcessedRef = useRef<string | null>(null)
+  const routeConversationKey = useMemo(() => decodeParam(params.conversationId), [params.conversationId])
+  const { banner, setBanner, pendingConversationId, notifyConversationCreated } = useResumeAndPoll(
+    routeConversationKey,
+    { navigate: (to, options) => navigate(to, options) }
+  )
 
   const {
     data,
@@ -66,7 +64,6 @@ export default function ChatPage() {
   )
   const historyNodes = useMemo(() => buildHistoryTree(historyItems), [historyItems])
 
-  const routeConversationKey = useMemo(() => decodeParam(params.conversationId), [params.conversationId])
   const computedActiveConversationId = routeConversationKey ?? conversationId
 
   useEffect(() => {
@@ -74,108 +71,14 @@ export default function ChatPage() {
       chatTurnActions.reset()
       codexChatProviderActions.resetSession(undefined)
       setBanner(null)
-      resumeProcessedRef.current = null
     }
-  }, [routeConversationKey])
-
-  const allowResume = Boolean(routeConversationKey && skipResumeRef.current !== routeConversationKey)
-
-  const resumeQuery = useQuery<ResumeConversationResponse, Error>({
-    queryKey: ['chat', 'session', routeConversationKey] as const,
-    enabled: allowResume,
-    staleTime: 0,
-    queryFn: async () => {
-      if (!routeConversationKey) throw new Error('缺少会话 ID')
-      return chatApi.resumeByConversationId(routeConversationKey)
-    }
-  })
-
-  useEffect(() => {
-    if (!routeConversationKey && skipResumeRef.current) {
-      skipResumeRef.current = null
-    }
-    if (routeConversationKey && skipResumeRef.current && routeConversationKey !== skipResumeRef.current) {
-      skipResumeRef.current = null
-    }
-  }, [routeConversationKey])
-
-  useEffect(() => {
-    setBanner(null)
-  }, [routeConversationKey])
-
-  useEffect(() => {
-    const result = resumeQuery.data
-    if (!result) return
-    if (resumeProcessedRef.current === result.conversationId) return
-    resumeProcessedRef.current = result.conversationId
-    chatTurnActions.reset()
-    codexChatProviderActions.resetSession(result.conversationId)
-    chatTurnActions.setConversationId(result.conversationId)
-    ;(async () => {
-      const history = (result.history ?? []).map((entry) => ({
-        role: entry.role,
-        text: entry.text ?? '',
-        reasoning: entry.reasoning ?? undefined
-      }))
-      let events = (result.events ?? []).map((entry) => ({
-        method: entry?.method || '',
-        params: entry?.params ?? undefined
-      }))
-      if (events.length === 0) {
-        try {
-          const debug = await chatApi.debugCodex({ limit: 800, includeChat: true })
-          const arr = Array.isArray((debug as any)?.events) ? (debug as any).events : []
-          // 仅取归一化后的 chat.* 且 conversationId 匹配的事件
-          events = arr
-            .filter((e: any) => typeof e?.method === 'string' && e.method.startsWith('chat.'))
-            .filter((e: any) => !result.conversationId || e?.params?.conversationId == null || e.params.conversationId === result.conversationId)
-            .map((e: any) => ({ method: e.method as string, params: e.params as Record<string, unknown> | undefined }))
-        } catch (error) {
-          console.warn('[chat] debugCodex fetch events failed', error)
-        }
-      }
-      chatTurnActions.loadSnapshot(history, events)
-    })()
-
-    const resumeConfig = result.config ?? null
-    if (resumeConfig) {
-      const overridePatch = deriveResumeOverrides(resumeConfig)
-      if (Object.keys(overridePatch).length > 0) {
-        codexChatProviderActions.setOverrides(undefined, overridePatch)
-        codexChatProviderActions.setOverrides(result.conversationId, overridePatch)
-      }
-      const capabilityPatch = deriveResumeCapabilities(resumeConfig)
-      if (Object.keys(capabilityPatch).length > 0) {
-        codexChatProviderActions.setCapabilities(undefined, capabilityPatch)
-        codexChatProviderActions.setCapabilities(result.conversationId, capabilityPatch)
-      }
-    }
-
-    setBanner({ kind: 'info', message: '已恢复到历史会话' })
-    // 恢复成功后刷新历史列表，以便出现新 fork 的会话并附带 lineage
-    try {
-      void refetch()
-    } catch {}
-    if (result.conversationId && result.conversationId !== routeConversationKey) {
-      navigate(`/chat/${encodeParam(result.conversationId)}`, { replace: true })
-    }
-  }, [resumeQuery.data, routeConversationKey, navigate])
-
-  useEffect(() => {
-    if (!resumeQuery.error) return
-    const message = (resumeQuery.error as Error)?.message ?? '恢复会话失败'
-    setBanner({ kind: 'error', message })
-    navigate('/chat', { replace: true })
-  }, [resumeQuery.error, navigate])
-
-  const pendingConversationId = resumeQuery.isFetching ? routeConversationKey : null
+  }, [routeConversationKey, setBanner])
 
   const inProgressConversationId = generating ? (computedActiveConversationId ?? undefined) : undefined
 
   const handleConversationCreated = useCallback(
     async (newId: string) => {
-      skipResumeRef.current = newId
-      resumeProcessedRef.current = null
+      notifyConversationCreated(newId)
       setBanner(null)
       navigate(`/chat/${encodeParam(newId)}`)
       try {
@@ -184,7 +87,7 @@ export default function ChatPage() {
         console.warn('[chat] history refetch failed', error)
       }
     },
-    [navigate, refetch]
+    [navigate, refetch, notifyConversationCreated, setBanner]
   )
 
   const handleSelectHistory = useCallback(
@@ -208,7 +111,6 @@ export default function ChatPage() {
         chatTurnActions.completeTurn()
       }
 
-      resumeProcessedRef.current = null
       setBanner(null)
 
       if (routeConversationKey !== key) {

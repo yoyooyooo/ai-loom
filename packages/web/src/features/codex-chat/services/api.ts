@@ -72,6 +72,8 @@ export type ResumeConversationResponse = {
   // 可选：服务器直接返回归一化后的 chat.* 事件（便于前端在 resume 时重建 steps）
   events?: Array<{ method: string; params?: Record<string, unknown> | null }>
   config?: ResumeConfigSnapshot | null
+  // 仅用于提示是否“可能仍在进行中”（基于 rollout 尾部 + 空闲阈值的启发式判断）
+  inProgress?: boolean
 }
 
 export type NewConversationOverrides = {
@@ -161,7 +163,7 @@ export const chatApi = {
         method: 'POST',
         url: `/api/chat/conversations/${encodeURIComponent(conversationId)}/messages`,
         data: { text },
-        timeoutMs: 60_000,
+        timeoutMs: 180_000,
         retries: 1,
         backoffMs: 800
       })
@@ -172,14 +174,17 @@ export const chatApi = {
       throw toHttpError(e, 'sendMessage failed')
     }
   },
-  async interrupt(conversationId: string) {
+  async interrupt(conversationId: string, opts?: { awaitTurnAborted?: boolean; timeoutMs?: number }) {
     try {
-      await rxRequest({
+      const qs = opts?.awaitTurnAborted ? '?await=turnAborted' : ''
+      const timeoutMs = opts?.timeoutMs ?? 15_000
+      const res = await rxRequest<{ abortReason?: string } | undefined>({
         method: 'POST',
-        url: `/api/chat/conversations/${encodeURIComponent(conversationId)}/interrupt`,
-        timeoutMs: 15_000,
+        url: `/api/chat/conversations/${encodeURIComponent(conversationId)}/interrupt${qs}`,
+        timeoutMs,
         retries: 0
       })
+      return res.data
     } catch (e) {
       throw toHttpError(e, 'interrupt failed')
     }
@@ -200,12 +205,13 @@ export const chatApi = {
     }
   },
   async resumeByConversationId(
-    conversationId: string
+    conversationId: string,
+    opts?: { includeHistory?: boolean }
   ): Promise<ResumeConversationResponse> {
     try {
       const res = await rxRequest<ResumeConversationResponse>({
         method: 'POST',
-        url: `/api/chat/conversations/resume`,
+        url: `/api/chat/conversations/resume${opts?.includeHistory ? '?includeHistory=true' : ''}`,
         data: { conversationId },
         timeoutMs: 8_000,
         retries: 0

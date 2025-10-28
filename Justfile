@@ -31,6 +31,10 @@ web-dev:
 web-typecheck:
   pnpm -C {{WEB_DIR}} exec tsc -p tsconfig.json --noEmit
 
+# 前端单元测试（Vitest）
+web-test:
+  pnpm -C {{WEB_DIR}} test -s
+
 # Codex 类型生成（TS + JSON Schema）
 codex-codegen TS_DIR='packages/web/src/lib/codex-types' JSON_DIR='docs/specs/codex':
   cargo run -p {{SERVER_BIN}} --bin codegen-codex-types -- --ts-out "{{TS_DIR}}" --json-out "{{JSON_DIR}}"

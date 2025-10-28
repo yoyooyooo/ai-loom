@@ -3,24 +3,12 @@ import { QueryClient } from '@tanstack/react-query'
 import { Subject } from 'rxjs'
 
 vi.useFakeTimers()
-
-vi.mock('@/lib/ws/singleton', () => {
-  const subjects = new Map<string, Subject<any>>()
-  const ws = {
-    enabled: true,
-    notification$: (m: string) => {
-      if (!subjects.has(m)) subjects.set(m, new Subject<any>())
-      return subjects.get(m)!.asObservable()
-    },
-    __get: (m: string) => subjects.get(m) || null
-  }
-  return { ws }
-})
+vi.mock('@/lib/ws/singleton')
 
 import { installFileInvalidator } from './file-invalidator'
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore test-only access
-import { ws as mockedWs } from '@/lib/ws/singleton'
+import { ws as mockedWs, __emit } from '@/lib/ws/singleton'
 
 describe('file-invalidator', () => {
   let qc: QueryClient
@@ -31,10 +19,9 @@ describe('file-invalidator', () => {
   it('dedups file.changed and invalidates file + containing dir tree', async () => {
     const spy = vi.spyOn(qc, 'invalidateQueries')
     const cleanup = installFileInvalidator(qc, { getCurrentRoot: () => '.' })
-    const fileChanged = (mockedWs as any).__get('file.changed') as Subject<any>
     // emit digest event then a quick duplicate without digest
-    fileChanged.next({ path: 'src/a.txt', digest: 'abc' })
-    fileChanged.next({ path: 'src/a.txt' })
+    __emit('file.changed', { path: 'src/a.txt', digest: 'abc' })
+    __emit('file.changed', { path: 'src/a.txt' })
     vi.runAllTimers()
 
     const calls = spy.mock.calls.map((c) => c[0])
