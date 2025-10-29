@@ -10,18 +10,19 @@
 
 ## 实时（WS）路径
 
-1) 事件归一化
-- 文件：`packages/web/src/features/codex-chat/services/ws-normalize.ts:36`
-- 将 `codex/event/*` 归一化为 `chat.*` 方法，例如：
+1) 事件归一化（服务端）
+- 文件：`packages/rust/ailoom-server/src/services/codex/bridge.rs:62`
+- 将 `codex/event/*` 归一化为平台层 `chat.*` 并附带 `conversationId` 后入环，例如：
   - `codex/event/agent_message` → `chat.message.completed`（当文本为 `Compact task completed` 时标记特殊态用于后续高亮）。
 
-2) 事件处理
+2) 事件处理（前端）
 - 文件：`packages/web/src/features/codex-chat/services/ws-processors.ts:54`
 - 核心映射：
   - `chat.turn.started` → `markTurnStarted`
   - `chat.message.delta` → `appendAssistantDelta`
   - `chat.message.completed` → `completeAssistant`
-  - `chat.reasoning.*` → `appendReasoning` / `endReasoning`
+- `chat.reasoning.delta` → `appendReasoning`（Rx 微批在 `delta-streams.ts` 中完成）
+- `chat.reasoning.end` → `endReasoning`
   - `chat.tool.*`（exec/patch/mcp）→ `addStep/appendStep/endStep`
   - `chat.turn.complete` → `completeTurn`
 
@@ -89,7 +90,7 @@
 
 ### Rx 批处理与缺失 started 的隐式开启
 
-- 在启用 Rx 微批（agent_message_delta/agent_reasoning_delta）时，若未收到 `chat.turn.started`，首条“内容事件”（delta）到达即隐式触发 `beginTurn()`，确保与“开始优先级”一致。
+- 在启用 Rx 微批（`chat.message.delta`/`chat.reasoning.delta`）时，若未收到 `chat.turn.started`，首条“内容事件”（delta）到达即隐式触发 `beginTurn()`，确保与“开始优先级”一致。
 - `agent_message.completed`（非 Compact）到达时，立即完成助手文本并结束本轮（`completeAssistant` + `completeTurn`）；`chat.turn.complete` 作为确认型收尾（幂等）。
 
 实现差异说明（与历史描述的偏差）
@@ -468,7 +469,7 @@ Store API（面向事件，简要）：
 ## 性能与渲染建议（流式优化）
 
 来自历史统一化文档的经验沉淀：
-- RxJS 微批：对高频 `agent_message_delta` / `agent_reasoning_delta` 做 `bufferTime(≈16ms)` 再写入 Store（测试环境可关闭），明显减少 setState 次数。
+- RxJS 微批：对高频 `chat.message.delta` / `chat.reasoning.delta` 做 `bufferTime(≈16ms)` 再写入 Store（测试环境可关闭），明显减少 setState 次数。
 - 事件去重：对 `codex/event/*` 使用 `method#eventId` 粗粒度去重；允许相同 `eventId` 的不同 `method` 帧。
 - Streaming 阶段渲染简化：不做重度 Markdown 拆块/高亮；完成后再做完整解析。
 - 历史回放：首屏仅在本地无 turns 时落 `chat.session.history` 骨架，避免“新会话 + initialMessages”重复。

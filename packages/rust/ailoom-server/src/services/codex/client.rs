@@ -8,9 +8,9 @@ use codex_app_server_protocol::{
     InitializeResponse, InterruptConversationParams, InterruptConversationResponse, JSONRPCError,
     JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, ListConversationsParams,
     ListConversationsResponse, ListModelsParams, ListModelsResponse, NewConversationParams,
-    NewConversationResponse, RemoveConversationListenerParams, RemoveConversationSubscriptionResponse,
-    RequestId, ResumeConversationParams, ResumeConversationResponse, SendUserMessageParams,
-    SendUserMessageResponse, ServerRequest,
+    NewConversationResponse, RemoveConversationListenerParams,
+    RemoveConversationSubscriptionResponse, RequestId, ResumeConversationParams,
+    ResumeConversationResponse, SendUserMessageParams, SendUserMessageResponse, ServerRequest,
 };
 use codex_app_server_protocol::{ExecCommandApprovalResponse, InputItem};
 use codex_protocol::protocol::ReviewDecision;
@@ -21,7 +21,7 @@ use tracing::instrument;
 
 use crate::ws::hub::Hub;
 
-use super::bridge::{map_notification, BroadcastEvent};
+use super::bridge::{map_notification, map_notification_to_chat_events, BroadcastEvent};
 use super::transport::{JsonRpcCallbacks, JsonRpcPeer};
 
 #[derive(Clone)]
@@ -187,7 +187,9 @@ impl AppServerClient {
             method: "removeConversationListener".into(),
             params: Some(serde_json::to_value(params)?),
         };
-        self.rpc().request(request, "removeConversationListener").await
+        self.rpc()
+            .request(request, "removeConversationListener")
+            .await
     }
 
     #[instrument(level = "info", target = "codex.rpc", skip(self, text), fields(conversation_id = %conversation_id))]
@@ -348,8 +350,29 @@ impl JsonRpcCallbacks for AppServerClient {
             }
         }
         if let Some(hub) = self.hub.lock().unwrap().clone() {
-            for BroadcastEvent { method, params } in map_notification(&notification) {
-                hub.broadcast(method, params);
+            for BroadcastEvent {
+                method,
+                params,
+                persistent,
+            } in map_notification_to_chat_events(&notification)
+            {
+                if persistent {
+                    hub.broadcast(method, params);
+                } else {
+                    hub.broadcast_ephemeral(method, params);
+                }
+            }
+            for BroadcastEvent {
+                method,
+                params,
+                persistent,
+            } in map_notification(&notification)
+            {
+                if persistent {
+                    hub.broadcast(method, params);
+                } else {
+                    hub.broadcast_ephemeral(method, params);
+                }
             }
         }
         Ok(false)

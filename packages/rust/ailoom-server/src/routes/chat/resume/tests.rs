@@ -1,8 +1,8 @@
 #![cfg(test)]
+use super::config::build_resume_config;
 use super::history::convert_history_item;
 use super::rollout_parser::parse_rollout;
 use super::rollout_parser::rollout_in_progress;
-use super::config::build_resume_config;
 use crate::ws::chat_events::{event, ChatEvent};
 use codex_protocol::config_types::SandboxMode;
 use serde_json::json;
@@ -10,12 +10,20 @@ use std::path::Path;
 
 fn load_fixture(name: &str) -> &'static str {
     match name {
-        "workspace_write" => { include_str!("../../../../tests/fixtures/rollouts/workspace_write.jsonl") }
-        "environment_only" => { include_str!("../../../../tests/fixtures/rollouts/environment_only.jsonl") }
-        "danger_full_access" => { include_str!("../../../../tests/fixtures/rollouts/danger_full_access.jsonl") }
+        "workspace_write" => {
+            include_str!("../../../../tests/fixtures/rollouts/workspace_write.jsonl")
+        }
+        "environment_only" => {
+            include_str!("../../../../tests/fixtures/rollouts/environment_only.jsonl")
+        }
+        "danger_full_access" => {
+            include_str!("../../../../tests/fixtures/rollouts/danger_full_access.jsonl")
+        }
         "no_context" => include_str!("../../../../tests/fixtures/rollouts/no_context.jsonl"),
         "turn_basic" => include_str!("../../../../tests/fixtures/rollouts/turn_basic.jsonl"),
-        "consecutive_agent" => { include_str!("../../../../tests/fixtures/rollouts/consecutive_agent.jsonl") }
+        "consecutive_agent" => {
+            include_str!("../../../../tests/fixtures/rollouts/consecutive_agent.jsonl")
+        }
         "failed_abort" => include_str!("../../../../tests/fixtures/rollouts/failed_abort.jsonl"),
         _ => unreachable!("unknown fixture {name}"),
     }
@@ -92,9 +100,27 @@ fn map_failed_and_aborted_turns() {
         .iter()
         .map(|(ev, _)| event(ev.clone()).0)
         .collect();
-    assert!(methods.iter().filter(|m| m.as_str() == "chat.message.failed").count() >= 1);
-    assert!(methods.iter().filter(|m| m.as_str() == "chat.message.aborted").count() >= 1);
-    assert!(methods.iter().filter(|m| m.as_str() == "chat.turn.complete").count() >= 2);
+    assert!(
+        methods
+            .iter()
+            .filter(|m| m.as_str() == "chat.message.failed")
+            .count()
+            >= 1
+    );
+    assert!(
+        methods
+            .iter()
+            .filter(|m| m.as_str() == "chat.message.aborted")
+            .count()
+            >= 1
+    );
+    assert!(
+        methods
+            .iter()
+            .filter(|m| m.as_str() == "chat.turn.complete")
+            .count()
+            >= 2
+    );
 }
 
 #[test]
@@ -116,7 +142,10 @@ fn build_resume_config_environment_only() {
     assert_eq!(response.approval_policy.as_deref(), Some("untrusted"));
     assert_eq!(response.sandbox.as_ref().unwrap().mode, "read-only");
     assert_eq!(overrides.sandbox_mode, Some(SandboxMode::ReadOnly));
-    assert_eq!(overrides.cwd.as_deref(), Some(Path::new("/Users/test/readonly")));
+    assert_eq!(
+        overrides.cwd.as_deref(),
+        Some(Path::new("/Users/test/readonly"))
+    );
 }
 
 #[test]
@@ -124,7 +153,10 @@ fn build_resume_config_danger_full_access() {
     let content = load_fixture("danger_full_access");
     let parsed = parse_rollout(content);
     let (_overrides, response) = build_resume_config(&parsed.snapshot);
-    assert_eq!(response.sandbox.as_ref().unwrap().mode, "danger-full-access");
+    assert_eq!(
+        response.sandbox.as_ref().unwrap().mode,
+        "danger-full-access"
+    );
 }
 
 #[test]
@@ -183,7 +215,11 @@ fn exec_event_path_with_output_before_begin() {
 {"type":"event_msg","payload":{"type":"exec_command_end","call_id":"c2","exit_code":0}}
 "#;
     let parsed = parse_rollout(content);
-    let methods: Vec<String> = parsed.events.iter().map(|(ev, _)| event(ev.clone()).0).collect();
+    let methods: Vec<String> = parsed
+        .events
+        .iter()
+        .map(|(ev, _)| event(ev.clone()).0)
+        .collect();
     // TurnStarted, ToolExecBegin (placeholder), ToolExecOutput, ToolExecEnd
     assert!(methods.len() >= 4);
     assert_eq!(methods[0], "chat.turn.started");
@@ -199,7 +235,11 @@ fn mcp_event_path_begin_end() {
 {"type":"event_msg","payload":{"type":"mcp_tool_call_end","call_id":"m1","invocation":{"server":"sv","tool":"tl","arguments":{"q":1}},"result":{"ok":true}}}
 "#;
     let parsed = parse_rollout(content);
-    let methods: Vec<String> = parsed.events.iter().map(|(ev, _)| event(ev.clone()).0).collect();
+    let methods: Vec<String> = parsed
+        .events
+        .iter()
+        .map(|(ev, _)| event(ev.clone()).0)
+        .collect();
     assert!(methods.contains(&"chat.tool.mcp.begin".to_string()));
     assert!(methods.contains(&"chat.tool.mcp.end".to_string()));
 }
@@ -212,7 +252,11 @@ fn mcp_response_item_function_call_and_output() {
 {"type":"response_item","payload":{"type":"function_call_output","call_id":"mid","output":"{\"output\":\"{\\\"ok\\\":true}\"}"}}
 "#;
     let parsed = parse_rollout(content);
-    let methods: Vec<String> = parsed.events.iter().map(|(ev, _)| event(ev.clone()).0).collect();
+    let methods: Vec<String> = parsed
+        .events
+        .iter()
+        .map(|(ev, _)| event(ev.clone()).0)
+        .collect();
     assert!(methods.contains(&"chat.tool.mcp.begin".to_string()));
     assert!(methods.contains(&"chat.tool.mcp.end".to_string()));
 }
@@ -225,7 +269,11 @@ fn mcp_response_item_legacy_name_mcp_prefix_double_underscore() {
 {"type":"response_item","payload":{"type":"function_call_output","call_id":"mid","output":"{\"output\":\"{\\\"ok\\\":true}\"}"}}
 "#;
     let parsed = parse_rollout(content);
-    let methods: Vec<String> = parsed.events.iter().map(|(ev, _)| event(ev.clone()).0).collect();
+    let methods: Vec<String> = parsed
+        .events
+        .iter()
+        .map(|(ev, _)| event(ev.clone()).0)
+        .collect();
     assert!(methods.contains(&"chat.tool.mcp.begin".to_string()));
     assert!(methods.contains(&"chat.tool.mcp.end".to_string()));
 }
@@ -271,7 +319,11 @@ fn mcp_response_item_legacy_name_colon_slash() {
 {"type":"response_item","payload":{"type":"function_call_output","call_id":"mid","output":"{\"output\":\"{\\\"ok\\\":true}\"}"}}
 "#;
     let parsed = parse_rollout(content);
-    let methods: Vec<String> = parsed.events.iter().map(|(ev, _)| event(ev.clone()).0).collect();
+    let methods: Vec<String> = parsed
+        .events
+        .iter()
+        .map(|(ev, _)| event(ev.clone()).0)
+        .collect();
     assert!(methods.contains(&"chat.tool.mcp.begin".to_string()));
     assert!(methods.contains(&"chat.tool.mcp.end".to_string()));
 }
@@ -283,7 +335,11 @@ fn shell_function_call_output_without_metadata_still_ends() {
 {"type":"response_item","payload":{"type":"function_call_output","call_id":"sid","output":"{\"output\":\"hi\\n\"}"}}
 "#;
     let parsed = parse_rollout(content);
-    let methods: Vec<String> = parsed.events.iter().map(|(ev, _)| event(ev.clone()).0).collect();
+    let methods: Vec<String> = parsed
+        .events
+        .iter()
+        .map(|(ev, _)| event(ev.clone()).0)
+        .collect();
     assert!(methods.contains(&"chat.tool.exec.begin".to_string()));
     assert!(methods.contains(&"chat.tool.exec.output".to_string()));
     // finish() should flush a synthetic exec.end when metadata is absent
@@ -295,26 +351,43 @@ fn parse_real_codex_sessions_if_available() {
     use std::fs;
     use std::path::PathBuf;
     let root = PathBuf::from("/Users/yoyo/.codex/sessions");
-    if !root.exists() { return; }
+    if !root.exists() {
+        return;
+    }
     let mut checked = 0usize;
     let mut ok = false;
     let mut stack = vec![root];
     while let Some(dir) = stack.pop() {
-        if checked >= 3 { break; }
-        let Ok(rd) = fs::read_dir(&dir) else { continue; };
+        if checked >= 3 {
+            break;
+        }
+        let Ok(rd) = fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in rd.flatten() {
             let path = entry.path();
-            if path.is_dir() { stack.push(path); continue; }
-            if path.extension().and_then(|s| s.to_str()) != Some("jsonl") { continue; }
-            let Ok(content) = fs::read_to_string(&path) else { continue; };
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let Ok(content) = fs::read_to_string(&path) else {
+                continue;
+            };
             let _parsed = parse_rollout(&content);
             ok = true;
             checked += 1;
-            if checked >= 3 { break; }
+            if checked >= 3 {
+                break;
+            }
         }
     }
     // 如果没有找到任何 jsonl，直接返回不失败
-    if !ok { return; }
+    if !ok {
+        return;
+    }
 }
 
 #[test]

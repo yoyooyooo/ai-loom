@@ -2,7 +2,7 @@ use crate::state::AppState;
 use crate::ws::chat_events::{event, ChatEvent, ChatHistoryEntry};
 use serde_json::{json, Value};
 
-use super::types::{ResumeEventPayload};
+use super::types::ResumeEventPayload;
 
 pub fn into_resume_event_payload(tuple: (ChatEvent, Option<usize>)) -> ResumeEventPayload {
     let (chat_event, turn_seq) = tuple;
@@ -33,14 +33,13 @@ pub fn broadcast_resume(state: &AppState, conversation_id: &str, history: &[Chat
         let (m, p) = event(ChatEvent::SessionResumed {
             conversation_id: conversation_id.to_string(),
         });
-        hub.broadcast(m, p);
+        hub.broadcast_ephemeral(m, p);
         if !history.is_empty() {
             let (hm, hp) = event(ChatEvent::SessionHistory {
                 conversation_id: conversation_id.to_string(),
                 messages: history.to_vec(),
             });
-            hub.broadcast(hm, hp);
+            hub.broadcast_ephemeral(hm, hp);
         }
     }
 }
-

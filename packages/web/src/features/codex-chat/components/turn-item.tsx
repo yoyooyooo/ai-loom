@@ -52,13 +52,18 @@ function StepIcon({ kind }: { kind: TurnStep['kind'] }) {
 }
 
 function buildExecTitle(step: TurnStep): string {
-  const raw = Array.isArray(step.meta?.command)
-    ? (step.meta?.command as string[]).join('\n')
-    : String(step.title || '')
-  const isPatch = /apply_patch|applypatch|git\s+apply/i.test(raw) || /\*\*\*\s+Begin Patch/.test(raw)
+  const command = Array.isArray(step.meta?.command)
+    ? (step.meta?.command as string[]).map((part) => String(part))
+    : undefined
+  const head = command?.[0] || ''
+  const flag = command?.[1] || ''
+  const isShellWrapper = /(?:^|\/)(?:ba?sh|zsh|sh)$/.test(head) && (flag === '-lc' || flag === '-c')
+  const shellScript = isShellWrapper && command && command.length >= 3 ? command.slice(2).join('\n').trim() : ''
+  const detectionSource = shellScript || (command ? command.join('\n') : String(step.title || ''))
+  const isPatch = /apply_patch|applypatch|git\s+apply/i.test(detectionSource) || /\*\*\*\s+Begin Patch/.test(detectionSource)
   if (isPatch) {
     try {
-      const m = raw.match(/\*\*\*\s+(?:Add|Update|Delete) File:\s+(.+)/)
+      const m = detectionSource.match(/\*\*\*\s+(?:Add|Update|Delete) File:\s+(.+)/)
       const headPath = m ? m[1].trim() : ''
       const name = headPath ? headPath.replace(/\/+$/g, '').split('/').pop() || headPath : ''
       return name ? `patch ${name}` : 'patch (apply_patch)'
@@ -66,9 +71,14 @@ function buildExecTitle(step: TurnStep): string {
       return 'patch (apply_patch)'
     }
   }
-  const first = raw.replace(/\r/g, '').split(/\n/)[0] || ''
-  const compact = first.length > 120 ? `${first.slice(0, 120)}…` : first
-  return compact || 'exec'
+  const fallback = command ? command.join(' ') : String(step.title || '')
+  const base = (shellScript || '').trim() ? shellScript : fallback
+  const firstLine = base.replace(/\r/g, '').split(/\n/)[0] || ''
+  if (!firstLine) return 'exec'
+  if (shellScript) {
+    return firstLine.length > 120 ? `${firstLine.slice(0, 120)}…` : firstLine
+  }
+  return firstLine
 }
 
 function renderReadLikeIO(step: TurnStep, turn: Turn) {

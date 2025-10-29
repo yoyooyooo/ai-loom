@@ -28,9 +28,13 @@ export function buildTurnsFromHistory(history: SnapshotHistoryItem[], conversati
     if ((current as any).reasoning && !(current as any).reasoning.title) {
       ;(current as any).reasoning.title = summarizeFirstLine((current as any).reasoning.content)
     }
-    if (!current.completedAt) current.completedAt = nowISO()
-    if (current.status !== 'failed' && current.status !== 'aborted') {
-      current.status = 'completed'
+    // 若只有用户消息（无 assistant 文本、无步骤），视为“进行中”，保持 streaming，方便刷新后继续写入同一轮
+    const onlyUser = !((current as any).assistant?.text || '').trim() && (!Array.isArray((current as any).steps) || (current as any).steps.length === 0)
+    if (!onlyUser) {
+      if (!current.completedAt) current.completedAt = nowISO()
+      if (current.status !== 'failed' && current.status !== 'aborted') {
+        current.status = 'completed'
+      }
     }
     turns.push(current)
     current = undefined
@@ -80,12 +84,14 @@ export function buildTurnsFromHistory(history: SnapshotHistoryItem[], conversati
   return { turns, nextSeq: seq }
 }
 
-export function applyEventsToTurns(turns: Turn[], events: SnapshotEvent[]) {
-  if (!events || events.length === 0) return
+export function applyEventsToTurns(turns: Turn[], events: SnapshotEvent[]): Record<string, { turnId: string; stepId: string }> {
+  const toolIndex = new Map<string, { turnIdx: number; stepIdx: number }>()
+  if (!events || events.length === 0) {
+    return {}
+  }
   let turnIdx = 0
   let target: Turn | undefined = turns[turnIdx]
   let nextSeq = Math.max(0, ...turns.map((t) => t.seq))
-  const toolIndex = new Map<string, { turnIdx: number; stepIdx: number }>()
   // 记录语义化（read/list/search）步骤索引，用于输出/收尾同步
   const semanticIndex = new Map<string, { turnIdx: number; stepIdxs: number[] }>()
 
@@ -376,20 +382,20 @@ export function applyEventsToTurns(turns: Turn[], events: SnapshotEvent[]) {
               const path = action.path
               const name = path.replace(/\/+$/g, '').split('/').pop() || path
               const title = `Read ${name} (lines: ${action.start}-${action.end})`
-              t.steps.push({ id: createId('read'), kind: 'read', title, status: 'completed', ts: nowISO(), meta: { file: path, start: action.start, end: action.end, command, cwd } } as any)
+              t.steps.push({ id: createId('read'), kind: 'read', title, status: 'completed', ts: nowISO(), meta: { file: path, start: action.start, end: action.end, command, cwd, callId } } as any)
               idxs.push(t.steps.length - 1)
             } else if (action.kind === 'list') {
               const target = action.target ? String(action.target).replace(/\/+$/g, '') : undefined
               const name = target ? target.split('/').pop() || target : undefined
               const title = name ? `${action.label} ${name}` : action.label
-              t.steps.push({ id: createId('list'), kind: 'list', title, status: 'completed', ts: nowISO(), meta: { target, label: action.label, command, cwd }, tags: name ? [name] : undefined } as any)
+              t.steps.push({ id: createId('list'), kind: 'list', title, status: 'completed', ts: nowISO(), meta: { target, label: action.label, command, cwd, callId }, tags: name ? [name] : undefined } as any)
               idxs.push(t.steps.length - 1)
             } else if (action.kind === 'search') {
               const target = action.target ? String(action.target).replace(/\/+$/g, '') : undefined
               const name = target ? target.split('/').pop() || target : undefined
               const base = `Search ${String((action as any).query)}`
               const title = name ? `${base} in ${name}` : base
-              t.steps.push({ id: createId('search'), kind: 'search', title, status: 'completed', ts: nowISO(), meta: { target, query: (action as any).query, command, cwd }, tags: name ? [name] : undefined } as any)
+              t.steps.push({ id: createId('search'), kind: 'search', title, status: 'completed', ts: nowISO(), meta: { target, query: (action as any).query, command, cwd, callId }, tags: name ? [name] : undefined } as any)
               idxs.push(t.steps.length - 1)
             }
           }
@@ -425,12 +431,12 @@ export function applyEventsToTurns(turns: Turn[], events: SnapshotEvent[]) {
         } catch {}
         const name = headPath ? headPath.replace(/\/+$/g, '').split('/').pop() || headPath : undefined
         const title = name ? `patch ${name}` : `patch (apply_patch)`
-        const step: TurnStep = { id: createId('patch'), kind: 'patch', title, status: 'streaming', ts: nowISO(), tags: [`+${adds}-${dels}`], meta: { firstPath: headPath, adds, dels, command, cwd }, body: patchText } as any
+        const step: TurnStep = { id: createId('patch'), kind: 'patch', title, status: 'streaming', ts: nowISO(), tags: [`+${adds}-${dels}`], meta: { firstPath: headPath, adds, dels, command, cwd, callId }, body: patchText } as any
         t.steps.push(step)
         const stepIdx = t.steps.length - 1
         if (callId) toolIndex.set(callId, { turnIdx: tIndex, stepIdx })
       } else {
-        const step: TurnStep = { id: createId('exec'), kind: 'exec', title: `${command.join(' ')}${cwd ? ` (cwd=${cwd})` : ''}`, status: 'streaming', ts: nowISO(), meta: { command, cwd } } as any
+      const step: TurnStep = { id: createId('exec'), kind: 'exec', title: `${command.join(' ')}${cwd ? ` (cwd=${cwd})` : ''}`, status: 'streaming', ts: nowISO(), meta: { command, cwd, callId } } as any
         t.steps.push(step)
         const stepIdx = t.steps.length - 1
         toolIndex.set(callId, { turnIdx: tIndex, stepIdx })
@@ -506,7 +512,7 @@ export function applyEventsToTurns(turns: Turn[], events: SnapshotEvent[]) {
       const server = typeof (params as any)?.server === 'string' ? (params as any).server : ''
       const tool = typeof (params as any)?.tool === 'string' ? (params as any).tool : ''
       const args = (params as any)?.arguments
-      const step: TurnStep = { id: createId('mcp'), kind: 'mcp', title: server || tool ? `${server}${server && tool ? '/' : ''}${tool}` : 'mcp', status: 'streaming', ts: nowISO(), meta: { server, tool, args } } as any
+      const step: TurnStep = { id: createId('mcp'), kind: 'mcp', title: server || tool ? `${server}${server && tool ? '/' : ''}${tool}` : 'mcp', status: 'streaming', ts: nowISO(), meta: { server, tool, args, callId } } as any
       t.steps.push(step)
       const stepIdx = t.steps.length - 1
       toolIndex.set(callId, { turnIdx: tIndex, stepIdx })
@@ -537,7 +543,7 @@ export function applyEventsToTurns(turns: Turn[], events: SnapshotEvent[]) {
       const extra = headPath && files > 1 ? ` (+${files - 1})` : ''
       const title = name ? `patch ${name}${extra}` : `patch ${files} files`
       const body = renderPatchDiff(p.changes, Number.POSITIVE_INFINITY as any, Number.POSITIVE_INFINITY as any)
-      const step: TurnStep = { id: createId('patch'), kind: 'patch', title, status: 'streaming', ts: nowISO(), tags: [`+${addNum}-${delNum}`], meta: { files, autoApproved: p.autoApproved, firstPath: headPath, adds, dels, changes: p.changes }, body } as any
+      const step: TurnStep = { id: createId('patch'), kind: 'patch', title, status: 'streaming', ts: nowISO(), tags: [`+${addNum}-${delNum}`], meta: { files, autoApproved: p.autoApproved, firstPath: headPath, adds, dels, changes: p.changes, callId }, body } as any
       t.steps.push(step)
       const stepIdx = t.steps.length - 1
       if (callId) toolIndex.set(callId, { turnIdx: tIndex, stepIdx })
@@ -554,4 +560,14 @@ export function applyEventsToTurns(turns: Turn[], events: SnapshotEvent[]) {
       return
     }
   })
+
+  const remaining: Record<string, { turnId: string; stepId: string }> = {}
+  for (const [callId, { turnIdx, stepIdx }] of toolIndex.entries()) {
+    const turn = turns[turnIdx]
+    const step = turn?.steps?.[stepIdx]
+    if (turn && step) {
+      remaining[callId] = { turnId: turn.id, stepId: step.id }
+    }
+  }
+  return remaining
 }

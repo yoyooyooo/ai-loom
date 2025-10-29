@@ -252,8 +252,14 @@ export function createCoreSlice(set: any, get: any) {
       const detailId = createId(kind)
       const ts = nowISO()
       set((state: any) => {
-        if (callId && state.toolIndex[callId]) {
-          return state
+        if (callId) {
+          if (state.toolIndex[callId]) {
+            return state
+          }
+          const exists = (state.turns as any[]).some((turn) =>
+            Array.isArray(turn?.steps) && turn.steps.some((step: any) => step?.meta?.callId === callId)
+          )
+          if (exists) return state
         }
         let targetId = state.activeTurnId
         let turns = state.turns as any[]
@@ -279,6 +285,10 @@ export function createCoreSlice(set: any, get: any) {
         const stepStatus = options?.status ?? 'streaming'
         const nextTurns = turns.map((turn) => {
           if (turn.id !== targetId) return turn
+          const meta = {
+            ...(options?.meta || {}),
+            ...(callId ? { callId } : {})
+          }
           const step = {
             id: detailId,
             kind,
@@ -287,7 +297,7 @@ export function createCoreSlice(set: any, get: any) {
             status: stepStatus,
             ts,
             tags: options?.tags,
-            meta: options?.meta
+            meta
           }
           return { ...turn, steps: (turn.steps || []).concat(step) }
         })

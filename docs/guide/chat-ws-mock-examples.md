@@ -166,7 +166,7 @@ chat.turn.complete
 
 ## Codex 原始事件（参考）
 
-以下示例便于联调 `bridge.rs` 与 `normalizeCodexRuntimeEvent`。
+以下示例便于联调服务端 `bridge.rs::map_notification_to_chat_events` 与前端 `processChatEvent`。
 
 ```
 {"jsonrpc":"2.0","method":"codex/sessionConfigured","params":{

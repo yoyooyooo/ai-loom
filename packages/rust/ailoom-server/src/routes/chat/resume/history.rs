@@ -31,4 +31,3 @@ pub fn convert_history_item(value: &Value) -> Option<ChatHistoryEntry> {
         _ => None,
     }
 }
-

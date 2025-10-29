@@ -35,6 +35,38 @@ web-typecheck:
 web-test:
   pnpm -C {{WEB_DIR}} test -s
 
+# 前端核心链路测试（WS/Resume→Store，不含 UI 细节）
+web-test-core:
+  pnpm -C {{WEB_DIR}} exec vitest run --config vitest.core.config.ts
+
+# 前端 UI 冒烟测试（可选，避免过度绑定界面细节）
+web-test-ui:
+  pnpm -C {{WEB_DIR}} exec vitest run --config vitest.ui.config.ts
+
+# 后端测试（Rust Workspace）
+# 用法：just server-test            # 跑整个 workspace
+#      just server-test CRATE=ailoom-server  # 仅跑某个 crate
+server-test CRATE='':
+  if [ -n "${CRATE:-}" ]; then \
+    RUSTFLAGS="${RUSTFLAGS:-} -Awarnings" cargo test -p "${CRATE}"; \
+  else \
+    RUSTFLAGS="${RUSTFLAGS:-} -Awarnings" cargo test --workspace; \
+  fi
+
+# 一键测试（后端 + 前端）
+test-all:
+  just server-test
+  just web-test
+
+# 仅核心链路（推荐日常 gating）
+test-core:
+  just server-test
+  just web-test-core
+
+# 仅 UI 冒烟（可选）
+test-ui:
+  just web-test-ui
+
 # Codex 类型生成（TS + JSON Schema）
 codex-codegen TS_DIR='packages/web/src/lib/codex-types' JSON_DIR='docs/specs/codex':
   cargo run -p {{SERVER_BIN}} --bin codegen-codex-types -- --ts-out "{{TS_DIR}}" --json-out "{{JSON_DIR}}"

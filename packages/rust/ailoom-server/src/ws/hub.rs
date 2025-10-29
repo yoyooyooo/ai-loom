@@ -68,6 +68,10 @@ impl Hub {
             obj.entry("eventId")
                 .or_insert_with(|| Value::String(id.to_string()));
         }
+        let conversation_id = params
+            .get("conversationId")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         // QoS: ring buffer prioritization - avoid evicting high-priority events
         {
             let mut ring = self.ring.lock().unwrap();
@@ -89,6 +93,7 @@ impl Hub {
                         id,
                         method: method.clone(),
                         params: params.clone(),
+                        conversation_id: conversation_id.clone(),
                     });
                 }
             } else {
@@ -96,6 +101,7 @@ impl Hub {
                     id,
                     method: method.clone(),
                     params: params.clone(),
+                    conversation_id: conversation_id.clone(),
                 });
             }
         }
@@ -121,10 +127,6 @@ impl Hub {
         }
     }
 
-    pub fn broadcast_event(&self, ev: chat_events::ChatEvent) {
-        let (m, p) = chat_events::event(ev);
-        self.broadcast(m, p);
-    }
 
     pub fn resume_after(&self, after: u64) -> (Vec<EventRecord>, bool) {
         let ring = self.ring.lock().unwrap();
@@ -142,6 +144,35 @@ impl Hub {
         (out, truncated)
     }
 
+    pub fn resume_after_chat(
+        &self,
+        after: u64,
+        conversation_id: Option<&str>,
+    ) -> (Vec<EventRecord>, bool) {
+        let ring = self.ring.lock().unwrap();
+        if ring.is_empty() {
+            return (vec![], false);
+        }
+        let oldest = ring.front().map(|e| e.id).unwrap_or(0);
+        let truncated = after != 0 && after < oldest;
+        let mut out = Vec::new();
+        for e in ring.iter() {
+            if e.id <= after {
+                continue;
+            }
+            if !e.method.starts_with("chat.") {
+                continue;
+            }
+            if let Some(cid) = conversation_id {
+                if e.conversation_id.as_deref() != Some(cid) {
+                    continue;
+                }
+            }
+            out.push(e.clone());
+        }
+        (out, truncated)
+    }
+
     pub fn tail(&self, n: usize) -> Vec<EventRecord> {
         let ring = self.ring.lock().unwrap();
         if ring.is_empty() || n == 0 {
@@ -150,6 +181,30 @@ impl Hub {
         let len = ring.len();
         let start = len.saturating_sub(n);
         ring.iter().skip(start).cloned().collect()
+    }
+
+    pub fn tail_chat(&self, conversation_id: Option<&str>, n: usize) -> Vec<EventRecord> {
+        let ring = self.ring.lock().unwrap();
+        if ring.is_empty() || n == 0 {
+            return vec![];
+        }
+        let mut out = Vec::new();
+        for e in ring.iter().rev() {
+            if !e.method.starts_with("chat.") {
+                continue;
+            }
+            if let Some(cid) = conversation_id {
+                if e.conversation_id.as_deref() != Some(cid) {
+                    continue;
+                }
+            }
+            out.push(e.clone());
+            if out.len() >= n {
+                break;
+            }
+        }
+        out.reverse();
+        out
     }
 
     pub fn stats_snapshot(&self) -> HubStatsOut {
@@ -215,6 +270,7 @@ pub struct EventRecord {
     pub id: u64,
     pub method: String,
     pub params: Value,
+    pub conversation_id: Option<String>,
 }
 
 #[derive(Default, Debug)]
@@ -245,4 +301,66 @@ pub struct HubStatsOut {
     pub tree_impacted_paths_total: u64,
     pub tree_truncated_batches: u64,
     pub tree_moved_total: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn resume_after_chat_filters_by_conversation() {
+        let hub = Hub::new(8);
+        hub.broadcast(
+            "chat.message.delta".into(),
+            json!({"conversationId":"cid-a","delta":"hi"}),
+        );
+        hub.broadcast(
+            "chat.message.delta".into(),
+            json!({"conversationId":"cid-b","delta":"yo"}),
+        );
+        hub.broadcast(
+            "chat.tool.exec.end".into(),
+            json!({"conversationId":"cid-a","callId":"exec-1"}),
+        );
+
+        let (events, truncated) = hub.resume_after_chat(0, Some("cid-a"));
+        assert!(!truncated);
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|ev| ev.method.starts_with("chat.")));
+        assert!(events
+            .iter()
+            .all(|ev| ev.conversation_id.as_deref() == Some("cid-a")));
+    }
+
+    #[test]
+    fn tail_chat_returns_latest_events_per_conversation() {
+        let hub = Hub::new(16);
+        for i in 0..5 {
+            hub.broadcast(
+                "chat.message.delta".into(),
+                json!({"conversationId":"cid-c","delta": format!("{}", i)}),
+            );
+        }
+        hub.broadcast(
+            "chat.message.completed".into(),
+            json!({"conversationId":"cid-c","text":"done"}),
+        );
+
+        let events = hub.tail_chat(Some("cid-c"), 3);
+        assert_eq!(events.len(), 3);
+        assert_eq!(
+            events
+                .first()
+                .and_then(|e| e.params.get("delta"))
+                .and_then(|v| v.as_str()),
+            Some("3")
+        );
+        assert_eq!(
+            events
+                .last()
+                .and_then(|e| e.method.as_str().strip_prefix("chat.")),
+            Some("message.completed")
+        );
+    }
 }

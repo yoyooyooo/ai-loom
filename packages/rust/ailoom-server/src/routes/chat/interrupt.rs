@@ -29,9 +29,12 @@ pub async fn interrupt_conversation(
         match app.interrupt_conversation(conversation_id).await {
             Ok(resp) => {
                 // 返回中止原因，便于前端确认
-                return (StatusCode::OK, Json(serde_json::json!({
-                    "abortReason": resp.abort_reason,
-                })))
+                return (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "abortReason": resp.abort_reason,
+                    })),
+                )
                     .into_response();
             }
             Err(e) => {

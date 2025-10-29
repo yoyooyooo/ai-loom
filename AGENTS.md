@@ -134,6 +134,15 @@
 - Commit 约定：历史较少且无固定格式，推荐使用 Conventional Commits（如 `feat: ...`、`fix: ...`、`chore: ...`）。
 - PR 要求：包含变更概述、动机与方案、验证步骤（含 `just`/`cargo`/`pnpm` 命令）、必要截图或日志、关联 Issue；保持小而可审。
 
+## 开发与测试流程（要求）
+
+- 每次完成一批功能或较大改动后，必须本地执行一键测试并确保通过：
+  - 运行后端测试：`just server-test`
+  - 运行前端测试：`just web-test`
+  - 一键前后端：`just test-all`
+- 若仅修改了特定 Rust crate，可用：`just server-test CRATE=ailoom-server`
+- 提交前请附带“本地验证步骤”，至少包含以上 one-liner `just` 命令及核心测试输出摘要。
+
 ## 安全与配置提示
 
 - 后端仅绑定本机并回显 `AILOOM_PORT`；文件访问被限制在 `--root`；大文件/二进制自动防护与截断。

@@ -171,7 +171,8 @@ pub async fn resume_conversation(
         if let Some(path) = lookup_path_by_conversation_id(&app, conversation_id).await {
             return match resume_from_path(&app, &state, &path).await {
                 Ok((conversation_id, history, events, config)) => {
-                    let in_progress = super::rollout_parser::rollout_in_progress(&path).or(Some(false));
+                    let in_progress =
+                        super::rollout_parser::rollout_in_progress(&path).or(Some(false));
                     broadcast_resume(&state, &conversation_id, &history);
                     (
                         StatusCode::OK,
@@ -217,7 +218,8 @@ pub async fn resume_conversation(
                     tracing::info!(target:"codex", path=%path, "HTTP resume → resumeConversation(latest)");
                     return match resume_from_path(&app, &state, &path).await {
                         Ok((conversation_id, history, events, config)) => {
-                            let in_progress = super::rollout_parser::rollout_in_progress(&path).or(Some(false));
+                            let in_progress =
+                                super::rollout_parser::rollout_in_progress(&path).or(Some(false));
                             broadcast_resume(&state, &conversation_id, &history);
                             (
                                 StatusCode::OK,

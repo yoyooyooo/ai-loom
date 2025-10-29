@@ -27,7 +27,7 @@ export function createSnapshotSlice(set: any, get: any) {
         baseTurns = built.turns
         nextSeq = built.nextSeq
       }
-      applyEventsToTurnsExternal(baseTurns as any, events as any)
+      const openToolIndex = applyEventsToTurnsExternal(baseTurns as any, events as any)
       if (nextSeq === 0 && baseTurns.length > 0) {
         nextSeq = Math.max(...baseTurns.map((t) => t.seq))
       }
@@ -66,7 +66,7 @@ export function createSnapshotSlice(set: any, get: any) {
         turn.steps = deduped
       }
       set(
-        { ...state, turns: baseTurns, activeTurnId: undefined, nextSeq, toolIndex: {}, generating: false },
+        { ...state, turns: baseTurns, activeTurnId: undefined, nextSeq, toolIndex: openToolIndex, generating: false },
         false,
         'turns/loadSnapshot'
       )

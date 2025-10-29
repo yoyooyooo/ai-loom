@@ -9,7 +9,7 @@ import { chatTurnActions, useChatTurnStore } from '@/features/codex-chat/stores/
 import type { ResumeBanner } from '@/features/codex-chat/types'
 import { buildHistoryTree } from '@/features/codex-chat/utils/history-tree'
 import { codexChatProviderActions } from '@/stores/codex-chat-provider'
-import { useResumeAndPoll } from '@/features/codex-chat/services/resume-manager'
+import { useResumeAndPoll } from '@/features/codex-chat/services/resume-restore'
 
 type ConversationListPage = { items: ConversationListItem[]; nextCursor?: string | null }
 const encodeParam = (segment: string) => encodeURIComponent(segment)
@@ -32,7 +32,7 @@ export default function ChatPage() {
   const routeConversationKey = useMemo(() => decodeParam(params.conversationId), [params.conversationId])
   const { banner, setBanner, pendingConversationId, notifyConversationCreated } = useResumeAndPoll(
     routeConversationKey,
-    { navigate: (to, options) => navigate(to, options) }
+    { navigate }
   )
 
   const {

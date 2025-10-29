@@ -1,6 +1,6 @@
+use crate::ws::chat_events::{ChatEvent, ChatHistoryEntry};
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::protocol::{AskForApproval, SandboxPolicy, SessionMetaLine};
-use crate::ws::chat_events::{ChatEvent, ChatHistoryEntry};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;

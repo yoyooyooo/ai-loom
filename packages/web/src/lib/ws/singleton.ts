@@ -76,13 +76,16 @@ class WsSingleton {
       params: any
     }>
   }
+  primeConversationCursor(conversationId: string, eventId: number) {
+    this.ensure().primeConversationCursor(conversationId, eventId)
+  }
   codex$() {
     return this.events$.pipe(
       filter((ev) => typeof ev?.method === 'string' && isCodexEventMethod(ev.method))
     )
   }
   chat$() {
-    return this.codex$()
+    return this.events$.pipe(filter((ev) => typeof ev?.method === 'string' && ev.method.startsWith('chat.')))
   }
   get state() {
     return this.ensure().state
@@ -93,3 +96,12 @@ class WsSingleton {
 }
 
 export const ws = new WsSingleton()
+
+// Test helpers（在 Vitest 中通过 `vi.mock('@/lib/ws/singleton')` 覆盖）
+export const __emit: (method: string, params?: any) => void = () => {
+  throw new Error('__emit is only available in mocked ws singleton for tests')
+}
+
+export const __resetWsMock: () => void = () => {
+  throw new Error('__resetWsMock is only available in mocked ws singleton for tests')
+}

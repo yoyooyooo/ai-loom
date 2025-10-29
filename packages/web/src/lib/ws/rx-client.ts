@@ -4,6 +4,17 @@ import { chatTrace } from '@/lib/logger'
 
 type Json = any
 
+const GLOBAL_CONV_LAST_KEY = 'ailoom.chat.convLast'
+function makeConvLastKey(url: string): string {
+  try {
+    const u = new URL(url)
+    const host = `${u.protocol}//${u.host}`
+    return `${GLOBAL_CONV_LAST_KEY}@${host}`
+  } catch {
+    return GLOBAL_CONV_LAST_KEY
+  }
+}
+
 type RpcResult = {
   jsonrpc: '2.0'
   id: string | number | null
@@ -25,6 +36,9 @@ export class WsRxClient {
   private lastEventId = 0
   private codexEventLastId = 0
   private codexEventLastKey = ''
+  private convLast: Record<string, number> = {}
+  private convLastKey: string
+  private convLastPersistTimer: any = null
 
   // events
   private eventsSubject = new Subject<{ method: string; params: any }>()
@@ -37,6 +51,8 @@ export class WsRxClient {
 
   constructor(url: string) {
     this.url = url
+    this.convLastKey = makeConvLastKey(url)
+    this.convLast = this.loadConvLast()
     this.connect()
   }
 
@@ -62,6 +78,12 @@ export class WsRxClient {
             method: 'subscribe',
             params: { topic, filter }
           })
+          if (topic === 'chat') {
+            const cid = typeof filter?.conversationId === 'string' ? filter.conversationId : undefined
+            if (cid) {
+              this.resumeChat(cid).catch(() => {})
+            }
+          }
         }
         // 默认不恢复 chat 历史；如需启用，可设置 VITE_WS_RESUME=1
         if ((import.meta as any).env?.VITE_WS_RESUME === '1') {
@@ -119,6 +141,40 @@ export class WsRxClient {
     }, wait)
   }
 
+  private loadConvLast(): Record<string, number> {
+    if (typeof window === 'undefined') return {}
+    try {
+      const storage = (window as any).localStorage
+      if (!storage || typeof storage.getItem !== 'function') return {}
+      // 优先读取 namespaced key；兼容旧 key 作为后备
+      const raw = storage.getItem(this.convLastKey) ?? storage.getItem(GLOBAL_CONV_LAST_KEY)
+      if (!raw) return {}
+      const parsed = JSON.parse(raw)
+      if (!parsed || typeof parsed !== 'object') return {}
+      const out: Record<string, number> = {}
+      for (const [key, value] of Object.entries(parsed as Record<string, any>)) {
+        const num = typeof value === 'number' ? value : parseInt(String(value), 10)
+        if (Number.isFinite(num) && num > 0) out[key] = num
+      }
+      return out
+    } catch {
+      return {}
+    }
+  }
+
+  private scheduleConvLastPersist() {
+    if (typeof window === 'undefined') return
+    const storage = (window as any).localStorage
+    if (!storage || typeof storage.setItem !== 'function') return
+    if (this.convLastPersistTimer) return
+    this.convLastPersistTimer = setTimeout(() => {
+      this.convLastPersistTimer = null
+      try {
+        storage.setItem(this.convLastKey, JSON.stringify(this.convLast))
+      } catch {}
+    }, 250)
+  }
+
   private nextId(): number {
     return this.idSeq++
   }
@@ -153,45 +209,68 @@ export class WsRxClient {
       }
       // 通知
       if (v && v.jsonrpc === '2.0' && v.method) {
-        if (v.method === 'session.ping') {
+        const method = typeof v.method === 'string' ? v.method : ''
+        const params = v.params ?? {}
+        if (method === 'session.ping') {
           try {
             this.send({ jsonrpc: '2.0', method: 'session.pong', params: { ts: Date.now() } })
           } catch {}
         }
         // 仅对“可增量恢复的业务事件”更新 lastEventId，避免被 session.* 等观测事件推进游标导致 resume 丢失
         if (
-          v.method === 'file.changed' ||
-          v.method === 'tree.changed' ||
-          (typeof v.method === 'string' && v.method.startsWith('annotations.'))
+          method === 'file.changed' ||
+          method === 'tree.changed' ||
+          method.startsWith('annotations.')
         ) {
-          const eid = parseEventId(v?.params)
+          const eid = parseEventId(params)
           if (eid && eid > this.lastEventId) this.lastEventId = eid
         }
+        let skip = false
+        if (method.startsWith('chat.')) {
+          const convId = typeof (params as any)?.conversationId === 'string' ? (params as any).conversationId : undefined
+          const eid = parseEventId(params)
+          if (convId && eid) {
+            const prev = this.convLast[convId] || 0
+            if (eid <= prev) {
+              chatTrace('ws.rxClient.skipChatDup', {
+                conversationId: convId,
+                eventId: eid,
+                last: prev,
+                method
+              })
+              skip = true
+            } else {
+              this.convLast[convId] = eid
+              this.scheduleConvLastPersist()
+            }
+          }
+        }
+        if (skip) return
         // 对 codex/event/* 做客户端去重（不推进全局 lastEventId，以免影响 resume）
-        if (typeof v.method === 'string' && v.method.startsWith('codex/event')) {
-          const eid = parseEventId(v?.params)
+        if (method.startsWith('codex/event')) {
+          const eid = parseEventId(params)
           if (eid) {
-            const key = `${v.method}#${eid}`
+            const key = `${method}#${eid}`
             chatTrace('ws.rxClient.codexEventId', {
-              method: v.method,
+              method,
               eventId: eid,
               lastEventId: this.codexEventLastId,
               lastKey: this.codexEventLastKey
             })
             if (eid < this.codexEventLastId) {
-              chatTrace('ws.rxClient.codexEventId.skip_lt', { method: v.method, eventId: eid })
+              chatTrace('ws.rxClient.codexEventId.skip_lt', { method, eventId: eid })
               return
             }
             if (key === this.codexEventLastKey) {
-              chatTrace('ws.rxClient.codexEventId.skip_dupkey', { method: v.method, eventId: eid })
+              chatTrace('ws.rxClient.codexEventId.skip_dupkey', { method, eventId: eid })
               return
             }
             if (eid > this.codexEventLastId) this.codexEventLastId = eid
             this.codexEventLastKey = key
           }
         }
-        this.eventsSubject.next({ method: v.method, params: v.params })
-        chatTrace('ws.rxClient.emitted', { method: v.method })
+        this.eventsSubject.next({ method, params })
+        chatTrace('ws.rxClient.emitted', { method })
       }
     } catch (error) {
       chatTrace('ws.rxClient.parseError', {
@@ -228,6 +307,47 @@ export class WsRxClient {
       }
     } catch {
       this.eventsSubject.next({ method: 'session.resync', params: { reason: 'resume_failed' } })
+    }
+  }
+
+  async resumeChat(conversationId?: string, opts: { tail?: number } = {}) {
+    const cid = typeof conversationId === 'string' && conversationId ? conversationId : undefined
+    if (!cid) return
+    const after = this.convLast[cid] || 0
+    const tail = opts.tail ?? 128
+    const params: any = {
+      after,
+      topic: 'chat',
+      filter: { conversationId: cid }
+    }
+    if (after === 0 && tail > 0) params.tail = tail
+    try {
+      const res: any = await this.first(this.call('events.resume', params, 8000))
+      const events: any[] = Array.isArray(res?.events) ? res.events : []
+      let updated = false
+      for (const ev of events) {
+        const method = ev?.method
+        if (typeof method !== 'string') continue
+        const payload = ev?.params ?? {}
+        const eid = parseEventId(payload)
+        const eventCid = typeof payload?.conversationId === 'string' ? payload.conversationId : undefined
+        if (eventCid && eid) {
+          const prev = this.convLast[eventCid] || 0
+          if (eid <= prev) {
+            continue
+          }
+          this.convLast[eventCid] = eid
+          updated = true
+        }
+        this.eventsSubject.next({ method, params: payload })
+      }
+      if (updated) this.scheduleConvLastPersist()
+      if (res?.truncated) {
+        this.eventsSubject.next({ method: 'session.resync', params: { reason: 'truncated' } })
+      }
+    } catch (error) {
+      this.eventsSubject.next({ method: 'session.resync', params: { reason: 'resume_failed' } })
+      throw error
     }
   }
 
@@ -276,6 +396,12 @@ export class WsRxClient {
       const doSub = async () => {
         try {
           await this.first(this.call('subscribe', { topic, filter }))
+          if (topic === 'chat') {
+            const cid = typeof (filter as any)?.conversationId === 'string' ? (filter as any).conversationId : undefined
+            if (cid) {
+              this.resumeChat(cid).catch(() => {})
+            }
+          }
         } catch {}
       }
       if (this.state === 'up') doSub()
@@ -310,14 +436,26 @@ export class WsRxClient {
   }
   first<T>(obs$: Observable<T>) {
     return new Promise<T>((resolve, reject) => {
-      const sub = obs$.subscribe({
+      let sub: any = null
+      sub = obs$.subscribe({
         next: (v) => {
           resolve(v)
-          sub.unsubscribe()
+          sub?.unsubscribe()
         },
         error: reject
       })
     })
+  }
+
+  primeConversationCursor(conversationId: string, eventId: number) {
+    if (!conversationId) return
+    const eid = Number.isFinite(eventId) ? Math.floor(eventId) : NaN
+    if (!Number.isFinite(eid) || eid <= 0) return
+    const prev = this.convLast[conversationId] || 0
+    if (eid > prev) {
+      this.convLast[conversationId] = eid
+      this.scheduleConvLastPersist()
+    }
   }
 
   // 调试用：返回订阅快照
@@ -341,7 +479,9 @@ function normalizeFilter(filter: any) {
 }
 
 function matchTopic(key: string, ev: { method: string; params: any }) {
-  const [topic] = key.split(':', 1) as any
+  // key 形如 "<topic>:<json-filter>"，需要取冒号前缀
+  const idx = key.indexOf(':')
+  const topic = idx >= 0 ? key.slice(0, idx) : key
   if (topic === 'file' && ev.method === 'file.changed') return true
   if (topic === 'tree' && ev.method === 'tree.changed') return true
   if (topic === 'annotations' && ev.method.startsWith('annotations.')) return true

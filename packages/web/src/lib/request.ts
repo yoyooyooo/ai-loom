@@ -1,6 +1,6 @@
 import axios, { type AxiosRequestConfig, type AxiosResponse, type Method } from 'axios'
 import { defer, firstValueFrom, timer } from 'rxjs'
-import { finalize, retry } from 'rxjs/operators'
+import { finalize, retry, tap } from 'rxjs/operators'
 
 // 统一的 Axios 实例（跨 feature 复用）
 // baseURL 来自 Vite 环境变量；未设置时走同源
@@ -112,6 +112,10 @@ export function request$<T = any>(options: RxRequestOptions<T>) {
       return [408, 429, 500, 502, 503, 504].includes(status)
     }
 
+    let settled = false
+    const markSettled = () => {
+      settled = true
+    }
     return req$.pipe(
       retry({
         count: retries,
@@ -121,13 +125,20 @@ export function request$<T = any>(options: RxRequestOptions<T>) {
           return timer(backoffMs * retryCount)
         }
       }),
+      tap({
+        next: markSettled,
+        error: markSettled,
+        complete: markSettled
+      }),
       finalize(() => {
         if (timerId) clearTimeout(timerId)
         if (signal) signal.removeEventListener('abort', onExternalAbort)
-        // 若调用侧提前取消订阅，确保中止请求
-        try {
-          controller.abort()
-        } catch {}
+        if (!settled) {
+          // 若调用侧提前取消订阅，确保中止请求
+          try {
+            controller.abort()
+          } catch {}
+        }
       })
     )
   })

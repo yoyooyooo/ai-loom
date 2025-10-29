@@ -45,9 +45,10 @@ export function createProcessChatEvent(opts: ProcessOptions) {
         if (typeof delta === 'string' && delta) {
           try {
             const st: any = (useChatTurnStore as any).getState?.()
-            const hasTurns = Array.isArray(st?.turns) && st.turns.length > 0
-            if (!hasTurns) chatTurnActions.markTurnStarted({})
-          } catch {}
+            const hasActive = !!st?.activeTurnId
+            const hasStreaming = Array.isArray(st?.turns) && st.turns.some((t: any) => t?.status === 'streaming')
+            if (!hasActive && !hasStreaming) chatTurnActions.markTurnStarted({})
+          } catch { chatTurnActions.markTurnStarted({}) }
           chatTurnActions.appendAssistantDelta(delta)
         }
         break
@@ -64,10 +65,9 @@ export function createProcessChatEvent(opts: ProcessOptions) {
         try {
           const st: any = (useChatTurnStore as any).getState?.()
           const hasActive = !!st?.activeTurnId
-          if (!hasActive) {
-            chatTurnActions.markTurnStarted({})
-          }
-        } catch {}
+          const hasStreaming = Array.isArray(st?.turns) && st.turns.some((t: any) => t?.status === 'streaming')
+          if (!hasActive && !hasStreaming) chatTurnActions.markTurnStarted({})
+        } catch { chatTurnActions.markTurnStarted({}) }
         chatTurnActions.completeAssistant(text)
         chatTurnActions.completeTurn()
         break
@@ -138,7 +138,7 @@ export function createProcessChatEvent(opts: ProcessOptions) {
               const name = path.replace(/\/+$|\/+$/g, '').split('/').pop() || path
               const title = `Read ${name} (lines: ${action.start}-${action.end})`
               chatTurnActions.addStep('read', first ? callId : undefined, title, {
-                meta: { file: path, start: action.start, end: action.end, command, cwd },
+                meta: { file: path, start: action.start, end: action.end, command, cwd, callId },
                 tags: [name],
                 status: 'completed'
               })
@@ -148,7 +148,7 @@ export function createProcessChatEvent(opts: ProcessOptions) {
               const name = target ? target.split('/').pop() || target : undefined
               const title = name ? `${action.label} ${name}` : action.label
               chatTurnActions.addStep('list', first ? callId : undefined, title, {
-                meta: { target, label: action.label, command, cwd },
+                meta: { target, label: action.label, command, cwd, callId },
                 tags: name ? [name] : undefined,
                 status: 'completed'
               })
@@ -159,7 +159,7 @@ export function createProcessChatEvent(opts: ProcessOptions) {
               const base = `Search ${String((action as any).query)}`
               const title = name ? `${base} in ${name}` : base
               chatTurnActions.addStep('search', first ? callId : undefined, title, {
-                meta: { target, query: (action as any).query, command, cwd },
+                meta: { target, query: (action as any).query, command, cwd, callId },
                 tags: name ? [name] : undefined,
                 status: 'completed'
               })
@@ -190,10 +190,10 @@ export function createProcessChatEvent(opts: ProcessOptions) {
             } catch {}
             const name = headPath ? headPath.replace(/\/+$/g, '').split('/').pop() || headPath : undefined
             const title = name ? `patch ${name}` : `patch (apply_patch)`
-            chatTurnActions.addStep('patch', callId, title, { body: patchText, tags: [`+${adds}-${dels}`], meta: { firstPath: headPath, adds, dels, command, cwd } })
+            chatTurnActions.addStep('patch', callId, title, { body: patchText, tags: [`+${adds}-${dels}`], meta: { firstPath: headPath, adds, dels, command, cwd, callId } })
           } else {
             const title = `${cmdStr}${cwd ? ` (cwd=${cwd})` : ''}`
-            chatTurnActions.addStep('exec', callId, title, { meta: { command, cwd } })
+            chatTurnActions.addStep('exec', callId, title, { meta: { command, cwd, callId } })
           }
         }
         break
@@ -235,7 +235,7 @@ export function createProcessChatEvent(opts: ProcessOptions) {
         const title = name ? `patch ${name}${extra}` : `patch ${files} files`
         const changes = p.changes as any
         const body = renderPatchDiff(changes, PATCH_MAX_FILES, PATCH_MAX_CHARS)
-        chatTurnActions.addStep('patch', callId, title, { body, tags: [`+${addNum}-${delNum}`], meta: { files, autoApproved: p.autoApproved, firstPath: headPath, adds, dels, changes } })
+        chatTurnActions.addStep('patch', callId, title, { body, tags: [`+${addNum}-${delNum}`], meta: { files, autoApproved: p.autoApproved, firstPath: headPath, adds, dels, changes, callId } })
         break
       }
       case 'chat.tool.patch.end': {
@@ -258,7 +258,7 @@ export function createProcessChatEvent(opts: ProcessOptions) {
         const args = params.arguments
         const callId = typeof params.callId === 'string' ? params.callId : createId('mcp')
         const title = server || tool ? `${server}${server && tool ? '/' : ''}${tool}` : 'mcp'
-        chatTurnActions.addStep('mcp', callId, title, { meta: { server, tool, args } })
+        chatTurnActions.addStep('mcp', callId, title, { meta: { server, tool, args, callId } })
         break
       }
       case 'chat.tool.mcp.end': {

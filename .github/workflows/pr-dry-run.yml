@@ -14,8 +14,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  run-tests:
+    name: Run Tests (Rust + Web)
+    runs-on: ubuntu-latest
+    env:
+      PNPM_CONFIG_FROZEN_LOCKFILE: 'false'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js and pnpm
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      - name: Setup pnpm (read version from packageManager)
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run Rust tests (workspace)
+        run: RUSTFLAGS="-Awarnings" cargo test --workspace
+
+      - name: Install web deps
+        run: pnpm -C packages/web i --prefer-offline --no-frozen-lockfile
+
+      - name: Run Web tests (Vitest)
+        run: pnpm -C packages/web test -s
+
   simulate-platforms:
     name: ${{ matrix.platform }}
+    needs: run-tests
     strategy:
       fail-fast: false
       matrix:
@@ -132,7 +163,7 @@ jobs:
 
   simulate-meta:
     name: Simulate meta package ai-loom
-    needs: simulate-platforms
+    needs: [run-tests, simulate-platforms]
     runs-on: ubuntu-latest
     env:
       NPM_FLAGS: --dry-run

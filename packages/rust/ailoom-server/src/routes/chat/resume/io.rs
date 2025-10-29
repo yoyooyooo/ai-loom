@@ -2,9 +2,7 @@ use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-use crate::routes::chat::utils::{
-    conversation_id_of, normalize_conversation_item,
-};
+use crate::routes::chat::utils::{conversation_id_of, normalize_conversation_item};
 use crate::services::codex::client::AppServerClient;
 
 use codex_app_server_protocol::ListConversationsParams;
@@ -135,4 +133,3 @@ pub async fn lookup_path_by_conversation_id(
     }
     None
 }
-

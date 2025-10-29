@@ -187,16 +187,13 @@ packages/web/src
 - 前端在 Store Action（例如 `chat-resume.ts/processResumeResult`）中一次性：
   - 幂等落地 base history + events（`chatTurnActions.loadSnapshot`）；
   - 应用 provider `capabilities/overrides`；
-  - 如果 `inProgress=true`，则短时轮询 `/debug/codex` 或只读快照接口（推荐新增 `/api/chat/snapshot`），并合并进入时间线。
-- 轮询结果同时写入：
-  - Zustand：驱动时间线 UI（`chat-turns`）
-  - React Query 缓存：`['chat','sessionSnapshot', conversationId]`
+- 实时增量仅依赖 WebSocket：恢复后立刻订阅 `chat` topic，并在重连时调用 `events.resume({ topic:'chat', filter:{ conversationId } })` 补偿。
 
 ## 11. 组件封装与副作用（偏好）
 
 - 组件应尽量“无状态/无副作用”。复杂的副作用与状态迁移都收敛到 Store Action 或 Service Hook。
 - 模式：
-  - Store（Zustand）：集中承载 UI/跨组件状态，并提供动词化 Action（`startPolling`、`processResumeResult`、`setResumeBaseHistory`）。
+  - Store（Zustand）：集中承载 UI/跨组件状态，并提供动词化 Action（`processResumeResult`、`setResumeBaseHistory` 等）。
   - Service Hook：组合 Query/Rx 与 Store Action，导出最小接口供页面调用。
   - 页面组件：仅读取 Store 状态，调用 Service Hook 提供的动作，不自行拼装副作用。
 - 命名与可读性：

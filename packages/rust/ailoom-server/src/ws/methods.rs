@@ -131,21 +131,54 @@ pub async fn call(method: &str, params: &Value, state: &AppState) -> Result<Valu
                 .or_else(|| params.get("after").and_then(|v| v.as_u64()))
                 .unwrap_or(0u64);
             let tail = params.get("tail").and_then(|v| v.as_u64()).unwrap_or(0u64) as usize;
+            let topic = params.get("topic").and_then(|v| v.as_str());
+            let filter = params.get("filter").and_then(|v| v.as_object());
+            let filter_conversation_id = filter
+                .and_then(|obj| obj.get("conversationId"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             if let Some(hub) = state.ws_hub.clone() {
-                if tail > 0 && after == 0 {
-                    let events = hub.tail(tail);
-                    let list: Vec<Value> = events
-                        .into_iter()
-                        .map(|e| json!({"jsonrpc":"2.0","method": e.method, "params": e.params}))
-                        .collect();
-                    Ok(json!({"events": list, "truncated": false}))
+                let conv_id_ref = filter_conversation_id.as_deref();
+                if matches!(topic, Some("chat")) {
+                    if tail > 0 && after == 0 {
+                        let events = hub.tail_chat(conv_id_ref, tail);
+                        let list: Vec<Value> = events
+                            .into_iter()
+                            .map(
+                                |e| json!({"jsonrpc":"2.0","method": e.method, "params": e.params}),
+                            )
+                            .collect();
+                        Ok(json!({"events": list, "truncated": false}))
+                    } else {
+                        let (events, truncated) = hub.resume_after_chat(after, conv_id_ref);
+                        let list: Vec<Value> = events
+                            .into_iter()
+                            .map(
+                                |e| json!({"jsonrpc":"2.0","method": e.method, "params": e.params}),
+                            )
+                            .collect();
+                        Ok(json!({"events": list, "truncated": truncated}))
+                    }
                 } else {
-                    let (events, truncated) = hub.resume_after(after);
-                    let list: Vec<Value> = events
-                        .into_iter()
-                        .map(|e| json!({"jsonrpc":"2.0","method": e.method, "params": e.params}))
-                        .collect();
-                    Ok(json!({"events": list, "truncated": truncated}))
+                    if tail > 0 && after == 0 {
+                        let events = hub.tail(tail);
+                        let list: Vec<Value> = events
+                            .into_iter()
+                            .map(
+                                |e| json!({"jsonrpc":"2.0","method": e.method, "params": e.params}),
+                            )
+                            .collect();
+                        Ok(json!({"events": list, "truncated": false}))
+                    } else {
+                        let (events, truncated) = hub.resume_after(after);
+                        let list: Vec<Value> = events
+                            .into_iter()
+                            .map(
+                                |e| json!({"jsonrpc":"2.0","method": e.method, "params": e.params}),
+                            )
+                            .collect();
+                        Ok(json!({"events": list, "truncated": truncated}))
+                    }
                 }
             } else {
                 Err(err("NOT_SUPPORTED", "hub missing"))

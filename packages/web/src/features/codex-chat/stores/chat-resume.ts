@@ -1,10 +1,10 @@
 import { create } from 'zustand'
 import type { ResumeBanner } from '@/features/codex-chat/types'
 import type { ResumeConversationResponse } from '@/features/codex-chat/services/api'
-import { chatApi } from '@/features/codex-chat/services/api'
 import { chatTurnActions } from './chat-turns'
 import { codexChatProviderActions } from '@/stores/codex-chat-provider'
 import { deriveResumeCapabilities, deriveResumeOverrides } from '@/features/codex-chat/utils/resume-config'
+import { ws } from '@/lib/ws/singleton'
 
 export type SnapshotHistoryItem = {
   role: 'user' | 'assistant' | 'reasoning'
@@ -17,12 +17,7 @@ type ChatResumeState = {
   skipResumeKey: string | null
   resumeProcessed: string | null
   pendingConversationId: string | null
-  // 轮询相关
-  polling: boolean
-  pollStartAt: number
-  pollNoChange: number
-  pollLastEventsLen: number
-  // 恢复基线（history-only），用于后续重放 events
+  // 恢复基线（history-only），用于后续调试或手动重放
   resumeBaseHistory: SnapshotHistoryItem[] | null
 }
 
@@ -33,11 +28,6 @@ type ChatResumeActions = {
   markResumeProcessed: (cid: string | null) => void
   resetConversation: () => void
   setResumeBaseHistory: (items: SnapshotHistoryItem[] | null) => void
-  startPolling: () => void
-  stopPolling: () => void
-  setPollLastLen: (n: number) => void
-  resetPollNoChange: () => void
-  incPollNoChange: () => void
   processResumeResult: (
     result: ResumeConversationResponse,
     routeConversationKey?: string,
@@ -52,10 +42,6 @@ export const useChatResumeStore = create<Store>((set, get) => ({
   skipResumeKey: null,
   resumeProcessed: null,
   pendingConversationId: null,
-  polling: false,
-  pollStartAt: 0,
-  pollNoChange: 0,
-  pollLastEventsLen: 0,
   resumeBaseHistory: null,
   setBanner: (b) => set({ banner: b }),
   setPending: (cid) => set({ pendingConversationId: cid }),
@@ -63,11 +49,6 @@ export const useChatResumeStore = create<Store>((set, get) => ({
   markResumeProcessed: (cid) => set({ resumeProcessed: cid }),
   resetConversation: () => set({ banner: null, resumeProcessed: null, skipResumeKey: null, resumeBaseHistory: null }),
   setResumeBaseHistory: (items) => set({ resumeBaseHistory: items }),
-  startPolling: () => set({ polling: true, pollStartAt: Date.now(), pollNoChange: 0, pollLastEventsLen: 0 }),
-  stopPolling: () => set({ polling: false }),
-  setPollLastLen: (n) => set({ pollLastEventsLen: n }),
-  resetPollNoChange: () => set({ pollNoChange: 0 }),
-  incPollNoChange: () => set({ pollNoChange: get().pollNoChange + 1 }),
   async processResumeResult(result, routeKey, navigate) {
     if (!result) return
     if (get().resumeProcessed === result.conversationId) return
@@ -80,27 +61,19 @@ export const useChatResumeStore = create<Store>((set, get) => ({
       text: entry.text ?? '',
       reasoning: entry.reasoning ?? undefined
     }))
+    const normalizedEvents = Array.isArray(result.events)
+      ? result.events.filter((ev) => ev && typeof ev.method === 'string')
+      : []
     set({ resumeBaseHistory: history })
-    let events = (result.events ?? []).map((entry: any) => ({
-      method: entry?.method || '',
-      params: entry?.params ?? undefined
-    }))
-    if (events.length === 0) {
-      try {
-        const debug = await chatApi.debugCodex({ limit: 800, includeChat: true })
-        const arr = Array.isArray((debug as any)?.events) ? (debug as any).events : []
-        events = arr
-          .filter((e: any) => typeof e?.method === 'string' && e.method.startsWith('chat.'))
-          .filter(
-            (e: any) => !result.conversationId || e?.params?.conversationId == null || e.params.conversationId === result.conversationId
-          )
-          .map((e: any) => ({ method: e.method as string, params: e.params as Record<string, unknown> | undefined }))
-      } catch (error) {
-        // eslint-disable-next-line no-console
-        console.warn('[chat] debugCodex fetch events failed', error)
-      }
+    chatTurnActions.loadSnapshot(history, normalizedEvents as any)
+    if (normalizedEvents.length > 0) {
+      const maxEventId = normalizedEvents.reduce((max, ev) => {
+        const raw = (ev as any)?.params?.eventId
+        const parsed = typeof raw === 'number' ? raw : parseInt(raw, 10)
+        return Number.isFinite(parsed) && parsed > max ? parsed : max
+      }, 0)
+      if (maxEventId > 0) ws.primeConversationCursor(result.conversationId, maxEventId)
     }
-    chatTurnActions.loadSnapshot(history, events)
     const resumeConfig = (result as any).config ?? null
     if (resumeConfig) {
       const overridePatch = deriveResumeOverrides(resumeConfig)
@@ -118,11 +91,6 @@ export const useChatResumeStore = create<Store>((set, get) => ({
     if (navigate && result.conversationId && result.conversationId !== routeKey) {
       navigate(`/chat/${encodeURIComponent(result.conversationId)}`, { replace: true })
     }
-    if ((result as any).inProgress && result.conversationId === routeKey) {
-      set({ polling: true, pollStartAt: Date.now(), pollNoChange: 0, pollLastEventsLen: 0 })
-    } else {
-      set({ polling: false })
-    }
   }
 }))
 
@@ -133,11 +101,6 @@ export const chatResumeActions: ChatResumeActions = {
   markResumeProcessed: (cid) => useChatResumeStore.getState().markResumeProcessed(cid),
   resetConversation: () => useChatResumeStore.getState().resetConversation(),
   setResumeBaseHistory: (items) => useChatResumeStore.getState().setResumeBaseHistory(items),
-  startPolling: () => useChatResumeStore.getState().startPolling(),
-  stopPolling: () => useChatResumeStore.getState().stopPolling(),
-  setPollLastLen: (n) => useChatResumeStore.getState().setPollLastLen(n),
-  resetPollNoChange: () => useChatResumeStore.getState().resetPollNoChange(),
-  incPollNoChange: () => useChatResumeStore.getState().incPollNoChange(),
   processResumeResult: (result, key, navigate) =>
     useChatResumeStore.getState().processResumeResult(result, key, navigate)
 }

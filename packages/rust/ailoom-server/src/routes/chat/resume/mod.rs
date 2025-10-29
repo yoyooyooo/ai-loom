@@ -1,11 +1,11 @@
-mod types;
-mod history;
-mod event_accumulator;
-mod rollout_parser;
 mod config;
-mod io;
-mod service;
+mod event_accumulator;
 mod handler;
+mod history;
+mod io;
+mod rollout_parser;
+mod service;
+mod types;
 
 #[cfg(test)]
 mod tests;

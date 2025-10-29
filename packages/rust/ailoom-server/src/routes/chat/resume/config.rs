@@ -1,7 +1,10 @@
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::protocol::SandboxPolicy;
 
-use super::types::{ResumeConfigResponse, ResumeOverrides, ResumeSandboxConfig, RolloutConfigSnapshot, ResumeOverridePayload};
+use super::types::{
+    ResumeConfigResponse, ResumeOverridePayload, ResumeOverrides, ResumeSandboxConfig,
+    RolloutConfigSnapshot,
+};
 
 pub fn build_resume_config(
     snapshot: &RolloutConfigSnapshot,
@@ -48,9 +51,9 @@ pub fn build_resume_config(
                             serde_json::Value::Array(
                                 writable_roots
                                     .iter()
-                                    .map(|p| serde_json::Value::String(
-                                        p.to_string_lossy().to_string(),
-                                    ))
+                                    .map(|p| {
+                                        serde_json::Value::String(p.to_string_lossy().to_string())
+                                    })
                                     .collect(),
                             ),
                         );

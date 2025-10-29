@@ -67,9 +67,10 @@ export const ws = {
 
   first<T>(obs$: Observable<T>): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      const sub = obs$.subscribe({
-        next: (v) => { resolve(v); sub.unsubscribe() },
-        error: reject
+      let sub: any
+      sub = obs$.subscribe({
+        next: (v) => { try { resolve(v) } finally { try { sub?.unsubscribe?.() } catch {} } },
+        error: (e) => { try { reject(e) } finally { try { sub?.unsubscribe?.() } catch {} } }
       })
     })
   },

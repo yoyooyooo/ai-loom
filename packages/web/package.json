@@ -52,6 +52,7 @@
     "zustand": "^4.5.4"
   },
   "devDependencies": {
+    "msw": "^2.6.2",
     "@tailwindcss/typography": "^0.5.15",
     "@tailwindcss/vite": "^4.0.0",
     "@testing-library/react": "^14.2.2",
@@ -67,5 +68,12 @@
     "vite": "^5.4.8",
     "vite-plugin-monaco-editor": "^1.1.0",
     "vitest": "^1.6.0"
+  }
+  ,
+  "vitest": {
+    "environment": "jsdom",
+    "setupFiles": [
+      "src/test/setup.ts"
+    ]
   }
 }

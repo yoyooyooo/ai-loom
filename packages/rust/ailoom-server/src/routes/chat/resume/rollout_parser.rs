@@ -8,9 +8,7 @@ use tokio::fs;
 
 use super::event_accumulator::EventAccumulator;
 use super::history::convert_history_item;
-use super::types::{
-    EnvironmentContextSnapshot, RolloutConfigSnapshot, RolloutParseResult,
-};
+use super::types::{EnvironmentContextSnapshot, RolloutConfigSnapshot, RolloutParseResult};
 
 fn parse_environment_context(xml: &str) -> EnvironmentContextSnapshot {
     fn extract_tag(xml: &str, tag: &str) -> Option<String> {
@@ -114,8 +112,7 @@ pub fn parse_rollout(content: &str) -> RolloutParseResult {
                             if let Ok(ctx) =
                                 serde_json::from_value::<TurnContextItem>(payload.clone())
                             {
-                                let mut snapshot_turn =
-                                    snapshot.turn.take().unwrap_or_default();
+                                let mut snapshot_turn = snapshot.turn.take().unwrap_or_default();
                                 snapshot_turn.model = Some(ctx.model);
                                 snapshot_turn.approval_policy = Some(ctx.approval_policy);
                                 snapshot_turn.sandbox_policy = Some(ctx.sandbox_policy);
@@ -132,18 +129,25 @@ pub fn parse_rollout(content: &str) -> RolloutParseResult {
                             }
                         } else if ptyp == "message" {
                             // scan message content for <environment_context> blocks
-                            if let Some(content) = payload.get("content").and_then(|v| v.as_array()) {
+                            if let Some(content) = payload.get("content").and_then(|v| v.as_array())
+                            {
                                 let mut last_env: Option<EnvironmentContextSnapshot> = None;
                                 for item in content {
-                                    if item.get("type").and_then(|v| v.as_str()) == Some("input_text") {
-                                        if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                                    if item.get("type").and_then(|v| v.as_str())
+                                        == Some("input_text")
+                                    {
+                                        if let Some(text) =
+                                            item.get("text").and_then(|v| v.as_str())
+                                        {
                                             if text.contains("<environment_context>") {
                                                 last_env = Some(parse_environment_context(text));
                                             }
                                         }
                                     }
                                 }
-                                if let Some(env) = last_env { snapshot.environment = Some(env); }
+                                if let Some(env) = last_env {
+                                    snapshot.environment = Some(env);
+                                }
                             }
                         }
                     }
@@ -211,11 +215,17 @@ pub fn rollout_in_progress(path: &str) -> Option<bool> {
     let mut closed_exec_calls: HashSet<String> = HashSet::new();
     for raw in lines.iter().rev().take(4096) {
         let s = raw.trim();
-        if s.is_empty() { continue; }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(s) else { continue };
+        if s.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(s) else {
+            continue;
+        };
         let kind = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
         if kind == "response_item" {
-            let Some(payload) = v.get("payload") else { continue };
+            let Some(payload) = v.get("payload") else {
+                continue;
+            };
             let ptype = payload.get("type").and_then(|x| x.as_str()).unwrap_or("");
             match ptype {
                 "function_call_output" => {
@@ -234,8 +244,12 @@ pub fn rollout_in_progress(path: &str) -> Option<bool> {
             }
             continue;
         }
-        if kind != "event_msg" { continue; }
-        let Some(payload) = v.get("payload") else { continue };
+        if kind != "event_msg" {
+            continue;
+        }
+        let Some(payload) = v.get("payload") else {
+            continue;
+        };
         let ptype = payload.get("type").and_then(|x| x.as_str()).unwrap_or("");
         match ptype {
             "shutdown_complete" | "task_complete" | "turn_aborted" | "error" | "stream_error" => {
@@ -268,7 +282,9 @@ pub fn rollout_in_progress(path: &str) -> Option<bool> {
                     // 无法读取修改时间：保守地视为超过阈值
                     Err(_) => threshold_ms + 1,
                 };
-                if idle_ms >= threshold_ms { return Some(false); }
+                if idle_ms >= threshold_ms {
+                    return Some(false);
+                }
                 return Some(true);
             }
         }

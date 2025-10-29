@@ -1,7 +1,6 @@
 import { animationFrameScheduler, Observable, GroupedObservable } from 'rxjs'
 import { bufferTime, filter, groupBy, map, mergeMap, observeOn, share } from 'rxjs/operators'
 import { ws } from '@/lib/ws/singleton'
-import type { CodexRuntimeEventPayload } from '@/lib/ws/types'
 import { chatTurnActions, useChatTurnStore } from '../stores/chat-turns'
 
 let inited = false
@@ -16,7 +15,7 @@ const DEFAULT_BATCH_MS = (() => {
   }
 })()
 
-type CodexEvent = { method: string; params: CodexRuntimeEventPayload }
+type WsEvent = { method: string; params: any }
 type DeltaItem = { cid: string; delta: string }
 type Batched = { cid: string; joined: string }
 
@@ -26,12 +25,12 @@ export function ensureDeltaPipelines() {
 
   const batchMs = DEFAULT_BATCH_MS
   const raw: any = (ws as any).events$
-  let codex$: Observable<CodexEvent>
+  let stream$: Observable<WsEvent>
   if (raw && typeof raw.pipe === 'function') {
-    codex$ = (raw as Observable<CodexEvent>).pipe(share())
+    stream$ = (raw as Observable<WsEvent>).pipe(share())
   } else if (raw && typeof raw.subscribe === 'function') {
-    codex$ = new Observable<CodexEvent>((subscriber) => {
-      const sub = (raw as { subscribe: (h: (v: CodexEvent) => void) => any }).subscribe((v: CodexEvent) =>
+    stream$ = new Observable<WsEvent>((subscriber) => {
+      const sub = (raw as { subscribe: (h: (v: WsEvent) => void) => any }).subscribe((v: WsEvent) =>
         subscriber.next(v)
       )
       return () => {
@@ -45,12 +44,12 @@ export function ensureDeltaPipelines() {
   }
 
   // Reasoning delta 微批
-  codex$
+  stream$
     .pipe(
-      filter((ev: CodexEvent): ev is CodexEvent => ev?.method === 'codex/event/agent_reasoning_delta'),
-      map((ev: CodexEvent): DeltaItem => ({
+      filter((ev: WsEvent): ev is WsEvent => ev?.method === 'chat.reasoning.delta'),
+      map((ev: WsEvent): DeltaItem => ({
         cid: String(ev?.params?.conversationId || ''),
-        delta: String((ev?.params?.msg as any)?.delta || '')
+        delta: String(ev?.params?.delta || '')
       })),
       filter((e: DeltaItem): e is DeltaItem => e.cid.length > 0 && e.delta.length > 0),
       groupBy((e: DeltaItem) => e.cid),
@@ -76,12 +75,12 @@ export function ensureDeltaPipelines() {
     })
 
   // Agent message delta 微批
-  codex$
+  stream$
     .pipe(
-      filter((ev: CodexEvent): ev is CodexEvent => ev?.method === 'codex/event/agent_message_delta'),
-      map((ev: CodexEvent): DeltaItem => ({
+      filter((ev: WsEvent): ev is WsEvent => ev?.method === 'chat.message.delta'),
+      map((ev: WsEvent): DeltaItem => ({
         cid: String(ev?.params?.conversationId || ''),
-        delta: String((ev?.params?.msg as any)?.delta || '')
+        delta: String(ev?.params?.delta || '')
       })),
       filter((e: DeltaItem): e is DeltaItem => e.cid.length > 0 && e.delta.length > 0),
       groupBy((e: DeltaItem) => e.cid),
