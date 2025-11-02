@@ -1,8 +1,12 @@
 import React from 'react'
 import { describe, it, beforeEach, afterEach, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { createProcessChatEvent } from '@/features/codex-chat/services/ws-processors'
-import { chatTurnActions, useChatTurnStore } from '@/features/codex-chat/stores/chat-turns'
+import { createProcessChatEvent } from '@/features/codex-chat/services/processors'
+import {
+  chatTurnActions,
+  chatTurnSelectors,
+  useChatTurnStore
+} from '@/features/codex-chat/stores/chat-turns'
 import { TurnAssistantView } from '@/features/codex-chat/components/turn-item'
 
 vi.mock('@/lib/ws/singleton')
@@ -45,7 +49,7 @@ describe('UI：patch 截断策略（max files / max chars）', () => {
     processor('chat.turn.complete', { conversationId: 'conv-patch' })
 
     const st = useChatTurnStore.getState()
-    const t = st.turns[st.turns.length - 1]
+    const t = chatTurnSelectors.sliceById('conv-patch')(st).turns.at(-1)!
     render(<TurnAssistantView turn={t} />)
     // 展开 Working 折叠区与 patch 步骤
     fireEvent.click(screen.getByText(/Finished working/))

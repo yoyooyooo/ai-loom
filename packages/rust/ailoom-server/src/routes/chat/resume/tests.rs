@@ -57,6 +57,28 @@ fn convert_agent_reasoning_to_history_entry() {
 }
 
 #[test]
+fn reasoning_summary_is_ignored_use_process_only() {
+    // 同时存在 summary 与过程：history 仅记录事件中的 process（可能多条），summary 忽略
+    let content = r#"
+{"type":"event_msg","payload":{"type":"user_message","message":"hi"}}
+{"type":"event_msg","payload":{"type":"agent_reasoning","text":"proc-1"}}
+{"type":"event_msg","payload":{"type":"agent_reasoning","text":"proc-2"}}
+{"type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"sum-1"},{"type":"summary_text","text":"sum-2"}]}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"done"}}
+"#;
+    let parsed = super::rollout_parser::parse_rollout(content);
+    let history = parsed.history;
+    // 可能为 4 项（user, reasoning(proc-1), reasoning(proc-2), assistant）
+    assert_eq!(history.len(), 4);
+    assert_eq!(history[0].role, "user");
+    assert_eq!(history[1].role, "reasoning");
+    assert_eq!(history[1].reasoning.as_deref(), Some("proc-1"));
+    assert_eq!(history[2].role, "reasoning");
+    assert_eq!(history[2].reasoning.as_deref(), Some("proc-2"));
+    assert_eq!(history[3].role, "assistant");
+}
+
+#[test]
 fn map_turn_basic_events() {
     let content = load_fixture("turn_basic");
     let parsed = parse_rollout(content);
@@ -74,6 +96,29 @@ fn map_turn_basic_events() {
     for (_, seq) in events {
         assert_eq!(seq, Some(1));
     }
+}
+
+#[test]
+fn http_resume_filters_out_deltas() {
+    // resume 场景：应去除 chat.message.delta 与 chat.reasoning.delta，避免刷新后刷屏
+    let content = r#"
+{"type":"event_msg","payload":{"type":"task_started"}}
+{"type":"event_msg","payload":{"type":"agent_reasoning_delta","delta":"r1"}}
+{"type":"event_msg","payload":{"type":"agent_reasoning","text":"thinking done"}}
+{"type":"event_msg","payload":{"type":"agent_message_delta","delta":"p1"}}
+{"type":"event_msg","payload":{"type":"agent_message_delta","delta":"p2"}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"final"}}
+{"type":"event_msg","payload":{"type":"task_complete"}}
+"#;
+    let parsed = parse_rollout(content);
+    let filtered = super::service::filter_events_for_http_resume(&parsed.events);
+    let methods: Vec<String> = filtered.iter().map(|(ev, _)| event(ev.clone()).0).collect();
+    assert!(methods.contains(&"chat.turn.started".to_string()));
+    assert!(methods.contains(&"chat.reasoning.end".to_string()));
+    assert!(methods.contains(&"chat.message.completed".to_string()));
+    assert!(methods.contains(&"chat.turn.complete".to_string()));
+    assert!(methods.iter().all(|m| m != "chat.message.delta"));
+    assert!(methods.iter().all(|m| m != "chat.reasoning.delta"));
 }
 
 #[test]
@@ -208,6 +253,66 @@ fn map_patch_events_basic() {
 }
 
 #[test]
+fn map_info_plan_update_and_turn_diff() {
+    // 包含 plan_update 与 turn_diff，验证被映射为 chat.info.*，且隶属当前 turn（turnSeq=1）
+    let content = r#"
+{"type":"event_msg","payload":{"type":"task_started"}}
+{"type":"event_msg","payload":{"type":"plan_update","explanation":"E","plan":[{"step":"a","status":"in_progress"}]}}
+{"type":"event_msg","payload":{"type":"turn_diff","unified_diff":"--- a\n+++ b\n+line"}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"done"}}
+{"type":"event_msg","payload":{"type":"task_complete"}}
+"#;
+    let parsed = parse_rollout(content);
+    let mut has_plan = false;
+    let mut has_diff = false;
+    let mut seq_plan: Option<usize> = None;
+    let mut seq_diff: Option<usize> = None;
+    for (ev, seq) in parsed.events {
+        let (method, _params) = event(ev.clone());
+        if method == "chat.info.plan_update" {
+            has_plan = true;
+            seq_plan = seq;
+        }
+        if method == "chat.info.turn_diff" {
+            has_diff = true;
+            seq_diff = seq;
+        }
+    }
+    assert!(has_plan, "expected chat.info.plan_update in events");
+    assert!(has_diff, "expected chat.info.turn_diff in events");
+    assert_eq!(seq_plan, Some(1));
+    assert_eq!(seq_diff, Some(1));
+}
+
+#[test]
+fn map_function_call_update_plan_as_info_plan_update() {
+    // function_call:update_plan（来自 rollout response_item）应被映射为 chat.info.plan_update，附着于当前 turn
+    let content = r#"
+{"type":"event_msg","payload":{"type":"task_started"}}
+{"type":"response_item","payload":{"type":"function_call","name":"update_plan","call_id":"call_plan_1","arguments":"{\"plan\":[{\"step\":\"定位新会话创建与事件流\",\"status\":\"in_progress\"},{\"step\":\"梳理后端事件入环与resume\",\"status\":\"pending\"}],\"explanation\":\"初始计划\"}"}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"done"}}
+{"type":"event_msg","payload":{"type":"task_complete"}}
+"#;
+    let parsed = parse_rollout(content);
+    let mut has_plan = false;
+    let mut seq_plan: Option<usize> = None;
+    for (ev, seq) in parsed.events {
+        let (method, params) = event(ev.clone());
+        if method == "chat.info.plan_update" {
+            has_plan = true;
+            seq_plan = seq;
+            // 基本字段存在
+            assert!(params.get("plan").is_some());
+        }
+    }
+    assert!(
+        has_plan,
+        "expected chat.info.plan_update mapped from function_call:update_plan"
+    );
+    assert_eq!(seq_plan, Some(1));
+}
+
+#[test]
 fn exec_event_path_with_output_before_begin() {
     // output_delta arrives before begin; accumulator should insert a placeholder begin
     let content = r#"
@@ -290,8 +395,13 @@ fn in_progress_true_on_unmatched_function_call_begin() {
 "#;
     fs::write(&path, content.trim_start()).unwrap();
     // 即使 idle 超过阈值，仍应视为进行中（未匹配到输出）
+    let prev_idle = std::env::var("AILOOM_CODEX_ROLLOUT_IDLE_MS").ok();
     std::env::set_var("AILOOM_CODEX_ROLLOUT_IDLE_MS", "1");
     let res = rollout_in_progress(path.to_string_lossy().as_ref());
+    match prev_idle {
+        Some(val) => std::env::set_var("AILOOM_CODEX_ROLLOUT_IDLE_MS", val),
+        None => std::env::remove_var("AILOOM_CODEX_ROLLOUT_IDLE_MS"),
+    }
     assert_eq!(res, Some(true));
 }
 
@@ -306,8 +416,13 @@ fn in_progress_true_on_unmatched_exec_begin() {
 {"type":"event_msg","payload":{"type":"exec_command_begin","call_id":"c1","command":["bash","-lc","sleep 10"]}}
 "#;
     fs::write(&path, content.trim_start()).unwrap();
+    let prev_idle = std::env::var("AILOOM_CODEX_ROLLOUT_IDLE_MS").ok();
     std::env::set_var("AILOOM_CODEX_ROLLOUT_IDLE_MS", "1");
     let res = rollout_in_progress(path.to_string_lossy().as_ref());
+    match prev_idle {
+        Some(val) => std::env::set_var("AILOOM_CODEX_ROLLOUT_IDLE_MS", val),
+        None => std::env::remove_var("AILOOM_CODEX_ROLLOUT_IDLE_MS"),
+    }
     assert_eq!(res, Some(true));
 }
 
@@ -393,7 +508,6 @@ fn parse_real_codex_sessions_if_available() {
 #[test]
 fn in_progress_false_on_task_complete() {
     use std::fs;
-    use std::time::Duration;
     let dir = std::env::temp_dir().join(format!("ailoom_inprogress_{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a.jsonl");
@@ -420,8 +534,13 @@ fn in_progress_true_on_recent_delta() {
 "#;
     fs::write(&path, content.trim_start()).unwrap();
     // 提高阈值，确保视为“活跃”
+    let prev_idle = std::env::var("AILOOM_CODEX_ROLLOUT_IDLE_MS").ok();
     std::env::set_var("AILOOM_CODEX_ROLLOUT_IDLE_MS", "60000");
     let res = rollout_in_progress(path.to_string_lossy().as_ref());
+    match prev_idle {
+        Some(val) => std::env::set_var("AILOOM_CODEX_ROLLOUT_IDLE_MS", val),
+        None => std::env::remove_var("AILOOM_CODEX_ROLLOUT_IDLE_MS"),
+    }
     assert_eq!(res, Some(true));
 }
 

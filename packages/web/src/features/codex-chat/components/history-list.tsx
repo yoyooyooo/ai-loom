@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useInViewport } from 'ahooks'
-import { Loader2, Trash2 } from 'lucide-react'
+import { SquarePen, Loader2, Trash2 } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { cn, formatDateTime, formatDateDay } from '@/lib/utils'
 import { EmptyState, LoadingPlaceholder } from '@/components/ui/placeholder'
 import {
@@ -15,7 +16,9 @@ import {
   AlertDialogTrigger
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { TypingIndicator } from '@/components/ui/typing-indicator'
 import type { ConversationListItem } from '../services/api'
+import { useChatTurnStore } from '@/features/codex-chat/stores/chat-turns'
 import { chatApi } from '../services/api'
 import type { HistoryTreeNode } from '../utils/history-tree'
 
@@ -54,11 +57,17 @@ export function HistoryList({
   onLoadMore,
   onDelete
 }: HistoryListProps) {
+  const navigate = useNavigate()
   const info = useMemo(() => {
     if (isLoading || isFetching) return '加载中…'
     if (isError) return '加载失败'
     return null
   }, [isLoading, isFetching, isError])
+
+  // 订阅一个轻量的“版本号”，当任一会话分片的 turns/generating 变化时触发重渲染，
+  // 以便列表可实时覆盖进行中项的预览文案（不会影响完成项）。
+  const listVersion = useChatTurnStore((s) => s.version)
+  void listVersion
 
   const loadMoreRef = useRef<HTMLDivElement | null>(null)
   const [loadMoreInView] = useInViewport(loadMoreRef, { threshold: 0, rootMargin: '200px' })
@@ -110,21 +119,26 @@ export function HistoryList({
 
   return (
     <div className="flex h-full min-h-0 flex-col" aria-busy={isLoading || isFetching}>
-      <header className="border-b border-border px-4 py-3">
-        <div className="flex items-center justify-between gap-2">
-          <h1 className="text-sm font-medium text-muted-foreground">历史</h1>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            {info ? <span>{info}</span> : null}
-            {isError ? (
-              <button className="text-primary" onClick={() => onRetry?.()}>
-                重试
-              </button>
-            ) : null}
-          </div>
+      <header className="border-b border-border px-3 py-1">
+        <div className="flex items-center justify-end gap-2">
+          {info ? <span className="text-xs text-muted-foreground">{info}</span> : null}
+          {isError ? (
+            <button className="text-xs text-primary" onClick={() => onRetry?.()}>
+              重试
+            </button>
+          ) : null}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="cursor-pointer"
+            onClick={() => navigate('/chat')}
+            title="新建会话"
+            aria-label="新建会话"
+          >
+            <SquarePen className="size-4" />
+          </Button>
         </div>
-        {errorMessage ? (
-          <p className="mt-2 text-xs text-destructive/80">{errorMessage}</p>
-        ) : null}
+        {errorMessage ? <p className="mt-2 text-xs text-destructive/80">{errorMessage}</p> : null}
       </header>
       <div className="flex-1 overflow-auto">
         {isLoading ? (
@@ -157,7 +171,8 @@ export function HistoryList({
                 const isActive = k === activeConversationId
                 const isPending = k === pendingConversationId
                 const isDeleting = k === deletingKey
-                const isInProgress = inProgressConversationId === k
+                const isInProgress =
+                  (item as any)?.inProgress === true || inProgressConversationId === k
                 const paddingLeft = 16 + depth * INDENT_STEP
                 const lineageTip =
                   typeof lineageDepth === 'number' && lineageDepth > depth
@@ -202,7 +217,7 @@ export function HistoryList({
                         ) : null}
                       </div>
                       <div className="line-clamp-3 text-sm text-foreground">
-                        {item.preview || '（无预览）'}
+                        {item.preview?.trim() ? item.preview : '（无预览）'}
                       </div>
                       <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground/70">
                         <span>{formatDateTime(item.timestamp || item.createdAt || null)}</span>
@@ -283,7 +298,8 @@ export function HistoryList({
                           <AlertDialogHeader>
                             <AlertDialogTitle>确认删除会话？</AlertDialogTitle>
                             <AlertDialogDescription>
-                              删除 {item.preview || item.path} 后无法恢复。按住 Shift 再点击“删除”可跳过确认。
+                              删除 {item.preview || item.path} 后无法恢复。按住 Shift
+                              再点击“删除”可跳过确认。
                             </AlertDialogDescription>
                             {(() => {
                               const key = item.conversationId ?? item.path
@@ -291,17 +307,23 @@ export function HistoryList({
                               if (vibeCheck.key !== key) return null
                               if (vibeCheck.loading) {
                                 return (
-                                  <p className="text-xs text-muted-foreground">正在检查是否关联 vibe-kanban 任务…</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    正在检查是否关联 vibe-kanban 任务…
+                                  </p>
                                 )
                               }
                               if (vibeCheck.associated && vibeCheck.projectId && vibeCheck.taskId) {
                                 const href = `/projects/${vibeCheck.projectId}/tasks/${vibeCheck.taskId}`
                                 return (
                                   <div className="rounded border border-yellow-200 bg-yellow-50 px-3 py-2 text-xs text-yellow-900">
-                                    <p className="font-medium">警告：此会话关联了 vibe-kanban 任务</p>
+                                    <p className="font-medium">
+                                      警告：此会话关联了 vibe-kanban 任务
+                                    </p>
                                     <p className="mt-1 break-all">
                                       项目 ID：{vibeCheck.projectId}
-                                      {vibeCheck.projectName ? `（${vibeCheck.projectName}）` : null}
+                                      {vibeCheck.projectName
+                                        ? `（${vibeCheck.projectName}）`
+                                        : null}
                                     </p>
                                     <p className="break-all">
                                       任务 ID：{vibeCheck.taskId}
@@ -338,13 +360,15 @@ export function HistoryList({
             {hasNextPage ? (
               <li key="history-load-more" className="px-4 py-2 text-sm text-muted-foreground">
                 <div ref={loadMoreRef} className="h-1" />
-                <button
-                  className="text-sm text-primary"
-                  disabled={isFetchingNextPage}
-                  onClick={() => onLoadMore?.()}
-                >
-                  {isFetchingNextPage ? '加载中…' : '加载更多'}
-                </button>
+                {isFetchingNextPage ? (
+                  <div className="mt-3 flex justify-center">
+                    <TypingIndicator />
+                  </div>
+                ) : (
+                  <button className="text-sm text-primary" onClick={() => onLoadMore?.()}>
+                    加载更多
+                  </button>
+                )}
               </li>
             ) : null}
           </ul>

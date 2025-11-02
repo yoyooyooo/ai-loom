@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{anyhow, Result};
 use codex_app_server_protocol::{
@@ -16,12 +17,15 @@ use codex_app_server_protocol::{ExecCommandApprovalResponse, InputItem};
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::ConversationId;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
+use tokio::sync::Mutex as AsyncMutex;
 use tracing::instrument;
 
 use crate::ws::hub::Hub;
 
-use super::bridge::{map_notification, map_notification_to_chat_events, BroadcastEvent};
+use super::bridge::{
+    active_conversation_ids, map_notification, map_notification_to_chat_events, BroadcastEvent,
+};
 use super::transport::{JsonRpcCallbacks, JsonRpcPeer};
 
 #[derive(Clone)]
@@ -30,8 +34,12 @@ pub struct AppServerClient {
     hub: Arc<Mutex<Option<Hub>>>,
     // conversation_id -> (subscription_id, refcount)
     subscriptions: Arc<Mutex<HashMap<String, (uuid::Uuid, usize)>>>,
+    // 强自愈：额外叠加的“并行监听”订阅（可能存在多个 sub_id）
+    extra_subscriptions: Arc<Mutex<HashMap<String, Vec<uuid::Uuid>>>>,
     // best-effort active set; used for lifecycle hints (release on shutdown)
     active_conversations: Arc<Mutex<HashSet<String>>>,
+    // 每会话监听的并发门闩：避免重复 addConversationListener
+    listener_guards: Arc<Mutex<HashMap<String, Arc<AsyncMutex<()>>>>>,
 }
 
 impl AppServerClient {
@@ -40,12 +48,31 @@ impl AppServerClient {
             rpc: OnceLock::new(),
             hub: Arc::new(Mutex::new(None)),
             subscriptions: Arc::new(Mutex::new(HashMap::new())),
+            extra_subscriptions: Arc::new(Mutex::new(HashMap::new())),
             active_conversations: Arc::new(Mutex::new(HashSet::new())),
+            listener_guards: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
     pub fn connect(&self, peer: JsonRpcPeer) {
         let _ = self.rpc.set(peer);
+    }
+
+    pub async fn restore_active_conversation_listeners(&self) {
+        let active = active_conversation_ids();
+        if active.is_empty() {
+            return;
+        }
+        for conversation_id in active {
+            if let Err(err) = self.ensure_listener(&conversation_id).await {
+                tracing::warn!(
+                    target: "codex",
+                    conversationId = %conversation_id,
+                    error = %err,
+                    "restore_active_conversation_listeners: ensure_listener 失败"
+                );
+            }
+        }
     }
 
     fn rpc(&self) -> &JsonRpcPeer {
@@ -54,6 +81,63 @@ impl AppServerClient {
 
     pub fn register_ws_hub(&self, hub: Hub) {
         *self.hub.lock().unwrap() = Some(hub);
+    }
+
+    /// 调试/观测：返回 (conversationId, refCount) 列表的快照
+    pub fn subscriptions_snapshot(&self) -> Vec<(String, usize)> {
+        let guard = self.subscriptions.lock().unwrap();
+        guard
+            .iter()
+            .map(|(k, (_id, cnt))| (k.clone(), *cnt))
+            .collect()
+    }
+
+    /// 调试/观测：返回 active_conversations 集合快照
+    pub fn active_conversations_snapshot(&self) -> Vec<String> {
+        let guard = self.active_conversations.lock().unwrap();
+        guard.iter().cloned().collect()
+    }
+
+    /// 是否已收到该会话的 sessionConfigured（基于 on_notification 维护的活动集）。
+    pub fn is_session_active(&self, conversation_id: &str) -> bool {
+        let guard = self.active_conversations.lock().unwrap();
+        guard.contains(conversation_id)
+    }
+
+    /// 最多等待一段时间，直到收到 sessionConfigured（活动集包含该会话）。
+    pub async fn wait_for_session_configured(
+        &self,
+        conversation_id: &str,
+        max_wait_ms: u64,
+        step_ms: u64,
+    ) -> bool {
+        if self.is_session_active(conversation_id) {
+            return true;
+        }
+        let mut waited = 0u64;
+        while waited < max_wait_ms {
+            if self.is_session_active(conversation_id) {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(step_ms)).await;
+            waited += step_ms;
+        }
+        false
+    }
+
+    /// 强自愈：在已存在监听的情况下，再叠加一条监听（不移除旧监听）。
+    /// 仅当环境变量 AILOOM_CODEX_STRONG_SELF_HEAL=1 时建议调用。
+    pub async fn force_add_listener(&self, conversation_id: &str) -> Result<()> {
+        let resp = self
+            .add_conversation_listener(conversation_id.to_string())
+            .await?;
+        let sub_id = resp.subscription_id;
+        let mut guard = self.extra_subscriptions.lock().unwrap();
+        guard
+            .entry(conversation_id.to_string())
+            .or_default()
+            .push(sub_id);
+        Ok(())
     }
 
     #[instrument(level = "info", target = "codex.rpc", skip(self))]
@@ -102,6 +186,89 @@ impl AppServerClient {
         Ok(())
     }
 
+    /// Ensure listener with resilience: if Codex hasn't finished creating the
+    /// conversation yet (addConversationListener returns "conversation not found"),
+    /// we will retry for a short window until it becomes available.
+    ///
+    /// This is important in per-conversation child mode where `newConversation`
+    /// and `sessionConfigured` can lag behind the immediate HTTP return; without
+    /// retries the listener may never be established and no runtime events will
+    /// flow back to the WS hub.
+    pub async fn ensure_listener_resilient(&self, conversation_id: &str) -> Result<()> {
+        // 并发门闩：同一会话仅允许一个 addConversationListener 在途
+        let conv_lock = {
+            let mut m = self.listener_guards.lock().unwrap();
+            m.entry(conversation_id.to_string())
+                .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+                .clone()
+        };
+        let _guard = conv_lock.lock().await;
+
+        // 双检：获取锁后再次快速判断
+        {
+            let mut guard = self.subscriptions.lock().unwrap();
+            if let Some((_sub_id, refcnt)) = guard.get_mut(conversation_id) {
+                *refcnt = refcnt.saturating_add(1);
+                return Ok(());
+            }
+        }
+
+        // Retry window is configurable; default to 15s to cover cold start.
+        let total_ms: u64 = std::env::var("AILOOM_CODEX_LISTENER_WAIT_MS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(15_000);
+        let step_ms: u64 = std::env::var("AILOOM_CODEX_LISTENER_RETRY_MS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(300);
+        let mut elapsed = 0u64;
+        let mut last_err: Option<anyhow::Error> = None;
+        loop {
+            match self
+                .add_conversation_listener(conversation_id.to_string())
+                .await
+            {
+                Ok(resp) => {
+                    let sub_id = resp.subscription_id;
+                    let mut guard = self.subscriptions.lock().unwrap();
+                    guard.insert(conversation_id.to_string(), (sub_id, 1));
+                    let mut act = self.active_conversations.lock().unwrap();
+                    act.insert(conversation_id.to_string());
+                    return Ok(());
+                }
+                Err(err) => {
+                    let msg = err.to_string();
+                    // Only retry on specific race: conversation not found.
+                    if msg.contains("conversation not found") && elapsed < total_ms {
+                        if elapsed == 0 {
+                            tracing::info!(
+                                target: "codex",
+                                conversationId = %conversation_id,
+                                waitMs = total_ms,
+                                "ensure_listener: conversation not found, retrying until configured",
+                            );
+                        }
+                        last_err = Some(err);
+                        tokio::time::sleep(std::time::Duration::from_millis(step_ms)).await;
+                        elapsed = elapsed.saturating_add(step_ms);
+                        continue;
+                    }
+                    return Err(err);
+                }
+            }
+        }
+        #[allow(unreachable_code)]
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("ensure_listener failed")))
+    }
+
+    /// Refresh listener (safe): downgraded to ensure-only to avoid disrupting active streams.
+    /// If a listener exists, we only bump refcount; otherwise create a new one. No removal.
+    pub async fn refresh_listener(&self, conversation_id: &str) -> Result<()> {
+        tracing::info!(target: "codex", conversationId=%conversation_id, "refresh_listener: ensure-only");
+        self.ensure_listener(conversation_id).await
+    }
+
     /// Decrement refcount; when reaches zero, remove listener at server.
     pub async fn release_listener(&self, conversation_id: &str) -> Result<()> {
         let maybe = {
@@ -143,7 +310,23 @@ impl AppServerClient {
         self.rpc().request(request, "newConversation").await
     }
 
-    #[instrument(level = "info", target = "codex.rpc", skip(self, params), fields(path = %params.path.display()))]
+    #[instrument(
+        level = "info",
+        target = "codex.rpc",
+        skip(self, params),
+        fields(
+            path = %params
+                .path
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
+            conversation_id = %params
+                .conversation_id
+                .as_ref()
+                .map(|id| id.to_string())
+                .unwrap_or_default()
+        )
+    )]
     pub async fn resume_conversation(
         &self,
         params: ResumeConversationParams,
@@ -162,6 +345,7 @@ impl AppServerClient {
         &self,
         conversation_id: String,
     ) -> Result<AddConversationSubscriptionResponse> {
+        let start_ts = std::time::Instant::now();
         let id = self.rpc().next_request_id();
         let params = AddConversationListenerParams {
             conversation_id: parse_conversation_id(&conversation_id)?,
@@ -172,7 +356,13 @@ impl AppServerClient {
             method: "addConversationListener".into(),
             params: Some(serde_json::to_value(params)?),
         };
-        self.rpc().request(request, "addConversationListener").await
+        let resp: AddConversationSubscriptionResponse = self
+            .rpc()
+            .request(request, "addConversationListener")
+            .await?;
+        let dur = start_ts.elapsed().as_millis();
+        tracing::info!(target:"codex", conversationId=%conversation_id, sub_id=%resp.subscription_id, ms=%dur, "addConversationListener ok");
+        Ok(resp)
     }
 
     #[instrument(level = "info", target = "codex.rpc", skip(self))]
@@ -198,6 +388,7 @@ impl AppServerClient {
         conversation_id: String,
         text: String,
     ) -> Result<SendUserMessageResponse> {
+        let start_ts = std::time::Instant::now();
         let id = self.rpc().next_request_id();
         let params = SendUserMessageParams {
             conversation_id: parse_conversation_id(&conversation_id)?,
@@ -208,7 +399,10 @@ impl AppServerClient {
             method: "sendUserMessage".into(),
             params: Some(serde_json::to_value(params)?),
         };
-        self.rpc().request(request, "sendUserMessage").await
+        let resp: SendUserMessageResponse = self.rpc().request(request, "sendUserMessage").await?;
+        let dur = start_ts.elapsed().as_millis();
+        tracing::info!(target:"codex", conversationId=%conversation_id, ms=%dur, "sendUserMessage ok");
+        Ok(resp)
     }
 
     #[instrument(level = "info", target = "codex.rpc", skip(self), fields(conversation_id = %conversation_id))]
@@ -341,20 +535,54 @@ impl JsonRpcCallbacks for AppServerClient {
                     .and_then(|m| m.get("type"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
+                // 在每轮回合开始时，保障监听已就绪（ensure-only，不移除旧监听）。
+                // 这能显著降低两会话并发或重连抖动下，Codex 仍向旧通道写入导致“sending into a closed channel”的概率，
+                // 同时避免等待 watchdog 介入的空窗期。
+                if msg_type == "task_started" {
+                    if let Some(cid) = cid_opt {
+                        let cid_str = cid.to_string();
+                        let this = self.clone();
+                        // 异步保障，避免阻塞通知转发路径。
+                        tokio::spawn(async move {
+                            let _ = this.ensure_listener(&cid_str).await;
+                        });
+                    }
+                }
                 if msg_type == "shutdown_complete" {
                     if let Some(cid) = cid_opt {
-                        // best-effort: release listener when session shuts down
-                        let _ = self.release_listener(cid).await;
+                        // 为避免在事件仍在路上的窗口误关闭旧通道，这里不再立即 release；
+                        // 交由上层 watchdog/空闲回收策略处理。可用环境变量强制恢复旧行为。
+                        let allow_release = std::env::var("AILOOM_CODEX_RELEASE_ON_SHUTDOWN")
+                            .ok()
+                            .map(|v| v == "1")
+                            .unwrap_or(false);
+                        if allow_release {
+                            let _ = self.release_listener(cid).await;
+                        } else {
+                            tracing::info!(target:"codex", conversationId=%cid, "suppress release_listener on shutdown_complete (ensure-only mode)");
+                            // 同时清理强自愈叠加的监听，避免长期泄漏
+                            let list_opt = {
+                                let mut extras = self.extra_subscriptions.lock().unwrap();
+                                extras.remove(cid)
+                            };
+                            if let Some(list) = list_opt {
+                                for sub in list.into_iter() {
+                                    let _ = self.remove_conversation_listener(sub).await;
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
         if let Some(hub) = self.hub.lock().unwrap().clone() {
+            // 先映射 runtime → chat.*（简化：不做强自愈相关的短窗去重）
+            let mapped = map_notification_to_chat_events(&notification);
             for BroadcastEvent {
                 method,
                 params,
                 persistent,
-            } in map_notification_to_chat_events(&notification)
+            } in mapped.into_iter()
             {
                 if persistent {
                     hub.broadcast(method, params);
@@ -384,12 +612,73 @@ impl JsonRpcCallbacks for AppServerClient {
         _raw: &str,
         response: &JSONRPCResponse,
     ) -> Result<()> {
-        tracing::info!(target:"codex.rpc", id=?response.id, "rpc ⇐ response");
+        let label = _peer.label_for(&response.id);
+        tracing::info!(target:"codex.rpc", id=?response.id, label=?label, "rpc ⇐ response");
         Ok(())
     }
 
     async fn on_error(&self, _peer: &JsonRpcPeer, _raw: &str, error: &JSONRPCError) -> Result<()> {
-        tracing::warn!(target:"codex.rpc", code=%error.error.code, message=%error.error.message, "rpc ⇐ error");
+        let label = _peer.label_for(&error.id);
+        tracing::warn!(target:"codex.rpc", code=%error.error.code, message=%error.error.message, label=?label, "rpc ⇐ error");
+        Ok(())
+    }
+
+    async fn on_shutdown(&self, _peer: &JsonRpcPeer) -> Result<()> {
+        // 保守处理：不再清空本地 active 集合，避免丢失“需要恢复监听的会话”线索；
+        // 仅清空本地 subscription id 映射，随后异步重建。
+        let need_restore: Vec<String> = {
+            let mut guard = self.subscriptions.lock().unwrap();
+            let conversations: Vec<String> = guard.keys().cloned().collect();
+            guard.clear();
+            conversations
+        };
+        // 清理强自愈叠加的监听 id（不影响上层 active 线索）
+        {
+            let mut extras = self.extra_subscriptions.lock().unwrap();
+            extras.clear();
+        }
+
+        if need_restore.is_empty() {
+            return Ok(());
+        }
+
+        tracing::warn!(target:"codex", count=%need_restore.len(), "codex 通道关闭，安排重建监听");
+
+        // 轻提示（不影响恢复流程）
+        if let Some(hub) = self.hub.lock().unwrap().clone() {
+            for cid in need_restore.iter() {
+                hub.broadcast(
+                    "chat.info.background".into(),
+                    json!({
+                        "conversationId": cid,
+                        "message": "Codex 实例已重启，系统正在重新建立实时订阅；若长时间无更新，请刷新页面。"
+                    }),
+                );
+            }
+        }
+
+        // Per-conv 模式下不再在 on_shutdown() 尝试“全局恢复监听”，避免在新进程上对历史会话 addListener 造成 not found。
+        // 单例模式（legacy）可通过设置 AILOOM_CODEX_MODE=singleton 启用旧逻辑。
+        let per_conv = std::env::var("AILOOM_CODEX_MODE")
+            .ok()
+            .map(|v| v == "per_conv")
+            .unwrap_or(true);
+        if !per_conv {
+            tokio::spawn(async move {
+                match crate::services::codex::app_server::get_or_start(None).await {
+                    Ok(client) => {
+                        if let Some(hub) = client.app().hub.lock().unwrap().clone() {
+                            client.register_ws_hub(hub);
+                        }
+                        client.app().restore_active_conversation_listeners().await;
+                    }
+                    Err(err) => {
+                        tracing::warn!(target:"codex", error=%err, "auto-restore listeners failed (will rely on next request/watchdog)");
+                    }
+                }
+            });
+        }
+
         Ok(())
     }
 }
@@ -415,3 +704,13 @@ fn typed_response<T: Serialize>(id: RequestId, payload: T) -> Result<JSONRPCResp
         result: serde_json::to_value(payload)?,
     })
 }
+
+// —— 短窗弱去重（强自愈双通道时避免双推）——
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or(Duration::from_millis(0))
+        .as_millis() as u64
+}
+
+// 已移除强自愈相关的短窗去重，保持最简事件路径

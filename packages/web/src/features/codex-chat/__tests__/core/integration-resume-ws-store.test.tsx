@@ -3,9 +3,15 @@ import { describe, it, beforeEach, afterEach, expect, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, waitFor } from '@testing-library/react'
 import { subscribeChatEvents } from '@/features/codex-chat/services/ws'
-import { useResumeAndPoll } from '@/features/codex-chat/services/resume-restore'
-import { chatTurnActions, useChatTurnStore } from '@/features/codex-chat/stores/chat-turns'
-import { useChatResumeStore } from '@/features/codex-chat/stores/chat-resume'
+import {
+  hydrateConversation,
+  resetConversationSessionForTests
+} from '@/features/codex-chat/services/conversation-session'
+import {
+  chatTurnActions,
+  chatTurnSelectors,
+  useChatTurnStore
+} from '@/features/codex-chat/stores/chat-turns'
 import { chatApi } from '@/features/codex-chat/services/api'
 
 vi.mock('@/lib/ws/singleton')
@@ -16,8 +22,14 @@ function Host({ conversationKey }: { conversationKey?: string }) {
     const off = subscribeChatEvents()
     return () => off()
   }, [])
-  // 仅触发 resume 逻辑，导航可选
-  useResumeAndPoll(conversationKey)
+
+  useEffect(() => {
+    if (!conversationKey) return
+    hydrateConversation(conversationKey, { tail: 64 }).catch((error) => {
+      console.warn('[test] hydrate failed', error)
+    })
+  }, [conversationKey])
+
   return null
 }
 
@@ -34,6 +46,7 @@ describe('集成：Resume + WS → turns（最小宿主）', () => {
   beforeEach(() => {
     chatTurnActions.reset()
     __resetWsMock()
+    resetConversationSessionForTests()
     vi.spyOn(chatApi, 'getConfig').mockResolvedValue({
       models: [],
       defaults: { model: 'm', approvalPolicy: 'on-request', sandboxMode: 'workspace-write' }
@@ -42,47 +55,65 @@ describe('集成：Resume + WS → turns（最小宿主）', () => {
   afterEach(() => {
     chatTurnActions.reset()
     __resetWsMock()
+    resetConversationSessionForTests()
     vi.restoreAllMocks()
   })
 
-  it('已完成会话刷新：history（含 assistant）渲染为稳定 turns', async () => {
+  it('已完成会话刷新：turns（含 assistant）渲染为稳定 turns', async () => {
     vi.spyOn(chatApi, 'resumeByConversationId').mockResolvedValue({
       conversationId: 'conv-c',
-      history: [
-        { role: 'user', text: 'hello' },
-        { role: 'assistant', text: 'world' }
+      turns: [
+        {
+          id: 'turn-1',
+          seq: 1,
+          conversationId: 'conv-c',
+          status: 'completed',
+          user: { text: 'hello', ts: '' },
+          assistant: { text: 'world' },
+          steps: []
+        }
       ],
-      events: [],
-      inProgress: false
+      inProgress: false,
+      turnsSchemaVersion: 1,
+      uptoEventId: 0
     } as any)
 
     renderHost('conv-c')
 
     await waitFor(() => {
       const st = useChatTurnStore.getState()
-      expect(st.turns.length).toBe(1)
-      expect(st.turns[0]?.assistant.text).toBe('world')
+      const slice = chatTurnSelectors.sliceById('conv-c')(st)
+      expect(slice.turns.length).toBe(1)
+      expect(slice.turns[0]?.assistant.text).toBe('world')
     })
-
-    // banner 设置为“已恢复到历史会话”
-    const banner = useChatResumeStore.getState().banner
-    expect(banner?.kind).toBe('info')
   })
 
-  it('未完成会话：history 仅用户 → 接续 WS 完成同一轮', async () => {
+  it('未完成会话：turns 仅用户 → 接续 WS 完成同一轮', async () => {
     vi.spyOn(chatApi, 'resumeByConversationId').mockResolvedValue({
       conversationId: 'conv-p',
-      history: [{ role: 'user', text: 'hi' }],
-      events: [],
-      inProgress: true
+      turns: [
+        {
+          id: 'turn-1',
+          seq: 1,
+          conversationId: 'conv-p',
+          status: 'streaming',
+          user: { text: 'hi', ts: '' },
+          assistant: { text: '' },
+          steps: []
+        }
+      ],
+      inProgress: true,
+      turnsSchemaVersion: 1,
+      uptoEventId: 0
     } as any)
 
     renderHost('conv-p')
 
     await waitFor(() => {
       const st = useChatTurnStore.getState()
-      expect(st.turns.length).toBe(1)
-      expect(st.turns[0]?.user.text).toBe('hi')
+      const slice = chatTurnSelectors.sliceById('conv-p')(st)
+      expect(slice.turns.length).toBe(1)
+      expect(slice.turns[0]?.user.text).toBe('hi')
     })
 
     __emit('chat.message.delta', { conversationId: 'conv-p', delta: 'stream...' })
@@ -91,21 +122,31 @@ describe('集成：Resume + WS → turns（最小宿主）', () => {
 
     await waitFor(() => {
       const st = useChatTurnStore.getState()
-      const last = st.turns[st.turns.length - 1]
-      expect((last?.assistant.text || '')).toContain('OK')
+      const slice = chatTurnSelectors.sliceById('conv-p')(st)
+      const last = slice.turns[slice.turns.length - 1]
+      expect(last?.assistant.text || '').toContain('OK')
     })
   })
 
   it('新会话：无 resume，仅 WS 首帧携带 conversationId 即可渲染', async () => {
-    renderHost(undefined)
+    vi.spyOn(chatApi, 'resumeByConversationId').mockResolvedValue({
+      conversationId: 'conv-n1',
+      turns: [],
+      inProgress: false,
+      turnsSchemaVersion: 1,
+      uptoEventId: 0
+    } as any)
+
+    renderHost('conv-n1')
     __emit('chat.message.delta', { conversationId: 'conv-n1', delta: 'hello' })
     __emit('chat.message.completed', { conversationId: 'conv-n1', text: 'done' })
     __emit('chat.turn.complete', { conversationId: 'conv-n1' })
 
     await waitFor(() => {
       const st = useChatTurnStore.getState()
-      expect(st.turns.length).toBeGreaterThanOrEqual(1)
-      const last = st.turns[st.turns.length - 1]
+      const slice = chatTurnSelectors.sliceById('conv-n1')(st)
+      expect(slice.turns.length).toBeGreaterThanOrEqual(1)
+      const last = slice.turns[slice.turns.length - 1]
       expect(last?.assistant.text).toBe('done')
     })
   })

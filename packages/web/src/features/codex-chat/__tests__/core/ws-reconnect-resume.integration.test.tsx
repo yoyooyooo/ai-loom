@@ -1,6 +1,10 @@
 import { describe, it, beforeEach, afterEach, expect, vi } from 'vitest'
 import { subscribeChatEvents } from '@/features/codex-chat/services/ws'
-import { chatTurnActions, useChatTurnStore } from '@/features/codex-chat/stores/chat-turns'
+import {
+  chatTurnActions,
+  chatTurnSelectors,
+  useChatTurnStore
+} from '@/features/codex-chat/stores/chat-turns'
 import { chatApi } from '@/features/codex-chat/services/api'
 
 vi.mock('@/lib/ws/singleton')
@@ -38,11 +42,13 @@ describe('WS 断线重连 + resume（按会话过滤 + 回放增量 → Store）
     __emit('chat.turn.complete', { conversationId: 'conv-r' })
 
     const st = useChatTurnStore.getState()
-    expect(st.turns.length).toBeGreaterThan(0)
-    const last = st.turns[st.turns.length - 1]
+    const slice = chatTurnSelectors.sliceById('conv-r')(st)
+    expect(slice.turns.length).toBeGreaterThan(0)
+    const last = slice.turns[slice.turns.length - 1]
     expect(last.assistant.text).toBe('OK')
-    // 严格：所有 turn 都属于当前会话（被过滤守卫）
-    expect(st.turns.every((t) => t.conversationId === 'conv-r' || typeof t.conversationId === 'undefined')).toBe(true)
+    // 并行模型：其它会话写入独立分片，当前视图不受影响
+    const otherSlice = chatTurnSelectors.sliceById('other')(st)
+    expect(otherSlice.turns.length).toBe(1)
+    expect(otherSlice.turns[0]?.assistant.text).toBe('skip')
   })
 })
-

@@ -73,16 +73,18 @@ async fn fs_watch_emits_tree_changed() {
 
     // expect tree.changed notification
     let res = tokio::time::timeout(Duration::from_secs(5), async {
-        let mut got = false;
         loop {
-            if let Some(Ok(Message::Text(t))) = read.next().await {
-                if t.contains("\"method\":\"tree.changed\"") {
-                    got = true;
-                    break;
+            match read.next().await {
+                Some(Ok(Message::Text(t))) => {
+                    if t.contains("\"method\":\"tree.changed\"") {
+                        break true;
+                    }
                 }
+                Some(Ok(_)) => {}
+                Some(Err(_)) => {}
+                None => break false,
             }
         }
-        got
     })
     .await;
     assert!(

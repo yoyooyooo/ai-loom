@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { Subject } from 'rxjs'
 import { subscribeChatEvents } from '@/features/codex-chat/services/ws'
-import { chatTurnActions, useChatTurnStore } from '@/features/codex-chat/stores/chat-turns'
+import {
+  chatTurnActions,
+  useChatTurnStore,
+  chatTurnSelectors
+} from '@/features/codex-chat/stores/chat-turns'
 
 vi.mock('@/lib/ws/singleton')
 
@@ -15,6 +18,7 @@ describe('subscribeChatEvents', () => {
 
   beforeEach(() => {
     chatTurnActions.reset()
+    chatTurnActions.setConversationId(undefined)
     __resetWsMock()
   })
 
@@ -34,15 +38,16 @@ describe('subscribeChatEvents', () => {
     expect(useChatTurnStore.getState().conversationId).toBe('abc')
   })
 
-  it('ignores deltas from other conversations and accepts matching ones', () => {
+  it('按会话分片写入，当前视图不受其他会话影响', () => {
     stop = subscribeChatEvents()
     chatTurnActions.setConversationId('conv-1')
 
     __emit('chat.message.delta', { conversationId: 'other', delta: 'skip' })
-    expect(useChatTurnStore.getState().turns).toHaveLength(0)
+    expect(chatTurnSelectors.currentTurns(useChatTurnStore.getState())).toHaveLength(0)
+    expect(chatTurnSelectors.sliceById('other')(useChatTurnStore.getState()).turns).toHaveLength(1)
 
     __emit('chat.message.delta', { conversationId: 'conv-1', delta: 'take' })
-    const turns = useChatTurnStore.getState().turns
+    const turns = chatTurnSelectors.currentTurns(useChatTurnStore.getState())
     expect(turns).toHaveLength(1)
     expect(turns[0]?.assistant.text).toContain('take')
   })
@@ -61,24 +66,13 @@ describe('subscribeChatEvents', () => {
     expect(events).toEqual(['alpha', 'beta'])
   })
 
-  it('subscribes to chat topic with current conversation id and refreshes on change', async () => {
+  it('不再建立全量 chat 订阅（按会话由会话层负责）', async () => {
     stop = subscribeChatEvents()
-    expect(__getFilters().at(-1)).toEqual({ topic: 'chat', filter: {} })
-    expect(__getFilters().length).toBe(1)
-
+    expect(__getFilters()).toEqual([])
     chatTurnActions.setConversationId('first')
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(__getFilters().length).toBeGreaterThanOrEqual(2)
-    const filtersAfterFirst = __getFilters()
-    expect(filtersAfterFirst.length).toBeGreaterThanOrEqual(2)
-    expect(filtersAfterFirst.at(-1)).toEqual({ topic: 'chat', filter: { conversationId: 'first' } })
-
-    chatTurnActions.setConversationId('second')
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(__getFilters().length).toBeGreaterThanOrEqual(3)
-    const filtersAfterSecond = __getFilters()
-    expect(filtersAfterSecond.length).toBeGreaterThanOrEqual(3)
-    expect(filtersAfterSecond.at(-1)).toEqual({ topic: 'chat', filter: { conversationId: 'second' } })
+    await new Promise((r) => setTimeout(r, 0))
+    // ws.ts 不负责按会话订阅；此处仅断言无全量订阅
+    expect(__getFilters()).toEqual([])
   })
 
   it('processes codex runtime events and keeps single user message', () => {
@@ -103,14 +97,15 @@ describe('subscribeChatEvents', () => {
     // 开始推理 + 回答
     __emit('chat.reasoning.section_break', { conversationId: 'conv-1' })
     __emit('chat.reasoning.delta', { conversationId: 'conv-1', delta: '**Preparing**' })
+    const afterReasoning = chatTurnSelectors.currentSlice(useChatTurnStore.getState())
     __emit('chat.message.delta', { conversationId: 'conv-1', delta: '答复中' })
     __emit('chat.message.completed', { conversationId: 'conv-1', text: '完成' })
     __emit('chat.turn.complete', { conversationId: 'conv-1' })
 
-    const state = useChatTurnStore.getState()
-    expect(state.generating).toBe(false)
-    expect(state.turns).toHaveLength(1)
-    const [turn] = state.turns
+    const slice = chatTurnSelectors.currentSlice(useChatTurnStore.getState())
+    expect(slice.generating).toBe(false)
+    expect(slice.turns).toHaveLength(1)
+    const [turn] = slice.turns
     expect(turn?.user.text).toBe('你好')
     expect(turn?.assistant.text).toContain('完成')
     expect(turn?.reasoning?.content).toContain('Preparing')

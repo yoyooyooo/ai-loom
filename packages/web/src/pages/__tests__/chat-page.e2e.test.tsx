@@ -28,7 +28,13 @@ describe('ChatPage E2E（轻量，端到端渲染）', () => {
     __resetWsMock()
     vi.spyOn(chatApi, 'getConfig').mockResolvedValue({
       models: [
-        { id: 'm1', model: 'gpt-x', displayName: 'gpt-x', isDefault: true, supportedReasoningEfforts: [] }
+        {
+          id: 'm1',
+          model: 'gpt-x',
+          displayName: 'gpt-x',
+          isDefault: true,
+          supportedReasoningEfforts: []
+        }
       ],
       defaults: { model: 'gpt-x', approvalPolicy: 'on-request', sandboxMode: 'workspace-write' }
     } as any)
@@ -41,15 +47,28 @@ describe('ChatPage E2E（轻量，端到端渲染）', () => {
   it('加载带会话路由 → resume → 接收 WS 增量 → 渲染稳定', async () => {
     vi.spyOn(chatApi, 'resumeByConversationId').mockResolvedValue({
       conversationId: 'conv-e2e',
-      history: [ { role: 'user', text: 'hello' }, { role: 'assistant', text: 'world' } ],
-      events: [],
-      inProgress: false
+      turns: [
+        {
+          id: 'turn-1',
+          seq: 1,
+          conversationId: 'conv-e2e',
+          status: 'completed',
+          user: { text: 'hello', ts: '' },
+          assistant: { text: 'world' },
+          steps: []
+        }
+      ],
+      inProgress: false,
+      turnsSchemaVersion: 1,
+      uptoEventId: 0
     } as any)
     vi.spyOn(chatApi, 'listConversations').mockResolvedValue({ items: [] } as any)
 
     renderApp('/chat/conv-e2e')
 
-    expect(await screen.findByText('已恢复到历史会话')).toBeTruthy()
+    // 输入区已渲染（默认提示“输入消息...”）
+    expect(await screen.findByPlaceholderText('输入消息...')).toBeTruthy()
+    // 首屏 assistant 文本已渲染（来自 turns 快照）
     expect(await screen.findByText('world')).toBeTruthy()
 
     __emit('chat.message.delta', { conversationId: 'conv-e2e', delta: ' more' })
@@ -61,4 +80,3 @@ describe('ChatPage E2E（轻量，端到端渲染）', () => {
     })
   })
 })
-

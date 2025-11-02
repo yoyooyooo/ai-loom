@@ -7,6 +7,7 @@ import type { ModuleNavItem, SidebarModuleConfig } from '@/components/app-sideba
 import { isModuleEnabled } from '@/components/app-sidebar-config'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { GlobalGeneratingIndicator } from '@/components/global-generating-indicator'
 
 export type AppSidebarProps = {
   modules: SidebarModuleConfig
@@ -84,6 +85,10 @@ export function AppSidebar({
             isMobile={isMobile}
           />
           <div className={cn('mt-auto w-full', isMobile ? 'pt-6' : 'pt-4')}>
+            {/* 全局进行中指标（置于主题切换上方） */}
+            <div className={cn('mb-2 flex', isMobile ? '' : 'justify-center')}>
+              <GlobalGeneratingIndicator showLabel={isMobile} />
+            </div>
             <ThemeToggle showLabel={isMobile} className={isMobile ? undefined : 'mx-auto'} />
           </div>
         </aside>
@@ -112,48 +117,60 @@ function PrimaryNavigation({
     <nav className={cn('flex w-full flex-col gap-3', isMobile ? '' : 'items-center')}>
       <div
         className={cn(
-          'flex items-center gap-2 px-2 py-1 text-sm font-semibold text-foreground',
-          isMobile ? 'justify-start' : 'size-10 items-center justify-center'
+          'flex items-center text-sm font-semibold text-foreground',
+          isMobile ? 'gap-2 px-3 py-2' : 'flex-col gap-3'
         )}
       >
         <span
           className={cn(
-            'flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground',
-            !isMobile && 'size-10'
+            'flex aspect-square items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm',
+            isMobile ? 'size-8' : 'size-10'
           )}
         >
-          <Command className="size-4" />
+          <Command className={isMobile ? 'size-4' : 'size-5'} />
         </span>
         {isMobile ? <span className="text-sm">AI Loom</span> : null}
       </div>
-      <div className={cn('flex flex-col gap-1', isMobile ? '' : 'w-full')}>
-        {modules.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => onNavigate(item.path, item)}
-            title={item.label}
-            className={cn(
-              'flex items-center gap-2 rounded-md px-2 py-2 text-sm transition-colors hover:bg-muted hover:text-foreground',
-              activeModuleId === item.id
-                ? 'bg-muted font-medium text-foreground'
-                : 'text-muted-foreground',
-              isMobile ? 'justify-start' : 'w-10 flex-col gap-1 px-0 py-2'
-            )}
-          >
-            {item.icon ? (
-              <item.icon className="size-4" />
-            ) : (
-              <span className="flex size-8 items-center justify-center rounded-md bg-muted text-xs font-semibold uppercase">
-                {item.label.slice(0, 1)}
+      <div className={cn('flex flex-col gap-1', isMobile ? 'px-1' : 'w-full items-center gap-2')}>
+        {modules.map((item) => {
+          const Icon = item.icon
+          const isActive = activeModuleId === item.id
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onNavigate(item.path, item)}
+              title={item.label}
+              aria-current={isActive ? 'page' : undefined}
+              className={cn(
+                'group relative flex items-center rounded-md text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                isMobile
+                  ? 'justify-start gap-3 px-3 py-2 hover:bg-muted'
+                  : 'aspect-square w-12 justify-center p-0 hover:bg-muted/30',
+                isActive ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              <span
+                className={cn(
+                  'flex aspect-square w-9 items-center justify-center rounded-lg border text-base transition-colors',
+                  isActive
+                    ? 'border-primary/50 bg-primary text-primary-foreground shadow-sm'
+                    : 'border-transparent bg-muted text-muted-foreground group-hover:border-border/60 group-hover:text-foreground'
+                )}
+              >
+                {Icon ? (
+                  <Icon className="size-5" />
+                ) : (
+                  <span className="text-xs font-semibold uppercase">{item.label.slice(0, 1)}</span>
+                )}
               </span>
-            )}
-            {isMobile ? <span className="truncate text-sm">{item.label}</span> : null}
-            {!isMobile && item.pill ? (
-              <span className="text-[10px] text-primary">{item.pill}</span>
-            ) : null}
-          </button>
-        ))}
+              {isMobile ? <span className="truncate text-sm">{item.label}</span> : null}
+              {!isMobile && item.pill ? (
+                <span className="absolute bottom-1 text-[10px] text-primary">{item.pill}</span>
+              ) : null}
+            </button>
+          )
+        })}
       </div>
     </nav>
   )

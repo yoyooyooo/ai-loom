@@ -7,7 +7,7 @@ import { finalize, retry, tap } from 'rxjs/operators'
 const API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
 
 export const http = axios.create({
-  baseURL: API_BASE || undefined,
+  baseURL: API_BASE || undefined
   // 让 axios 基于 data 自动设置 Content-Type；如需跨域 Cookie 再按需开启：
   // withCredentials: true,
   // 可按需添加超时：

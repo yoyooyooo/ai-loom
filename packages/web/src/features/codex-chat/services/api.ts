@@ -1,6 +1,7 @@
 import { rxRequest, toHttpError } from '@/lib/request'
 import type { AskForApproval } from '@/lib/codex-types/AskForApproval'
 import type { SandboxMode } from '@/lib/codex-types/SandboxMode'
+import type { Turn } from '../types/generated/turns'
 
 export type ConversationListItem = {
   path: string
@@ -13,6 +14,7 @@ export type ConversationListItem = {
   depth?: number
   createdAt?: string | null
   turns?: number | null
+  inProgress?: boolean | null
 }
 
 export type ChatHistoryItem = {
@@ -68,12 +70,17 @@ export type ResumeConfigSnapshot = {
 
 export type ResumeConversationResponse = {
   conversationId: string
+  turns?: Turn[]
   history?: ChatHistoryItem[]
   // 可选：服务器直接返回归一化后的 chat.* 事件（便于前端在 resume 时重建 steps）
   events?: Array<{ method: string; params?: Record<string, unknown> | null }>
   config?: ResumeConfigSnapshot | null
   // 仅用于提示是否“可能仍在进行中”（基于 rollout 尾部 + 空闲阈值的启发式判断）
   inProgress?: boolean
+  // 游标推进
+  uptoEventId?: number
+  // turns 结构版本
+  turnsSchemaVersion?: number
 }
 
 export type NewConversationOverrides = {
@@ -174,9 +181,17 @@ export const chatApi = {
       throw toHttpError(e, 'sendMessage failed')
     }
   },
-  async interrupt(conversationId: string, opts?: { awaitTurnAborted?: boolean; timeoutMs?: number }) {
+  async interrupt(
+    conversationId: string,
+    opts?: { awaitTurnAborted?: boolean; timeoutMs?: number; hard?: boolean }
+  ) {
     try {
-      const qs = opts?.awaitTurnAborted ? '?await=turnAborted' : ''
+      const qs = (() => {
+        const parts: string[] = []
+        if (opts?.awaitTurnAborted) parts.push('await=turnAborted')
+        if (opts?.hard) parts.push('hard=1')
+        return parts.length > 0 ? `?${parts.join('&')}` : ''
+      })()
       const timeoutMs = opts?.timeoutMs ?? 15_000
       const res = await rxRequest<{ abortReason?: string } | undefined>({
         method: 'POST',
@@ -204,14 +219,11 @@ export const chatApi = {
       throw toHttpError(e, 'resume failed')
     }
   },
-  async resumeByConversationId(
-    conversationId: string,
-    opts?: { includeHistory?: boolean }
-  ): Promise<ResumeConversationResponse> {
+  async resumeByConversationId(conversationId: string): Promise<ResumeConversationResponse> {
     try {
       const res = await rxRequest<ResumeConversationResponse>({
         method: 'POST',
-        url: `/api/chat/conversations/resume${opts?.includeHistory ? '?includeHistory=true' : ''}`,
+        url: `/api/chat/conversations/resume`,
         data: { conversationId },
         timeoutMs: 8_000,
         retries: 0
@@ -247,6 +259,22 @@ export const chatApi = {
       return res.data
     } catch (e) {
       throw toHttpError(e, 'listConversations failed')
+    }
+  },
+  async getTurnOutput(conversationId: string, blobId: string): Promise<string> {
+    try {
+      const res = await rxRequest<string>({
+        method: 'GET',
+        url: `/api/chat/output`,
+        params: { conversationId, blobId },
+        timeoutMs: 15_000,
+        retries: 1,
+        backoffMs: 500,
+        config: { responseType: 'text' as any }
+      })
+      return (res as any).data as string
+    } catch (e) {
+      throw toHttpError(e, 'getTurnOutput failed')
     }
   },
   async deleteConversation(path: string) {

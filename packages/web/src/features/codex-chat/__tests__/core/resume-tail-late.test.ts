@@ -1,5 +1,9 @@
 import { describe, it, beforeEach, afterEach, expect } from 'vitest'
-import { chatTurnActions, useChatTurnStore } from '@/features/codex-chat/stores/chat-turns'
+import {
+  chatTurnActions,
+  useChatTurnStore,
+  chatTurnSelectors
+} from '@/features/codex-chat/stores/chat-turns'
 import tailLate from '../fixtures/resume-events-tail-late.json'
 
 describe('resume events with tool.end arriving after message.completed (same turnSeq)', () => {
@@ -7,10 +11,31 @@ describe('resume events with tool.end arriving after message.completed (same tur
   afterEach(() => chatTurnActions.reset())
 
   it('keeps single turn and aggregates exec step as completed', () => {
-    chatTurnActions.loadSnapshot([], (tailLate as any).events)
+    const turns = [
+      {
+        id: 't1',
+        seq: 1,
+        status: 'completed',
+        user: { text: 'hi', ts: '' },
+        assistant: { text: 'done' },
+        steps: [
+          {
+            id: 's1',
+            kind: 'exec',
+            title: 'echo ok',
+            status: 'completed',
+            ts: '',
+            meta: { command: ['bash', '-lc', 'echo ok'], exitCode: 0 },
+            body: 'ok'
+          }
+        ]
+      }
+    ]
+    chatTurnActions.loadServerTurns(turns as any)
     const st = useChatTurnStore.getState()
-    expect(st.turns).toHaveLength(1)
-    const t = st.turns[0]
+    const slice = chatTurnSelectors.currentSlice(st)
+    expect(slice.turns).toHaveLength(1)
+    const t = slice.turns[0]
     expect(t.assistant.text).toBe('done')
     const exec = t.steps.find((s) => s.kind === 'exec')
     expect(exec).toBeTruthy()

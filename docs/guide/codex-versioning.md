@@ -5,8 +5,8 @@
 ## 版本来源
 
 - CLI：`packages/rust/ailoom-server/src/services/codex/app_server.rs`
-  - 默认固定为 `@openai/codex@0.50.0`。
-  - 支持通过环境变量 `CODEX_VERSION` 覆盖，例如 `CODEX_VERSION=0.51.0 just server-dev`。
+  - 默认固定为 `@openai/codex@0.53.0`。
+  - 支持通过环境变量 `CODEX_VERSION` 覆盖，例如 `CODEX_VERSION=0.53.0 just server-dev`。
 - Rust 依赖：`packages/rust/ailoom-server/Cargo.toml`
   - `codex-protocol`、`codex-app-server-protocol` 使用 git 依赖，`rev` 指向 `rust-v<version>` Tag 对应的 commit。
 
@@ -17,11 +17,11 @@
 用法：
 
 ```bash
-# 使用 app_server.rs 中的版本（默认 0.50.0）进行校验
+# 使用 app_server.rs 中的版本（默认 0.53.0）进行校验
 ./scripts/check-codex-version.sh
 
 # 或显式指定 npm 版本
-./scripts/check-codex-version.sh 0.50.0
+./scripts/check-codex-version.sh 0.53.0
 ```
 
 脚本会执行以下校验：
@@ -39,19 +39,19 @@
 
 ## 升级流程
 
-1. 确认上游已发布目标版本（例如 `0.51.0`，Tag 名 `rust-v0.51.0`）。
+1. 确认上游已发布目标版本（例如 `0.53.0`，Tag 名 `rust-v0.53.0`）。
 2. 更新 `app_server.rs`：
    ```diff
 - let version = std::env::var("CODEX_VERSION").unwrap_or_else(|_| "0.50.0".into());
-+ let version = std::env::var("CODEX_VERSION").unwrap_or_else(|_| "0.51.0".into());
++ let version = std::env::var("CODEX_VERSION").unwrap_or_else(|_| "0.53.0".into());
    ```
 3. 更新 Cargo.toml：
    ```diff
 - codex-protocol = { git = "https://github.com/openai/codex.git", package = "codex-protocol", rev = "b4123b7b1db22a3c0a8b133a23c7b30a477d7b65" }
-+ codex-protocol = { git = "https://github.com/openai/codex.git", package = "codex-protocol", rev = "<rust-v0.51.0 commit>" }
++ codex-protocol = { git = "https://github.com/openai/codex.git", package = "codex-protocol", rev = "ca80bc4902b7ca49112907152e8ed0879eaa0b78" }
    ```
    同步更新 `codex-app-server-protocol`。
-4. 运行 `./scripts/check-codex-version.sh 0.51.0` 确认一致。
+4. 运行 `./scripts/check-codex-version.sh 0.53.0` 确认一致。
 5. 运行 `cargo update -p codex-protocol -p codex-app-server-protocol` 并提交更新后的 `Cargo.lock`。
 6. 回归 `cargo check -p ailoom-server`、`pnpm --dir packages/web build`。
 

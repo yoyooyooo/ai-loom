@@ -11,7 +11,7 @@
   - 版本固定：`docs/guide/codex-versioning.md`
 - **核心落地**：
   - Rust 端已引入官方 crate（`codex-protocol`、`codex-app-server-protocol`），`transport.rs`/`client.rs`/`bridge.rs` 均基于官方类型实现。
-  - App Server 通过 `CODEX_VERSION` 固定到 `@openai/codex@0.50.0`，`scripts/check-codex-version.sh` 用于校验版本一致性。
+  - App Server 通过 `CODEX_VERSION` 固定到 `@openai/codex@0.53.0`，`scripts/check-codex-version.sh` 用于校验版本一致性。
   - 后端向浏览器广播 `codex/*` 事件，并由前端统一归一化为 `chat.*`。
   - 前端 store 完成 slice 化：`features/codex-chat/stores/chat/` 负责消息流，`stores/codex-chat-provider.ts` 管理能力/覆盖。
   - 恢复流程支持从 rollout JSONL 恢复配置（模型 / 审批 / 沙箱 / cwd 等）。
@@ -29,7 +29,7 @@
 ## 背景
 
 - 现状
-  - 后端通过子进程方式运行 Codex App Server：`npx @openai/codex@0.46.0 app-server`（见 `packages/rust/ailoom-server/src/services/codex/app_server.rs`）。
+- 后端通过子进程方式运行 Codex App Server：`npx @openai/codex@0.53.0 app-server`（见 `packages/rust/ailoom-server/src/services/codex/app_server.rs`）。
   - 传输层：自研 JSON‑RPC 管道（`jsonrpc.rs`），包含 `jsonrpc: "2.0"` 字段；官方 `jsonrpc_lite` 不要求该字段。
   - 类型层：在本仓库内手写了一批请求/响应与事件字段，桥接为前端 WS 事件（SSoT），核心位于 `packages/rust/ailoom-server/src/services/codex/bridge.rs`。
   - 前端：遵循 WS‑first；UI 与缓存以 `chat_events` 为唯一事实来源（SSoT）。
@@ -54,7 +54,7 @@
 - 事件命名：WS 事件统一采用 `codex/*` 命名，直接映射官方 `ServerNotification`，仅补充必要上下文（如 conversationId）。
   - 注意：请同步校验“前后端事件映射”是否完整（后端 `bridge.rs` → 前端订阅与消费位置，如 `packages/web/src/lib/ws/*` 与实际组件）。任何事件名/字段调整需联动更新，否则功能将中断。
 - JSON‑RPC：采用官方 `jsonrpc_lite` 形态（不含 `jsonrpc` 字段）；不支持旧形态。
-- 版本约束：对齐 `rust-v0.50.0`，App Server 固定 `@openai/codex@0.50.0`；升级采取整体前移策略。
+- 版本约束：对齐 `rust-v0.53.0`，App Server 固定 `@openai/codex@0.53.0`；升级采取整体前移策略。
 
 说明：这一阶段的目标是把 Codex 体验“原汁原味”地呈现出来，使本项目可以单独作为 Codex 的 GUI 使用。
 
@@ -63,7 +63,7 @@
 ## 范围与需求
 
 ### 必须（Must‑have）
-- [x] 依赖官方 crate 并固定版本（`rust-v0.50.0`，Rust 1.90+）。
+- [x] 依赖官方 crate 并固定版本（`rust-v0.53.0`，Rust 1.90+）。
 - [x] 全量采用官方类型与 `jsonrpc_lite` 形态（`jsonrpc.rs` 已移除）。
 - [x] 事件命名与 payload 与官方保持一致（`codex/*`），详见 `docs/guide/codex-chat-ws-ssot.md`。
 
@@ -187,10 +187,10 @@ export type ChatCapabilities = {
 ```toml
 [dependencies]
 # 以官方仓库为源；package 名称对应子工作区 crate 名；固定 rev 以确保可重复构建
-codex-protocol = { git = "https://github.com/openai/codex.git", package = "codex-protocol", rev = "b4123b7b1db22a3c0a8b133a23c7b30a477d7b65" }
-codex-app-server-protocol = { git = "https://github.com/openai/codex.git", package = "codex-app-server-protocol", rev = "b4123b7b1db22a3c0a8b133a23c7b30a477d7b65" }
+codex-protocol = { git = "https://github.com/openai/codex.git", package = "codex-protocol", rev = "ca80bc4902b7ca49112907152e8ed0879eaa0b78" }
+codex-app-server-protocol = { git = "https://github.com/openai/codex.git", package = "codex-app-server-protocol", rev = "ca80bc4902b7ca49112907152e8ed0879eaa0b78" }
 # 如需：
-# mcp-types = { git = "https://github.com/openai/codex.git", package = "mcp-types", rev = "b4123b7b1db22a3c0a8b133a23c7b30a477d7b65" }
+# mcp-types = { git = "https://github.com/openai/codex.git", package = "mcp-types", rev = "ca80bc4902b7ca49112907152e8ed0879eaa0b78" }
 ```
 
 说明：Cargo 能在 git 仓库中查找工作区成员，无需额外 subdir 配置，仅通过 `package = "..."` 即可定位 crate。
@@ -199,7 +199,7 @@ codex-app-server-protocol = { git = "https://github.com/openai/codex.git", packa
 
 目标：保证 `npx @openai/codex@<npm_version> app-server` 与 Cargo 中 `codex-*-protocol` 的 `rev` 指向同一上游版本（同一 rust tag 的 commit），并在 CI 中自动校验。
 
-- 统一版本源：定义单一版本变量，例如 `CODEx_VERSION=0.50.0`（npm 版本），其对应的 Rust tag 为 `rust-v$CODEx_VERSION`。
+- 统一版本源：定义单一版本变量，例如 `CODEx_VERSION=0.53.0`（npm 版本），其对应的 Rust tag 为 `rust-v$CODEx_VERSION`。
 - 获取 tag 对应 commit：
   - `sha=$(curl -s https://api.github.com/repos/openai/codex/tags | jq -r ".[] | select(.name==\"rust-v$CODEx_VERSION\") | .commit.sha" | head -n1)`
 - 写入 Cargo.toml：
@@ -212,7 +212,7 @@ codex-app-server-protocol = { git = "https://github.com/openai/codex.git", packa
 - CI 守卫：
   - 新增脚本 `scripts/check-codex-version.sh`：读取 `app_server.rs` 中的 npm 版本与 Cargo.toml 中的 `rev`，对照 GitHub tag → commit 的查询结果，若不一致则失败。
 - just 任务（示例）：
-  - `just codex-pin 0.50.0`：自动查询 commit、批量更新 Cargo.toml 与 app_server.rs 并执行验证。
+  - `just codex-pin 0.53.0`：自动查询 commit、批量更新 Cargo.toml 与 app_server.rs 并执行验证。
   - `just codex-verify`：在 CI 执行一致性校验。
 
 ### 配套命令与脚本
@@ -248,7 +248,7 @@ codex-app-server-protocol = { git = "https://github.com/openai/codex.git", packa
 ## 分期计划（Roadmap：Codex‑only）
 
 - Phase 1：Codex‑only 落地（1–2 天）
-  - 引入官方 crates（`rust-v0.50.0`），升级 Rust 1.90+
+  - 引入官方 crates（`rust-v0.53.0`），升级 Rust 1.90+
   - 全量替换为官方类型与 `jsonrpc_lite`，移除自研 `jsonrpc.rs`
   - 后端门面与最小 trait、事件 `provider="codex"` 附加、统一 tracing 维度
   - 事件映射覆盖检查日志/测试
@@ -267,7 +267,7 @@ codex-app-server-protocol = { git = "https://github.com/openai/codex.git", packa
 ## 风险与兼容性
 
 - 工具链：需要 Rust 1.90+ 与 `edition = 2024`；CI/开发机需同步升级。
-- 版本一致性：NPM CLI 与 Rust crates 必须保持同一 tag/commit（例如 0.50.0 系列），否则会出现协议不一致。
+- 版本一致性：NPM CLI 与 Rust crates 必须保持同一 tag/commit（例如 0.53.0 系列），否则会出现协议不一致。
 - 兼容性策略：无向后兼容与降级逻辑，旧版本 Codex 将无法工作（明确在 README/安装指引提示最低版本）。
 - 生成类型变更：TS 生成物命名与历史手写类型可能有差异，前端按新生成类型统一调整。
 
@@ -292,8 +292,8 @@ codex-app-server-protocol = { git = "https://github.com/openai/codex.git", packa
 
 ```toml
 [dependencies]
-codex-protocol = { git = "https://github.com/openai/codex.git", package = "codex-protocol", rev = "b4123b7b1db22a3c0a8b133a23c7b30a477d7b65" }
-codex-app-server-protocol = { git = "https://github.com/openai/codex.git", package = "codex-app-server-protocol", rev = "b4123b7b1db22a3c0a8b133a23c7b30a477d7b65" }
+codex-protocol = { git = "https://github.com/openai/codex.git", package = "codex-protocol", rev = "ca80bc4902b7ca49112907152e8ed0879eaa0b78" }
+codex-app-server-protocol = { git = "https://github.com/openai/codex.git", package = "codex-app-server-protocol", rev = "ca80bc4902b7ca49112907152e8ed0879eaa0b78" }
 ```
 
 - 相关文件
@@ -307,4 +307,4 @@ codex-app-server-protocol = { git = "https://github.com/openai/codex.git", packa
 
 - 上游参考
   - 仓库：openai/codex（`codex-rs/protocol`、`codex-rs/app-server-protocol`、`codex-rs/mcp-types`）
-  - Tags：`rust-v0.46.0`、`rust-v0.47.0`、`rust-v0.48.0`、`rust-v0.49.0`、`rust-v0.50.0`
+  - Tags：`rust-v0.46.0`、`rust-v0.47.0`、`rust-v0.48.0`、`rust-v0.49.0`、`rust-v0.53.0`

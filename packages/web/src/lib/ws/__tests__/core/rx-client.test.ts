@@ -38,9 +38,7 @@ describe('WsRxClient eventId 去重与 resume 过滤', () => {
     ;(client as any).events$.subscribe((ev: any) => seen.push(ev))
 
     const emit = (method: string, eventId: number) =>
-      (client as any).onMessage(
-        JSON.stringify({ jsonrpc: '2.0', method, params: { eventId } })
-      )
+      (client as any).onMessage(JSON.stringify({ jsonrpc: '2.0', method, params: { eventId } }))
 
     emit('codex/event/agent_message', 100)
     emit('codex/event/agent_message', 100) // 重复帧
@@ -107,17 +105,24 @@ describe('WsRxClient eventId 去重与 resume 过滤', () => {
 
     const resumeResult = {
       events: [
-        { method: 'chat.message.delta', params: { conversationId: 'conv-x', eventId: 21, delta: 'hi' } },
-        { method: 'chat.tool.exec.end', params: { conversationId: 'conv-x', eventId: 22, callId: 'c1' } }
+        {
+          method: 'chat.message.delta',
+          params: { conversationId: 'conv-x', eventId: 21, delta: 'hi' }
+        },
+        {
+          method: 'chat.tool.exec.end',
+          params: { conversationId: 'conv-x', eventId: 22, callId: 'c1' }
+        }
       ],
       truncated: false
     }
 
-    const callSpy = vi.fn(() =>
-      new Observable((sub) => {
-        sub.next(resumeResult)
-        sub.complete()
-      })
+    const callSpy = vi.fn(
+      () =>
+        new Observable((sub) => {
+          sub.next(resumeResult)
+          sub.complete()
+        })
     )
     ;(client as any).call = callSpy
 
@@ -133,5 +138,137 @@ describe('WsRxClient eventId 去重与 resume 过滤', () => {
     expect((client as any).convLast['conv-x']).toBe(22)
     const kinds = events.map((ev) => ev.method)
     expect(kinds).toEqual(['chat.message.delta', 'chat.tool.exec.end'])
+  })
+
+  it('resumeChatWithFilter 支持 providerId 过滤并使用 provider|conversation 游标键', async () => {
+    const events: Array<{ method: string; params: any }> = []
+    ;(client as any).events$.subscribe((ev: any) => events.push(ev))
+
+    const resumeResult = {
+      events: [
+        {
+          method: 'chat.message.delta',
+          params: { conversationId: 'conv-p', provider: 'codex', eventId: 31, delta: 'hi' }
+        },
+        {
+          method: 'chat.tool.exec.end',
+          params: { conversationId: 'conv-p', provider: 'codex', eventId: 32, callId: 'c2' }
+        }
+      ],
+      truncated: false
+    }
+
+    const callSpy = vi.fn(
+      () =>
+        new Observable((sub) => {
+          sub.next(resumeResult)
+          sub.complete()
+        })
+    )
+    ;(client as any).call = callSpy
+
+    await (client as any).resumeChatWithFilter('conv-p', 'codex')
+
+    const firstCall = (callSpy.mock.calls as any[])[0] ?? []
+    const params = (firstCall[1] ?? {}) as any
+    expect(params.topic).toBe('chat')
+    expect(params.filter).toEqual({ conversationId: 'conv-p', providerId: 'codex' })
+
+    // provider|conversation key 形式推进
+    expect((client as any).convLast['codex|conv-p']).toBe(32)
+    expect(events.map((e) => e.method)).toEqual(['chat.message.delta', 'chat.tool.exec.end'])
+  })
+
+  it('resumeChat 优先使用“已应用游标”而非“已看到游标”作为 after', async () => {
+    const seenParams: any[] = []
+    const client2 = new WsRxClient('ws://test-2')
+    // 伪造“已看到游标”领先
+    ;(client2 as any).convLast['conv-applied'] = 50
+    // 已应用仅到 20
+    client2.primeConversationCursor('conv-applied', 20)
+
+    // mock call 捕获入参
+    const callSpy = vi.fn(
+      (method: string, params?: any) =>
+        new Observable((sub) => {
+          seenParams.push(params)
+          sub.next({ events: [], truncated: false })
+          sub.complete()
+        })
+    )
+    ;(client2 as any).call = callSpy
+
+    await client2.resumeChat('conv-applied')
+
+    expect(callSpy).toHaveBeenCalledTimes(1)
+    const args = seenParams[0] || {}
+    // after 应取 20（已应用），而不是 50（已看到）
+    expect(args.after).toBe(20)
+  })
+
+  it('resumeChatWithFilter 在服务器重启导致 eventId 归零时夹取 after（min(local, serverCap)）', async () => {
+    const client2 = new WsRxClient('ws://test-3')
+    // 本地游标很大
+    ;(client2 as any).convLast['conv-clamp'] = 100
+    ;(client2 as any).convAppliedLast['conv-clamp'] = 90
+    // 服务器 last_event_id 很小（重启后）
+    ;(client2 as any).serverLastEventId = 30
+    const prevVitest = (process as any).env?.VITEST
+    ;(process as any).env.VITEST = '' // 关闭 Vitest 标志，触发 clamp 分支
+
+    const seenParams: any[] = []
+    const callSpy = vi.fn((method: string, params?: any) => {
+      seenParams.push(params)
+      return new Observable((sub) => {
+        sub.next({ events: [], truncated: false })
+        sub.complete()
+      })
+    })
+    ;(client2 as any).call = callSpy
+
+    await client2.resumeChat('conv-clamp')
+
+    expect(callSpy).toHaveBeenCalledTimes(1)
+    const p = seenParams[0] || {}
+    expect(p.topic).toBe('chat')
+    expect(p.filter).toEqual({ conversationId: 'conv-clamp' })
+    // after 应被夹取到 serverLastEventId=30
+    expect(p.after).toBe(30)
+    // after>0 时不应带 tail
+    expect('tail' in p).toBe(false)
+    ;(process as any).env.VITEST = prevVitest
+  })
+
+  it('subscribeTopic$ 在服务器重启导致 eventId 归零时夹取 after（min(local, serverCap)）', async () => {
+    const client3 = new WsRxClient('ws://test-4')
+    ;(client3 as any).state = 'up' // 使 doSubscribe 立即执行
+    ;(client3 as any).convLast['conv-sub'] = 99
+    ;(client3 as any).serverLastEventId = 10
+    const prevVitest = (process as any).env?.VITEST
+    ;(process as any).env.VITEST = ''
+
+    const seen: any[] = []
+    const callSpy = vi.fn((method: string, params?: any) => {
+      seen.push({ method, params })
+      return new Observable((sub) => {
+        sub.next({ ok: true })
+        sub.complete()
+      })
+    })
+    ;(client3 as any).call = callSpy
+
+    const sub = (client3 as any)
+      .subscribeTopic$('chat', { conversationId: 'conv-sub' })
+      .subscribe(() => {})
+    // 等待微任务结束
+    await new Promise((r) => setTimeout(r, 0))
+    sub.unsubscribe()
+
+    expect(callSpy).toHaveBeenCalled()
+    const subscribeParams = seen.find((item) => item.method === 'subscribe')?.params || {}
+    expect(subscribeParams.topic).toBe('chat')
+    expect(subscribeParams.filter).toEqual({ conversationId: 'conv-sub' })
+    expect(subscribeParams.after).toBe(10) // clamp 到 serverLastEventId
+    ;(process as any).env.VITEST = prevVitest
   })
 })

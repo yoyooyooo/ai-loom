@@ -110,6 +110,25 @@ body {
   }
 }
 
+/* Typing indicator (shadcn chatbot kit) */
+@keyframes typing-dot-bounce {
+  0%,
+  40% {
+    transform: translateY(0);
+  }
+  20% {
+    transform: translateY(-0.25rem);
+  }
+}
+
+@layer utilities {
+  .animate-typing-dot-bounce {
+    /* 绑定 tw-animate-css 变量，便于复用 duration-/ease-/delay- 类 */
+    animation: typing-dot-bounce var(--tw-duration, 1.25s) var(--tw-ease, ease-out)
+      var(--tw-animation-delay, 0s) infinite;
+  }
+}
+
 /* Monaco decorations */
 .monaco-editor .ailoom-anno {
   background: rgba(255, 214, 102, 0.18);

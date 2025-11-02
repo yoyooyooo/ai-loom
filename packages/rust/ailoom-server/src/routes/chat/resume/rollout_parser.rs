@@ -62,10 +62,47 @@ fn parse_environment_context(xml: &str) -> EnvironmentContextSnapshot {
     }
 }
 
+fn flush_pending_reasoning_to_history(
+    summary: &mut Option<String>,
+    process_parts: &mut Vec<String>,
+    list: &mut Vec<ChatHistoryEntry>,
+) {
+    if let Some(s) = summary.take() {
+        if !s.trim().is_empty() {
+            list.push(ChatHistoryEntry {
+                role: "reasoning".into(),
+                text: String::new(),
+                reasoning: Some(s),
+            });
+        }
+        process_parts.clear();
+        return;
+    }
+    if !process_parts.is_empty() {
+        let combined = process_parts.join("\n\n");
+        if !combined.trim().is_empty() {
+            list.push(ChatHistoryEntry {
+                role: "reasoning".into(),
+                text: String::new(),
+                reasoning: Some(combined),
+            });
+        }
+        process_parts.clear();
+    }
+}
+
 pub fn parse_rollout(content: &str) -> RolloutParseResult {
     let mut history_entries: Vec<ChatHistoryEntry> = Vec::new();
     let mut snapshot = RolloutConfigSnapshot::default();
     let mut accumulator = EventAccumulator::default();
+
+    // 推理汇总（response_item.reasoning.summary）与过程（event_msg.agent_reasoning）
+    // 场景：可能先有若干 agent_reasoning（过程），最终出现 reasoning.summary（汇总，覆盖前者）。
+    // 策略：优先使用 summary；若未出现 summary，则在该轮 agent_message 之前合并过程文本为一条 reasoning。
+    let _pending_reasoning_summary: Option<String> = None;
+    let _pending_reasoning_process: Vec<String> = Vec::new();
+
+    // 在插入 assistant 之前，先根据 pending 写入一条 reasoning（若存在），随后清空。
 
     for line in content.lines() {
         let trimmed = line.trim();
@@ -149,6 +186,8 @@ pub fn parse_rollout(content: &str) -> RolloutParseResult {
                                     snapshot.environment = Some(env);
                                 }
                             }
+                        } else if ptyp == "reasoning" {
+                            // resume 接口不使用 response_item.reasoning.summary（不参与渲染），忽略
                         }
                     }
                 }
@@ -157,7 +196,7 @@ pub fn parse_rollout(content: &str) -> RolloutParseResult {
                 if let Some(payload) = value.get("payload") {
                     if let Some(ptyp) = payload.get("type").and_then(|v| v.as_str()) {
                         match ptyp {
-                            "user_message" | "agent_message" | "agent_reasoning" => {
+                            "agent_reasoning" | "agent_message" | "user_message" => {
                                 if let Some(entry) = convert_history_item(payload) {
                                     history_entries.push(entry);
                                 }
@@ -170,6 +209,8 @@ pub fn parse_rollout(content: &str) -> RolloutParseResult {
             _ => {}
         }
     }
+
+    // 结束：不再落地 summary 或合并过程（按事件序归档已完成）
 
     RolloutParseResult {
         history: history_entries,
@@ -266,6 +307,10 @@ pub fn rollout_in_progress(path: &str) -> Option<bool> {
                         return Some(true);
                     }
                 }
+            }
+            // 对于明确的增量类事件，直接认为“进行中”，避免依赖文件时间粒度造成的非确定性。
+            "agent_message_delta" | "agent_reasoning_delta" => {
+                return Some(true);
             }
             _ => {
                 // 不是显式结束类事件：再结合文件空闲时长判断

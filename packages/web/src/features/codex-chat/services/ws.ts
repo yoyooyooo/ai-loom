@@ -1,7 +1,6 @@
-import { chatTurnActions, useChatTurnStore } from '../stores/chat-turns'
+import { chatTurnActions } from '../stores/chat-turns'
 import { ws } from '@/lib/ws/singleton'
-import { codexChatProviderActions } from '@/stores/codex-chat-provider'
-import { createProcessChatEvent } from './ws-processors'
+import { createProcessChatEvent } from './processors'
 import { chatTrace } from '@/lib/logger'
 import type {
   CodexAuthStatusChangePayload,
@@ -9,7 +8,20 @@ import type {
   CodexSessionConfiguredPayload
 } from '@/lib/ws/types'
 import { ensureDeltaPipelines } from './delta-streams'
-import { makeSessionConfiguredHandler, handleAuthStatusChange, handleRateLimitUpdated } from './ws-capabilities'
+import { buildChatPipeline } from './ws-pipeline'
+import { buildCodexPipeline } from './ws-pipeline-codex'
+import { useChatHydrationStore } from '../stores/chat-hydration'
+import {
+  initGlobalGeneratingAggregator,
+  seedGenerating
+} from './generating-aggregator'
+import { chatApi } from './api'
+import {
+  makeSessionConfiguredHandler,
+  handleAuthStatusChange,
+  handleRateLimitUpdated
+} from './ws-capabilities'
+import { filter } from 'rxjs/operators'
 
 // 使用全局 WS 单例，避免在开发模式（React StrictMode）下产生多条连接
 export function subscribeChatEvents() {
@@ -38,43 +50,7 @@ export function subscribeChatEvents() {
   // 不再使用“前端收尾 fuse”；以明确的 completed/failed/aborted/turn.complete 为收尾依据。
   // 读取合并（Explored）命令解析见：@/features/codex-chat/utils/explore-utils
 
-  // patch diff 渲染已迁移至 ws-processors → ws-render-utils
-  const initialCid = (useChatTurnStore as any).getState?.()?.conversationId as string | undefined
-  chatTrace('ws.subscribe.init', { initialCid })
-  let topicSub = ws
-    .subscribeTopic$('chat', initialCid ? { conversationId: initialCid } : {})
-    .subscribe({})
-  const unsubscribeCid = useChatTurnStore.subscribe((state: any, prev: any) => {
-    const cid = state?.conversationId
-    const prevCid = prev?.conversationId
-    if (cid === prevCid) return
-    chatTrace('ws.subscribe.conversationChanged', { prevCid, cid })
-    topicSub.unsubscribe()
-    topicSub = ws
-      .subscribeTopic$('chat', cid ? { conversationId: cid } : {})
-      .subscribe({})
-  })
-
-  const guardConversation = (method: string, eventConversationId?: string) => {
-    if (
-      method === 'chat.session.new' ||
-      method === 'chat.session.resumed' ||
-      method === 'chat.session.history'
-    ) {
-      if (eventConversationId) chatTurnActions.setConversationId(eventConversationId)
-      return true
-    }
-    const currentId = (useChatTurnStore as any).getState?.()?.conversationId as string | undefined
-    if (!currentId && eventConversationId) {
-      chatTurnActions.setConversationId(eventConversationId)
-      return true
-    }
-    if (eventConversationId && currentId && eventConversationId !== currentId) {
-      chatTrace('ws.guard.skip', { method, eventConversationId, currentId })
-      return false
-    }
-    return true
-  }
+  chatTrace('ws.subscribe.init', {})
 
   const handleSessionConfigured = makeSessionConfiguredHandler(processor)
 
@@ -82,54 +58,118 @@ export function subscribeChatEvents() {
 
   // Codex runtime 事件已经在服务端归一化为 chat.*
 
-  function processChatEvent(method: string, params: any) {
-    chatTrace('ws.process.begin', { method, conversationId: (params as any)?.conversationId, keys: params ? Object.keys(params) : [] })
-    processor(method, params)
-  }
+  // 握手期缓冲逻辑位于 RxJS 管道（buildChatPipeline）
 
-  const sub = ws.events$.subscribe(({ method: rawMethod, params: rawParams }) => {
+  // 先构建 chat.* 管道（含握手期缓冲）
+  const { chat$: hydratedChat$, syncEnd$ } = buildChatPipeline(ws.events$, {
+    enableBuffer: ((import.meta as any).env?.VITE_CHAT_HANDSHAKE_BUFFER ?? '1') !== '0',
+    strictBuffer: ((import.meta as any).env?.VITE_CHAT_HANDSHAKE_STRICT ?? '0') === '1'
+  })
+
+  // 同步 end：推进“已应用游标”
+  const endSub = syncEnd$.subscribe(({ params }) => {
     try {
-      if (typeof rawMethod !== 'string') return
-      let method = rawMethod
-      let params = rawParams
-      chatTrace('ws.event.incoming', {
-        method,
-        hasConversationId: !!(rawParams as any)?.conversationId
-      })
-
-      if (method.startsWith('codex/')) {
-        if (method === 'codex/sessionConfigured') {
-          handleSessionConfigured(params as CodexSessionConfiguredPayload)
-          return
+      const cid = (params as any)?.conversationId as string | undefined
+      const upto = Number((params as any)?.uptoEventId ?? 0) || 0
+      if (cid) {
+        // 保持最小展示时间，避免闪烁
+        const MIN_HOLD = Number((import.meta as any).env?.VITE_CHAT_HANDSHAKE_MIN_MS ?? 200)
+        const startedAt = hydratingStartedAt.get(cid) || 0
+        const elapsed = startedAt ? Date.now() - startedAt : MIN_HOLD
+        const clear = () => useChatHydrationStore.getState().setHydrating(cid, false)
+        if (elapsed < MIN_HOLD) {
+          const t = setTimeout(clear, MIN_HOLD - elapsed)
+          holdTimers.add(t)
+        } else {
+          clear()
         }
-        if (method === 'codex/authStatusChange') {
-          handleAuthStatusChange(params as CodexAuthStatusChangePayload)
-          return
-        }
-        if (method === 'codex/account/rateLimits/updated') {
-          handleRateLimitUpdated(params as CodexRateLimitPayload)
-        }
-        return
       }
+      if (cid && upto > 0) ws.primeConversationCursor(cid, upto)
+    } catch {}
+  })
 
-      if (!method.startsWith('chat.')) return
-      const eventConversationId = (params as any)?.conversationId as string | undefined
-      if (!guardConversation(method, eventConversationId)) return
-      processChatEvent(method, params)
-    } catch (error) {
-      chatTrace('ws.event.error', {
-        method: rawMethod,
-        error: error instanceof Error ? error.message : String(error)
-      })
-      // eslint-disable-next-line no-console
-      console.error('[chat/ws] event handler error', rawMethod, error)
+  // 同步 begin：仅用于 UI 指示，不落地到 store
+  const hydratingStartedAt = new Map<string, number>()
+  const holdTimers = new Set<any>()
+  const beginSub = ws.events$
+    .pipe(filter((ev) => ev.method === 'chat.session.sync_begin'))
+    .subscribe(({ params }) => {
+      try {
+        const cid = (params as any)?.conversationId as string | undefined
+        if (cid) {
+          hydratingStartedAt.set(cid, Date.now())
+          useChatHydrationStore.getState().setHydrating(cid, true)
+        }
+      } catch {}
+    })
+
+  // codex/* 管道（会话配置/认证/限额）
+  const { sessionConfigured$, authStatusChange$, rateLimitUpdated$ } = buildCodexPipeline(
+    ws.events$
+  )
+  const codexSub1 = sessionConfigured$.subscribe((p) =>
+    handleSessionConfigured(p as CodexSessionConfiguredPayload)
+  )
+  const codexSub2 = authStatusChange$.subscribe((p) =>
+    handleAuthStatusChange(p as CodexAuthStatusChangePayload)
+  )
+  const codexSub3 = rateLimitUpdated$.subscribe((p) =>
+    handleRateLimitUpdated(p as CodexRateLimitPayload)
+  )
+
+  // chat.* 事件：经由握手缓冲后的稳定流
+  const chatSub = hydratedChat$.subscribe(({ method, params }) => {
+    try {
+      chatTurnActions.__beginFor((params as any)?.conversationId)
+      processor(method, params)
+    } finally {
+      chatTurnActions.__endEvent()
     }
   })
 
+  // 全局“进行中”聚合（默认开启；可用 VITE_CHAT_GEN_AGG_MODE=off 关闭）
+  const GEN_MODE = ((import.meta as any).env?.VITE_CHAT_GEN_AGG_MODE ?? 'global') as string
+  let stopGenAgg: (() => void) | null = null
+  if (GEN_MODE !== 'off') {
+    try {
+      stopGenAgg = initGlobalGeneratingAggregator()
+      // 种子：列表接口的 inProgress（仅初始化，后续以 WS 纠偏）。Vitest 下跳过 HTTP。
+      const isVitest = typeof process !== 'undefined' && !!(process as any)?.env?.VITEST
+      if (!isVitest) {
+        chatApi
+          .listConversations({ pageSize: 100 })
+          .then((res) => {
+            const items = Array.isArray((res as any)?.items) ? (res as any).items : []
+            for (const it of items) {
+              const cid = (it as any)?.conversationId || (it as any)?.id
+              if (!cid) continue
+              const provider = (it as any)?.providerId || (it as any)?.provider || ''
+              const key = provider ? `${provider}|${cid}` : cid
+              if ((it as any)?.inProgress === true) seedGenerating(key, true)
+            }
+          })
+          .catch(() => {})
+      }
+    } catch {}
+  }
+
   return () => {
     chatTrace('ws.subscribe.cleanup', {})
-    sub.unsubscribe()
-    topicSub.unsubscribe()
-    unsubscribeCid()
+    beginSub.unsubscribe()
+    endSub.unsubscribe()
+    codexSub1.unsubscribe()
+    codexSub2.unsubscribe()
+    codexSub3.unsubscribe()
+    chatSub.unsubscribe()
+    if (stopGenAgg) {
+      try {
+        stopGenAgg()
+      } catch {}
+    }
+    // 清理可能遗留的 hold 定时器
+    try {
+      holdTimers.forEach((t) => clearTimeout(t))
+      holdTimers.clear()
+    } catch {}
   }
 }

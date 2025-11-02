@@ -2,10 +2,7 @@ import { useMemo } from 'react'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
-import {
-  getCodexSessionState,
-  useCodexChatProviderStore
-} from '@/stores/codex-chat-provider'
+import { getCodexSessionState, useCodexChatProviderStore } from '@/stores/codex-chat-provider'
 
 function booleanLabel(value: boolean | undefined) {
   if (value == null) return '未知'

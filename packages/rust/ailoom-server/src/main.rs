@@ -92,7 +92,7 @@ async fn main() -> anyhow::Result<()> {
     let ring_cap = std::env::var("AILOOM_WS_RING_CAP")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(1024);
+        .unwrap_or(4096);
     let hub = ws::hub::Hub::new(ring_cap);
     let app_state = AppState {
         fs: fs_cfg.clone(),
@@ -123,7 +123,9 @@ async fn main() -> anyhow::Result<()> {
             }
         });
     }
-    let app = router::build_router(app_state, args.web_dist.clone(), args.no_static);
+    let app = router::build_router(app_state.clone(), args.web_dist.clone(), args.no_static);
+    // Init Codex per-conv registry GC (background)
+    services::codex::registry::init_gc();
 
     let bind_addr: SocketAddr = match args.port {
         Some(p) => SocketAddr::from(([127, 0, 0, 1], p)),

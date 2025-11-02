@@ -62,7 +62,7 @@ export async function wsPrefer<T>(
     }
     const ms = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS
     if (DEBUG_ROUTE) console.log('[wsPrefer] WS', method)
-    return await ws.first(ws.call<T>(method, params, ms))
+    return await ws.callOnce<T>(method, params, ms)
   } catch (e: any) {
     if (!isTransportError(e)) throw e
     // 命中传输/能力错误：设置 fuse 窗口

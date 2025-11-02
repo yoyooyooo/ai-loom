@@ -1,7 +1,12 @@
 import { codexChatProviderActions } from '@/stores/codex-chat-provider'
 import { chatTrace } from '@/lib/logger'
 import type { EventMsg } from '@/lib/codex-types/EventMsg'
-import { chatTurnActions, useChatTurnStore } from '../stores/chat-turns'
+import {
+  chatTurnActions,
+  useChatTurnStore,
+  chatTurnSelectors,
+  selectConversationFromWs
+} from '../stores/chat-turns'
 import type {
   CodexAuthStatusChangePayload,
   CodexRateLimitPayload,
@@ -22,9 +27,7 @@ export function eventMsgToHistory(msg: EventMsg) {
   }
 }
 
-export function makeSessionConfiguredHandler(
-  processor: (method: string, params: any) => void
-) {
+export function makeSessionConfiguredHandler(processor: (method: string, params: any) => void) {
   return function handleSessionConfigured(payload: CodexSessionConfiguredPayload) {
     chatTrace('ws.sessionConfigured', {
       conversationId: payload?.conversationId,
@@ -32,13 +35,16 @@ export function makeSessionConfiguredHandler(
       initialCount: Array.isArray(payload?.initialMessages) ? payload.initialMessages.length : 0
     })
 
-    const conversationId = typeof payload?.conversationId === 'string' ? payload.conversationId : undefined
+    const conversationId =
+      typeof payload?.conversationId === 'string' ? payload.conversationId : undefined
     if (conversationId) {
-      chatTurnActions.setConversationId(conversationId)
+      // 集中到 stores/chat-turns.ts 的统一策略
+      selectConversationFromWs(conversationId)
       processor('chat.session.resumed', { conversationId })
       try {
         const st: any = (useChatTurnStore as any).getState?.()
-        const hasExisting = Array.isArray(st?.turns) && st.turns.length > 0
+        const slice = st ? chatTurnSelectors.currentSlice(st) : null
+        const hasExisting = Array.isArray(slice?.turns) && slice.turns.length > 0
         if (!hasExisting) {
           const history = Array.isArray(payload?.initialMessages)
             ? payload.initialMessages
@@ -85,13 +91,15 @@ export function handleAuthStatusChange(payload: CodexAuthStatusChangePayload) {
     authenticated
   }
   codexChatProviderActions.setCapabilities(undefined, capabilities)
-  if (payload?.conversationId) codexChatProviderActions.setCapabilities(payload.conversationId, capabilities)
+  if (payload?.conversationId)
+    codexChatProviderActions.setCapabilities(payload.conversationId, capabilities)
 }
 
 export function handleRateLimitUpdated(payload: CodexRateLimitPayload) {
   const snapshot = payload?.rateLimits ?? null
   const primary = snapshot?.primary ?? null
-  const remaining = typeof primary?.used_percent === 'number' ? Math.max(0, 100 - primary.used_percent) : undefined
+  const remaining =
+    typeof primary?.used_percent === 'number' ? Math.max(0, 100 - primary.used_percent) : undefined
   let resetAt: string | undefined
   if (typeof primary?.resets_in_seconds === 'number') {
     resetAt = new Date(Date.now() + primary.resets_in_seconds * 1000).toISOString()
@@ -102,5 +110,6 @@ export function handleRateLimitUpdated(payload: CodexRateLimitPayload) {
     extra: { rateLimitsSnapshot: snapshot }
   }
   codexChatProviderActions.setCapabilities(undefined, patch)
-  if (payload?.conversationId) codexChatProviderActions.setCapabilities(payload.conversationId, patch)
+  if (payload?.conversationId)
+    codexChatProviderActions.setCapabilities(payload.conversationId, patch)
 }

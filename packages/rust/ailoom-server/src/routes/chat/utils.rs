@@ -6,6 +6,8 @@ use serde_json::{Map, Value};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
+const FIRST_USER_PREVIEW_MAX_CHARS: usize = 160;
+
 pub fn map_error_to_status(err: &str) -> StatusCode {
     if err.contains("timeout") {
         StatusCode::GATEWAY_TIMEOUT
@@ -92,7 +94,12 @@ pub fn normalize_conversation_item(raw: &Value) -> Value {
         .replace('\n', " ");
     map.insert("preview".into(), Value::String(preview));
 
-    if let Some(model) = raw.get("model").and_then(|m| m.as_str()) {
+    if let Some(model) = raw
+        .get("model")
+        .and_then(|m| m.as_str())
+        .or_else(|| raw.get("model_provider").and_then(|m| m.as_str()))
+        .or_else(|| raw.get("modelProvider").and_then(|m| m.as_str()))
+    {
         map.insert("model".into(), Value::String(model.to_string()));
     }
 
@@ -131,14 +138,6 @@ pub fn resolve_rollout_path(raw: &str, workspace_root: &Path) -> Option<PathBuf>
     } else {
         Some(workspace_root.join(path))
     }
-}
-
-/// 从 rollout JSONL 顶部连续的 `session_meta` 行数推导 fork 深度。
-/// 约定：
-/// - 至少 1 条 `session_meta` → depth = count - 1（根为 0，后续 fork 逐级 +1）。
-/// - 只统计文件顶部连续的 `session_meta`，遇到第一条非 `session_meta` 行即停止。
-pub fn derive_depth_from_rollout(path: &Path) -> Option<i64> {
-    derive_lineage_from_rollout(path).map(|(depth, _, _)| depth)
 }
 
 /// 返回 (depth, parentId, rootId)
@@ -229,18 +228,154 @@ pub fn derive_turns_from_rollout(path: &Path) -> Option<i64> {
     Some(turns)
 }
 
+fn clamp_preview(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let collapsed = trimmed
+        .split_whitespace()
+        .fold(String::new(), |mut acc, part| {
+            if !part.is_empty() {
+                if !acc.is_empty() {
+                    acc.push(' ');
+                }
+                acc.push_str(part);
+            }
+            acc
+        });
+    if collapsed.chars().count() <= FIRST_USER_PREVIEW_MAX_CHARS {
+        return collapsed;
+    }
+    collapsed
+        .chars()
+        .take(FIRST_USER_PREVIEW_MAX_CHARS)
+        .collect::<String>()
+        + "…"
+}
+
+fn extract_user_message_text(payload: &Value) -> Option<String> {
+    if let Some(msg) = payload
+        .get("message")
+        .and_then(|m| m.as_str())
+        .filter(|m| !m.trim().is_empty())
+    {
+        return Some(clamp_preview(msg));
+    }
+
+    if let Some(text) = payload
+        .get("text")
+        .and_then(|t| t.as_str())
+        .filter(|t| !t.trim().is_empty())
+    {
+        return Some(clamp_preview(text));
+    }
+
+    if let Some(content_items) = payload.get("content") {
+        if let Some(arr) = content_items.as_array() {
+            let mut pieces: Vec<String> = Vec::new();
+            for item in arr {
+                if let Some(kind) = item.get("type").and_then(|k| k.as_str()) {
+                    match kind {
+                        "input_text" | "text" => {
+                            if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                                let normalized = clamp_preview(text);
+                                if !normalized.is_empty() {
+                                    pieces.push(normalized);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                } else if let Some(as_str) = item.as_str() {
+                    let normalized = clamp_preview(as_str);
+                    if !normalized.is_empty() {
+                        pieces.push(normalized);
+                    }
+                }
+            }
+            if !pieces.is_empty() {
+                let mut merged = pieces.join(" ");
+                if merged.chars().count() > FIRST_USER_PREVIEW_MAX_CHARS {
+                    merged = merged
+                        .chars()
+                        .take(FIRST_USER_PREVIEW_MAX_CHARS)
+                        .collect::<String>()
+                        + "…";
+                }
+                return Some(merged);
+            }
+        } else if let Some(text) = content_items.as_str() {
+            let normalized = clamp_preview(text);
+            if !normalized.is_empty() {
+                return Some(normalized);
+            }
+        }
+    }
+
+    None
+}
+
+pub fn derive_first_user_message_from_rollout(path: &Path) -> Option<String> {
+    let file = File::open(path).ok()?;
+    let reader = BufReader::new(file);
+    for line in reader.lines() {
+        let Ok(line) = line else {
+            continue;
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
+            continue;
+        };
+        if value
+            .get("type")
+            .and_then(|x| x.as_str())
+            .filter(|t| *t == "event_msg")
+            .is_none()
+        {
+            continue;
+        }
+        let Some(payload) = value.get("payload") else {
+            continue;
+        };
+        if payload
+            .get("type")
+            .and_then(|x| x.as_str())
+            .filter(|t| *t == "user_message")
+            .is_none()
+        {
+            continue;
+        }
+        if let Some(text) = extract_user_message_text(payload) {
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        derive_depth_from_rollout, derive_lineage_from_rollout, derive_turns_from_rollout,
+        derive_first_user_message_from_rollout, derive_lineage_from_rollout,
+        derive_turns_from_rollout,
     };
     use std::fs;
+    use std::path::Path;
     use std::path::PathBuf;
 
     fn tmpfile(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("ailoom_depth_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join(name)
+    }
+
+    fn derive_depth(path: &Path) -> Option<i64> {
+        derive_lineage_from_rollout(path).map(|(depth, _, _)| depth)
     }
 
     #[test]
@@ -253,7 +388,7 @@ mod tests {
 {"type":"event_msg","payload":{"type":"user_message","message":"hi"}}
 "#;
         fs::write(&p, content.trim_start()).unwrap();
-        let d = derive_depth_from_rollout(&p).expect("some depth");
+        let d = derive_depth(&p).expect("some depth");
         assert_eq!(d, 2);
     }
 
@@ -266,7 +401,7 @@ mod tests {
 {"type":"session_meta","payload":{"id":"C"}}
 "#;
         fs::write(&p, content.trim_start()).unwrap();
-        let d = derive_depth_from_rollout(&p).expect("some depth");
+        let d = derive_depth(&p).expect("some depth");
         assert_eq!(d, 0);
     }
 
@@ -278,7 +413,7 @@ mod tests {
 {"type":"session_meta","payload":{"id":"C"}}
 "#;
         fs::write(&p, content.trim_start()).unwrap();
-        let d = derive_depth_from_rollout(&p);
+        let d = derive_depth(&p);
         assert!(d.is_none());
     }
 
@@ -324,5 +459,30 @@ mod tests {
         fs::write(&p, content.trim_start()).unwrap();
         let t = derive_turns_from_rollout(&p).expect("some turns");
         assert_eq!(t, 1);
+    }
+
+    #[test]
+    fn derive_first_user_message_reads_first_non_empty_user_text() {
+        let p = tmpfile("preview.jsonl");
+        let content = r#"
+{"type":"session_meta","payload":{"id":"root"}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"ignore"}}
+{"type":"event_msg","payload":{"type":"user_message","message":" first line \n second "}}
+{"type":"event_msg","payload":{"type":"user_message","message":"later"}}
+"#;
+        fs::write(&p, content.trim_start()).unwrap();
+        let preview = derive_first_user_message_from_rollout(&p).expect("some preview");
+        assert_eq!(preview, "first line second");
+    }
+
+    #[test]
+    fn derive_first_user_message_handles_structured_content() {
+        let p = tmpfile("preview2.jsonl");
+        let content = r#"
+{"type":"event_msg","payload":{"type":"user_message","content":[{"type":"input_text","text":"hello"},{"type":"input_text","text":"world"}]}}
+"#;
+        fs::write(&p, content.trim_start()).unwrap();
+        let preview = derive_first_user_message_from_rollout(&p).expect("some preview");
+        assert_eq!(preview, "hello world");
     }
 }

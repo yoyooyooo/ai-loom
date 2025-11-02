@@ -38,9 +38,7 @@ describe('explorer subscriptions', () => {
     const calls1 = __getCalls()
     // 当前目录为 '.' 时实现传空字符串用于“任意目录”；测试兼容两种写法
     expect(
-      calls1.some(
-        (c: any) => c.topic === 'tree' && (c.filter?.dir === '.' || c.filter?.dir === '')
-      )
+      calls1.some((c: any) => c.topic === 'tree' && (c.filter?.dir === '.' || c.filter?.dir === ''))
     ).toBe(true)
     expect(calls1.some((c: any) => c.topic === 'annotations')).toBe(true)
     expect(calls1.some((c: any) => c.topic === 'file' && c.filter?.prefix)).toBe(false)

@@ -51,18 +51,27 @@ pub async fn get_chat_config(
     }
     let app = client.app();
 
-    let models = match app
-        .list_models(ListModelsParams {
-            page_size: None,
-            cursor: None,
-        })
-        .await
-    {
-        Ok(res) => map_models(res),
-        Err(err) => {
-            tracing::warn!(target:"codex", error=%err, "listModels 调用失败");
-            vec![]
+    // 可选：是否调用 listModels 填充模型列表（默认关闭，避免在部分版本/未认证态下报错干扰）
+    let list_models: bool = std::env::var("AILOOM_CODEX_LIST_MODELS")
+        .ok()
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    let models = if list_models {
+        match app
+            .list_models(ListModelsParams {
+                page_size: None,
+                cursor: None,
+            })
+            .await
+        {
+            Ok(res) => map_models(res),
+            Err(err) => {
+                tracing::warn!(target:"codex", error=%err, "listModels 调用失败");
+                vec![]
+            }
         }
+    } else {
+        vec![]
     };
 
     let defaults = match app.get_user_saved_config().await {

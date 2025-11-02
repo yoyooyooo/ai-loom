@@ -2,7 +2,11 @@ import React from 'react'
 import { describe, it, beforeEach, afterEach, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { subscribeChatEvents } from '@/features/codex-chat/services/ws'
-import { chatTurnActions, useChatTurnStore } from '@/features/codex-chat/stores/chat-turns'
+import {
+  chatTurnActions,
+  useChatTurnStore,
+  chatTurnSelectors
+} from '@/features/codex-chat/stores/chat-turns'
 import { TurnAssistantView } from '@/features/codex-chat/components/turn-item'
 
 vi.mock('@/lib/ws/singleton')
@@ -25,12 +29,15 @@ describe('UI：thinking 内容去重（首行等于标题时剔除）', () => {
     chatTurnActions.setConversationId('conv-think-ui')
     const text = 'Plan\n\nLine A\nLine B'
     __emit('chat.reasoning.end', { conversationId: 'conv-think-ui', text })
-    __emit('chat.tool.exec.begin', { conversationId: 'conv-think-ui', callId: 'c1', command: ['bash', '-lc', 'echo ok'] })
+    __emit('chat.tool.exec.begin', {
+      conversationId: 'conv-think-ui',
+      callId: 'c1',
+      command: ['bash', '-lc', 'echo ok']
+    })
     __emit('chat.message.completed', { conversationId: 'conv-think-ui', text: 'ok' })
     __emit('chat.turn.complete', { conversationId: 'conv-think-ui' })
 
-    const st = useChatTurnStore.getState()
-    const t = st.turns[st.turns.length - 1]
+    const t = chatTurnSelectors.currentTurns(useChatTurnStore.getState()).at(-1)!
     render(<TurnAssistantView turn={t} />)
     fireEvent.click(screen.getByText(/Finished working/))
     expect(screen.getByText('thinking: Plan')).toBeTruthy()
@@ -39,4 +46,3 @@ describe('UI：thinking 内容去重（首行等于标题时剔除）', () => {
     expect(screen.queryByText(/^Plan$/)).toBeNull()
   })
 })
-

@@ -11,6 +11,7 @@ use codex_app_server_protocol::{
     JSONRPCError, JSONRPCMessage, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, RequestId,
 };
 use serde::de::DeserializeOwned;
+use tokio::time::{timeout, Duration};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{ChildStdin, ChildStdout},
@@ -58,12 +59,17 @@ pub trait JsonRpcCallbacks: Send + Sync {
     async fn on_non_json(&self, _raw: &str) -> Result<()> {
         Ok(())
     }
+
+    async fn on_shutdown(&self, _peer: &JsonRpcPeer) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
 pub struct JsonRpcPeer {
     stdin: Arc<Mutex<ChildStdin>>,
     pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<PendingResponse>>>>,
+    labels: Arc<Mutex<HashMap<RequestId, String>>>,
     id_counter: Arc<AtomicI64>,
 }
 
@@ -76,6 +82,7 @@ impl JsonRpcPeer {
         let peer = Self {
             stdin: Arc::new(Mutex::new(stdin)),
             pending: Arc::new(Mutex::new(HashMap::new())),
+            labels: Arc::new(Mutex::new(HashMap::new())),
             id_counter: Arc::new(AtomicI64::new(1)),
         };
         let reader_peer = peer.clone();
@@ -134,6 +141,9 @@ impl JsonRpcPeer {
                 }
             }
             let _ = reader_peer.shutdown().await;
+            if let Err(err) = callbacks.on_shutdown(&reader_peer).await {
+                tracing::warn!(target:"codex.rpc", error=%err, "shutdown callback failed");
+            }
         });
         peer
     }
@@ -148,11 +158,16 @@ impl JsonRpcPeer {
         rx
     }
 
+    pub fn label_for(&self, id: &RequestId) -> Option<String> {
+        self.labels.try_lock().ok().and_then(|m| m.get(id).cloned())
+    }
+
     async fn resolve_response(&self, response: JSONRPCResponse) {
         let id = response.id.clone();
         if let Some(tx) = self.pending.lock().await.remove(&id) {
             let _ = tx.send(PendingResponse::Result(response));
         }
+        let _ = self.labels.lock().await.remove(&id);
     }
 
     async fn resolve_error(&self, error: JSONRPCError) {
@@ -160,6 +175,7 @@ impl JsonRpcPeer {
         if let Some(tx) = self.pending.lock().await.remove(&id) {
             let _ = tx.send(PendingResponse::Error(error));
         }
+        let _ = self.labels.lock().await.remove(&id);
     }
 
     pub async fn shutdown(&self) -> Result<()> {
@@ -186,8 +202,25 @@ impl JsonRpcPeer {
     ) -> Result<R> {
         let request_id = request.id.clone();
         let rx = self.register(request_id.clone()).await;
+        self.labels
+            .lock()
+            .await
+            .insert(request_id.clone(), label.to_string());
         self.send_message(&JSONRPCMessage::Request(request)).await?;
-        match rx.await {
+        // 统一超时（可配置）：避免上游永远等待导致 HTTP 挂起
+        let timeout_ms: u64 = std::env::var("AILOOM_CODEX_RPC_TIMEOUT_MS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(30_000);
+        let awaited = if timeout_ms > 0 {
+            match timeout(Duration::from_millis(timeout_ms), rx).await {
+                Ok(v) => v,
+                Err(_) => return Err(anyhow!("{label} request timeout after {}ms", timeout_ms)),
+            }
+        } else {
+            rx.await
+        };
+        match awaited {
             Ok(PendingResponse::Result(response)) => serde_json::from_value::<R>(response.result)
                 .map_err(|err| anyhow!("failed to decode {label} response: {err}")),
             Ok(PendingResponse::Error(error)) => Err(anyhow!(
@@ -209,9 +242,5 @@ impl JsonRpcPeer {
 
     pub async fn send_response(&self, response: JSONRPCResponse) -> Result<()> {
         self.send_message(&JSONRPCMessage::Response(response)).await
-    }
-
-    pub async fn send_error(&self, error: JSONRPCError) -> Result<()> {
-        self.send_message(&JSONRPCMessage::Error(error)).await
     }
 }

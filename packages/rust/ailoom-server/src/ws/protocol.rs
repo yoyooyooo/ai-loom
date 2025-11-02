@@ -62,15 +62,6 @@ impl RpcResponse {
         }
     }
 }
-
-pub fn error_obj(code: &str, message: &str) -> RpcError {
-    RpcError {
-        code: code.into(),
-        message: message.into(),
-        data: None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

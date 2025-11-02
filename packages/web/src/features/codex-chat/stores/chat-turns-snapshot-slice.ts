@@ -1,74 +1,103 @@
-import type { Turn, TurnStep } from './chat-turns'
+import type { ChatTurnStore, ChatTurnStoreCreator, ConvSlice, Turn } from './chat-turns.types'
 import { createId } from '@/lib/id'
-import { buildTurnsFromHistory as buildTurnsFromHistoryExternal, applyEventsToTurns as applyEventsToTurnsExternal } from './chat-turns-snapshot'
-import { summarizeFirstLine, nowISO, stripDuplicatedTitle } from './chat-turns-utils'
+import { summarizeFirstLine } from './chat-turns-utils'
+import { STAGING_CID } from './chat-turns-core'
 
-export function createSnapshotSlice(set: any, get: any) {
+type SnapshotCreator = ChatTurnStoreCreator<ChatTurnStoreCreator.Snapshot>
+
+function createEmptySlice(): ConvSlice {
   return {
-    loadFromHistory(items: Array<{ role: 'user' | 'assistant' | 'reasoning'; text: string; reasoning?: string | null }>) {
-      const state = get()
-      const { turns, nextSeq } = buildTurnsFromHistoryExternal(items as any, state.conversationId)
-      set(
-        { ...state, turns, activeTurnId: undefined, nextSeq, toolIndex: {}, generating: false },
-        false,
-        'turns/loadFromHistory'
-      )
-    },
+    turns: [],
+    activeTurnId: undefined,
+    nextSeq: 0,
+    toolIndex: {},
+    toolHistory: {},
+    generating: false,
+    lastAccess: Date.now(),
+    turnIndex: {},
+    streamingIndex: {}
+  }
+}
 
-    loadSnapshot(
-      history: Array<{ role: 'user' | 'assistant' | 'reasoning'; text: string; reasoning?: string | null }>,
-      events: Array<{ method: string; params?: Record<string, any> | null | undefined }>
-    ) {
+function unregisterSliceTurns(state: ChatTurnStore, cid: string, slice: ConvSlice | undefined) {
+  if (!slice || !Array.isArray(slice.turns)) return
+  if (state.turnLocator) {
+    for (const turn of slice.turns) {
+      if (turn?.id) delete state.turnLocator[turn.id]
+    }
+  }
+  slice.turnIndex = {}
+}
+
+function assignTurnsToSlice(state: ChatTurnStore, cid: string, slice: ConvSlice, turns: Turn[]) {
+  slice.turns = turns
+  slice.turnIndex = {}
+  if (!(slice as any).toolHistory) (slice as any).toolHistory = {}
+  const history = slice.toolHistory
+  for (const key of Object.keys(history)) delete history[key]
+  if (!state.turnLocator) state.turnLocator = {}
+  for (let i = 0; i < turns.length; i += 1) {
+    const turn = turns[i]
+    if (cid !== STAGING_CID && turn.conversationId !== cid) {
+      ;(turn as any).conversationId = cid
+    }
+    slice.turnIndex[turn.id] = i
+    state.turnLocator[turn.id] = { conversationId: cid }
+    if (Array.isArray(turn.steps)) {
+      for (const step of turn.steps as any[]) {
+        const callId = step?.meta?.callId
+        if (!callId) continue
+        history[callId] = { turnId: turn.id, stepId: step.id }
+      }
+    }
+  }
+}
+
+function bumpVersion(state: ChatTurnStore) {
+  state.version = (state.version || 0) + 1
+}
+
+export function createSnapshotSlice(
+  set: Parameters<SnapshotCreator>[0],
+  get: Parameters<SnapshotCreator>[1]
+): ReturnType<SnapshotCreator> {
+  return {
+    // 新增：从后端预组装的 turns 快照加载（优先路径）
+    loadServerTurns(turnsInput: any[]) {
       const state = get()
-      let baseTurns: Turn[] = []
-      let nextSeq = 0
-      if (Array.isArray(history) && history.length > 0) {
-        const built = buildTurnsFromHistoryExternal(history as any, state.conversationId)
-        baseTurns = built.turns
-        nextSeq = built.nextSeq
-      }
-      const openToolIndex = applyEventsToTurnsExternal(baseTurns as any, events as any)
-      if (nextSeq === 0 && baseTurns.length > 0) {
-        nextSeq = Math.max(...baseTurns.map((t) => t.seq))
-      }
-      // Fallback：若该 turn 有 reasoning 且已有其它步骤，但缺少 thinking 步骤，则补一条（保证 Working 内可见）
-      for (const turn of baseTurns) {
-        const hasReasoning = !!(turn.reasoning?.content || '').trim()
-        const hasSteps = Array.isArray(turn.steps) && turn.steps.length > 0
-        const hasThinking = hasSteps && turn.steps.some((s) => s.kind === 'thinking')
-        if (hasReasoning && hasSteps && !hasThinking) {
-          const title = summarizeFirstLine(turn.reasoning!.content)
-          const body = stripDuplicatedTitle(turn.reasoning!.content, title)
-          turn.steps.push({
-            id: createId('thinking'),
-            kind: 'thinking',
-            title: title ? `thinking: ${title}` : 'thinking',
-            body,
-            status: 'completed',
-            ts: nowISO(),
-            meta: { thinking: true }
-          } as TurnStep)
-        }
-      }
-      // 归一化：去重 thinking 步骤
-      for (const turn of baseTurns) {
-        if (!Array.isArray(turn.steps) || turn.steps.length === 0) continue
-        const seen = new Set<string>()
-        const deduped: TurnStep[] = []
-        for (const step of turn.steps) {
-          if (step.kind !== 'thinking') { deduped.push(step); continue }
-          const key = ((step.body || step.title || '').trim() || '').slice(0, 2048)
-          if (!key) continue
-          if (seen.has(key)) continue
-          seen.add(key)
-          deduped.push(step)
-        }
-        turn.steps = deduped
-      }
+      const cid = state.__eventCid || state.conversationId
+      const key = cid ?? STAGING_CID
+      const turns = Array.isArray(turnsInput) ? turnsInput : []
       set(
-        { ...state, turns: baseTurns, activeTurnId: undefined, nextSeq, toolIndex: openToolIndex, generating: false },
+        (s) => {
+          const by = s.byConv || (s.byConv = {})
+          const conv = by[key] || (by[key] = createEmptySlice())
+          unregisterSliceTurns(s, key, conv)
+          // 正常化：确保每个 turn 带 conversationId
+          const normalized = turns.map((t: any, idx: number) => {
+            const id = typeof t?.id === 'string' && t.id ? t.id : `turn-server_${idx + 1}`
+            const seq = typeof t?.seq === 'number' ? t.seq : idx + 1
+            const convId = cid || t?.conversationId
+            const status = typeof t?.status === 'string' ? t.status : 'completed'
+            const user = t?.user && typeof t.user.text === 'string' ? t.user : undefined
+            const assistant =
+              t?.assistant && typeof t.assistant.text === 'string' ? t.assistant : undefined
+            const reasoning =
+              t?.reasoning && typeof t.reasoning === 'object' ? t.reasoning : undefined
+            const steps = Array.isArray(t?.steps) ? t.steps : []
+            return { id, seq, conversationId: convId, status, user, assistant, reasoning, steps }
+          })
+          assignTurnsToSlice(s, key, conv, normalized as any)
+          conv.activeTurnId = undefined
+          conv.nextSeq =
+            normalized.length > 0 ? Math.max(...normalized.map((x: any) => x.seq || 0)) : 0
+          conv.toolIndex = {}
+          conv.generating = false
+          conv.lastAccess = Date.now()
+          bumpVersion(s)
+        },
         false,
-        'turns/loadSnapshot'
+        'turns/loadServerTurns'
       )
     }
   }

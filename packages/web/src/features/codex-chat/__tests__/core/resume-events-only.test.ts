@@ -1,27 +1,49 @@
 import { describe, it, beforeEach, expect } from 'vitest'
-import { chatTurnActions, useChatTurnStore } from '@/features/codex-chat/stores/chat-turns'
+import {
+  chatTurnActions,
+  useChatTurnStore,
+  chatTurnSelectors
+} from '@/features/codex-chat/stores/chat-turns'
 
 describe('resume events-only → turns with steps', () => {
   beforeEach(() => {
     chatTurnActions.reset()
   })
 
-  it('builds turns and exec steps from chat.* events without history', () => {
-    const events = [
-      { method: 'chat.turn.started', params: { turnSeq: 1 } },
-      { method: 'chat.info.user_message', params: { text: 'echo version' } },
-      { method: 'chat.tool.exec.begin', params: { callId: 'call_1', cwd: '/tmp', command: ['bash', '-lc', 'echo ok'] } },
-      { method: 'chat.tool.exec.output', params: { callId: 'call_1', stream: 'stdout', text: 'ok\n' } },
-      { method: 'chat.tool.exec.end', params: { callId: 'call_1', exitCode: 0, stdout: 'ok\n' } },
-      { method: 'chat.message.completed', params: { text: '完成' } },
-      { method: 'chat.turn.complete', params: {} }
+  it('loadServerTurns: builds turns with exec steps from server turns', () => {
+    const turns = [
+      {
+        id: 't1',
+        seq: 1,
+        conversationId: 'conv-x',
+        status: 'completed',
+        user: { text: 'echo version', ts: '' },
+        assistant: { text: '完成' },
+        steps: [
+          {
+            id: 's1',
+            kind: 'exec',
+            title: 'bash -lc echo ok',
+            status: 'completed',
+            ts: '',
+            meta: {
+              callId: 'call_1',
+              cwd: '/tmp',
+              command: ['bash', '-lc', 'echo ok'],
+              exitCode: 0,
+              stdout: 'ok\n'
+            },
+            body: 'ok\n'
+          }
+        ]
+      }
     ]
 
-    chatTurnActions.loadSnapshot([], events)
+    chatTurnActions.loadServerTurns(turns as any)
 
-    const state = useChatTurnStore.getState()
-    expect(state.turns.length).toBeGreaterThan(0)
-    const t0 = state.turns[0]
+    const slice = chatTurnSelectors.currentSlice(useChatTurnStore.getState())
+    expect(slice.turns.length).toBeGreaterThan(0)
+    const t0 = slice.turns[0]
     expect(t0.user.text).toBe('echo version')
     expect(t0.assistant.text.length).toBeGreaterThan(0)
     expect(t0.steps.length).toBeGreaterThan(0)

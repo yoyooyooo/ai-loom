@@ -8,7 +8,11 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::{state::AppState, ws::hub::HubStatsOut};
+use crate::{
+    services::codex::{app_server, bridge::active_conversation_ids, registry},
+    state::AppState,
+    ws::hub::HubStatsOut,
+};
 
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +36,7 @@ struct CodexDebugEvent {
 struct CodexDebugResponse {
     stats: HubStatsOut,
     events: Vec<CodexDebugEvent>,
+    codex: serde_json::Value,
 }
 
 pub async fn codex_debug(
@@ -68,5 +73,62 @@ pub async fn codex_debug(
         })
         .collect::<Vec<_>>();
 
-    Json(CodexDebugResponse { stats, events }).into_response()
+    // Codex client 状态快照
+    let codex_json = match app_server::current().await {
+        Some(client) => {
+            let alive = client.is_alive().await;
+            let app = client.app();
+            let subs = app
+                .subscriptions_snapshot()
+                .into_iter()
+                .map(|(cid, refcnt)| serde_json::json!({"conversationId": cid, "refCount": refcnt}))
+                .collect::<Vec<_>>();
+            let active = app.active_conversations_snapshot();
+            let bridge_active = active_conversation_ids();
+            let reg = registry::snapshot().await;
+            serde_json::json!({
+                "alive": alive,
+                "subscriptions": subs,
+                "activeConversations": active,
+                "bridgeActiveConversations": bridge_active,
+                "registryChildren": reg,
+            })
+        }
+        None => {
+            let reg = registry::snapshot().await;
+            serde_json::json!({"alive": false, "subscriptions": [], "activeConversations": [], "bridgeActiveConversations": [], "registryChildren": reg})
+        }
+    };
+
+    Json(CodexDebugResponse {
+        stats,
+        events,
+        codex: codex_json,
+    })
+    .into_response()
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WsConnDebug {
+    conn_id: u64,
+    subs: Vec<crate::ws::inspect::WsSubSnapshot>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WsDebugResponse {
+    connections: Vec<WsConnDebug>,
+}
+
+pub async fn ws_debug() -> impl IntoResponse {
+    let snap = crate::ws::inspect::snapshot();
+    let list = snap
+        .into_iter()
+        .map(|c| WsConnDebug {
+            conn_id: c.conn_id,
+            subs: c.subs,
+        })
+        .collect::<Vec<_>>();
+    Json(WsDebugResponse { connections: list }).into_response()
 }

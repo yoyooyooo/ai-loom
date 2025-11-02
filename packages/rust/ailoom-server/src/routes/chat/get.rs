@@ -1,11 +1,11 @@
 use axum::{extract::Path, http::StatusCode, response::IntoResponse, Json};
 use codex_app_server_protocol::ListConversationsParams;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::{
     routes::chat::utils::{
-        codex_not_reachable_hint, conversation_id_of, map_error_to_status,
-        normalize_conversation_item,
+        codex_not_reachable_hint, conversation_id_of, derive_first_user_message_from_rollout,
+        map_error_to_status, normalize_conversation_item, resolve_rollout_path,
     },
     services::codex::app_server::get_or_start,
     state::AppState,
@@ -35,6 +35,7 @@ pub async fn get_conversation(
             .list_conversations(ListConversationsParams {
                 page_size: Some(50),
                 cursor: cursor.clone(),
+                ..Default::default()
             })
             .await
         {
@@ -50,10 +51,24 @@ pub async fn get_conversation(
             if let Ok(item_value) = serde_json::to_value(item) {
                 if let Some(id) = conversation_id_of(&item_value) {
                     if id == conversation_id {
-                        return (
-                            StatusCode::OK,
-                            Json(json!({"conversation": normalize_conversation_item(&item_value)})),
-                        )
+                        let mut normalized = normalize_conversation_item(&item_value);
+                        if let Some(path_str) = normalized
+                            .get("path")
+                            .and_then(|p| p.as_str())
+                            .filter(|p| !p.is_empty())
+                        {
+                            if let Some(abs) = resolve_rollout_path(path_str, &state.workspace_root)
+                            {
+                                if let Some(first_user) =
+                                    derive_first_user_message_from_rollout(&abs)
+                                {
+                                    if let Some(obj) = normalized.as_object_mut() {
+                                        obj.insert("preview".into(), Value::String(first_user));
+                                    }
+                                }
+                            }
+                        }
+                        return (StatusCode::OK, Json(json!({"conversation": normalized})))
                             .into_response();
                     }
                 }

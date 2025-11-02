@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ws } from './singleton'
 import { computeDelta, updateSeries } from './stats-utils'
+import { useChatTurnStore } from '@/features/codex-chat/stores/chat-turns'
 
 export function WsDebugPanel() {
   // 仅在显式开启调试时挂载逻辑，避免无谓的 session.info 采样与日志噪音
@@ -19,7 +20,7 @@ export function WsDebugPanel() {
   const [dropLowPriInc, setDropLowPriInc] = useState<number>(0)
   const [broadcastsInc, setBroadcastsInc] = useState<number>(0)
   const [resyncCount, setResyncCount] = useState<number>(0)
-  const [minimized, setMinimized] = useState<boolean>(false)
+  const [minimized, setMinimized] = useState<boolean>(true)
   const [paused, setPaused] = useState<boolean>(false)
   const pausedRef = useRef(false)
   useEffect(() => {
@@ -32,7 +33,24 @@ export function WsDebugPanel() {
     tree: 0,
     ann: 0
   })
+  const [chatRates, setChatRates] = useState<{ chat: number; codex: number; other: number }>({
+    chat: 0,
+    codex: 0,
+    other: 0
+  })
   const lastSubsRef = useRef<Array<{ topic: string; filter: any }> | null>(null)
+  const slices = useChatTurnStore((s) => {
+    try {
+      const ids = Object.keys(s.byConv || {})
+      let gen = 0
+      for (const id of ids) {
+        if ((s.byConv as any)[id]?.generating) gen += 1
+      }
+      return { sliceCount: ids.length, generatingCount: gen, currentId: s.conversationId || null }
+    } catch {
+      return { sliceCount: 0, generatingCount: 0, currentId: null as string | null }
+    }
+  })
   useEffect(() => {
     const sub = ws.online$.subscribe((v) => setOnline(Boolean(v)))
     const ev = ws.events$?.subscribe?.((e) => {
@@ -55,6 +73,16 @@ export function WsDebugPanel() {
           .filter((k) => k.startsWith('annotations.'))
           .reduce((a, k) => a + (typeCounter.current[k] || 0), 0)
         setTypeRate({ file, tree, ann })
+        const keys = Object.keys(typeCounter.current)
+        const chat = keys
+          .filter((k) => k.startsWith('chat.'))
+          .reduce((a, k) => a + (typeCounter.current[k] || 0), 0)
+        const codex = keys
+          .filter((k) => k.startsWith('codex/'))
+          .reduce((a, k) => a + (typeCounter.current[k] || 0), 0)
+        const total = Object.values(typeCounter.current).reduce((a, v) => a + (v || 0), 0)
+        const other = Math.max(0, total - chat - codex - file - tree - ann)
+        setChatRates({ chat, codex, other })
       } else {
         setRate(0)
       }
@@ -86,7 +114,7 @@ export function WsDebugPanel() {
     const rttTimer = setInterval(async () => {
       try {
         const t0 = performance.now()
-        const info = await ws.first(ws.call<any>('session.info', {}))
+        const info = await ws.callOnce<any>('session.info', {})
         const t1 = performance.now()
         if (!pausedRef.current) setRtt(Math.round(t1 - t0))
         lastInfoRef.current = info
@@ -342,7 +370,8 @@ export function WsDebugPanel() {
           <div>
             events/s: {rate}{' '}
             <span style={{ opacity: 0.7 }}>
-              file:{typeRate.file} tree:{typeRate.tree} ann:{typeRate.ann}
+              chat:{chatRates.chat} codex:{chatRates.codex} other:{chatRates.other} · file:
+              {typeRate.file} tree:{typeRate.tree} ann:{typeRate.ann}
             </span>
           </div>
           <div>
@@ -353,6 +382,10 @@ export function WsDebugPanel() {
                 .map((s: any) => s.topic + (s && s.filter ? `(${tryBriefFilter(s.filter)})` : ''))
                 .join(', ')
             })()}
+          </div>
+          <div>
+            slices: {slices.sliceCount}（generating: {slices.generatingCount}） current:{' '}
+            {slices.currentId || '-'}
           </div>
         </>
       )}

@@ -40,6 +40,13 @@ fn active_conversations() -> &'static Mutex<HashSet<String>> {
     STATE.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
+pub fn active_conversation_ids() -> Vec<String> {
+    active_conversations()
+        .lock()
+        .map(|set| set.iter().cloned().collect())
+        .unwrap_or_default()
+}
+
 pub(crate) fn store_conversation_id(id: &str) {
     if let Ok(mut guard) = active_conversations().lock() {
         guard.insert(id.to_string());
@@ -59,6 +66,16 @@ fn any_conversation_id() -> Option<String> {
         .and_then(|set| set.iter().next().cloned())
 }
 
+fn single_active_conversation_id() -> Option<String> {
+    active_conversations().lock().ok().and_then(|set| {
+        if set.len() == 1 {
+            set.iter().next().cloned()
+        } else {
+            None
+        }
+    })
+}
+
 pub fn map_notification_to_chat_events(notification: &JSONRPCNotification) -> Vec<BroadcastEvent> {
     if !notification.method.starts_with("codex/event/") {
         return vec![];
@@ -72,11 +89,16 @@ pub fn map_notification_to_chat_events(notification: &JSONRPCNotification) -> Ve
         return vec![];
     };
 
+    // 优先使用通知内显式携带的 conversationId；如缺失且仅存在单一活跃会话，则做一次安全回退。
     let conversation_id = notification
         .params
         .as_ref()
         .and_then(extract_conversation_id)
-        .or_else(any_conversation_id);
+        .or_else(single_active_conversation_id);
+
+    if conversation_id.is_none() {
+        tracing::warn!(target: "codex.map", method=%notification.method, "notification 缺少 conversationId，后续 chat.* 可能无法按会话过滤");
+    }
 
     if let Some(ref cid) = conversation_id {
         store_conversation_id(cid);
@@ -94,7 +116,27 @@ pub fn map_notification_to_chat_events(notification: &JSONRPCNotification) -> Ve
         return vec![];
     };
 
-    map_runtime_event(kind, &msg_map, conversation_id.as_deref())
+    let mut events = map_runtime_event(kind, &msg_map, conversation_id.as_deref());
+    // 安全阀：chat.* 事件必须带 conversationId；若缺失则丢弃并打点，避免污染 ring 与造成 gating 噪声。
+    if events.iter().any(|e| e.method.starts_with("chat.")) {
+        let before = events.len();
+        events.retain(|e| {
+            if !e.method.starts_with("chat.") {
+                return true;
+            }
+            e.params
+                .get("conversationId")
+                .and_then(|v| v.as_str())
+                .is_some()
+        });
+        if events.len() < before {
+            tracing::debug!(target:"codex.map", kind=%kind, "丢弃缺少 conversationId 的 chat.* 事件，避免串会话");
+        }
+    }
+    if events.is_empty() {
+        tracing::debug!(target: "codex.map", kind=%kind, "runtime 事件未映射或为空");
+    }
+    events
 }
 
 pub fn map_notification(notification: &JSONRPCNotification) -> Vec<BroadcastEvent> {
@@ -785,28 +827,25 @@ fn map_runtime_event(
 }
 
 fn attach_conversation_id(params: Value, conversation_id: Option<&str>) -> Value {
-    if let Some(cid) = conversation_id {
-        match params {
-            Value::Null => {
-                let mut map = Map::new();
-                map.insert("conversationId".into(), Value::String(cid.to_string()));
-                Value::Object(map)
-            }
-            Value::Object(mut map) => {
-                map.entry("conversationId".to_string())
-                    .or_insert_with(|| Value::String(cid.to_string()));
-                Value::Object(map)
-            }
-            other => {
-                let mut map = Map::new();
-                map.insert("conversationId".into(), Value::String(cid.to_string()));
-                map.insert("value".into(), other);
-                Value::Object(map)
-            }
+    // 最小改造：所有 chat.* 事件统一注入 provider="codex"，并在存在时注入 conversationId
+    let mut ensured = match params {
+        Value::Null => Map::new(),
+        Value::Object(map) => map,
+        other => {
+            let mut map = Map::new();
+            map.insert("value".into(), other);
+            map
         }
-    } else {
-        params
+    };
+    if let Some(cid) = conversation_id {
+        ensured
+            .entry("conversationId".to_string())
+            .or_insert(Value::String(cid.to_string()));
     }
+    ensured
+        .entry("provider".to_string())
+        .or_insert(Value::String("codex".into()));
+    Value::Object(ensured)
 }
 
 fn string_array(value: &Value) -> Vec<String> {
@@ -983,5 +1022,137 @@ mod tests {
         );
 
         super::remove_conversation_id("cid-3");
+    }
+
+    #[test]
+    fn map_notification_to_chat_events_maps_web_search_begin_end() {
+        // begin
+        let begin = JSONRPCNotification {
+            method: "codex/event/runtime".into(),
+            params: Some(json!({
+                "conversationId": "cid-ws",
+                "msg": { "type": "web_search_begin", "call_id": "ws-1" }
+            })),
+        };
+        let evs_begin = map_notification_to_chat_events(&begin);
+        assert_eq!(evs_begin.len(), 1);
+        let evb = &evs_begin[0];
+        assert_eq!(evb.method, "chat.info.web_search.begin");
+        let p = evb.params.as_object().unwrap();
+        assert_eq!(p.get("callId").and_then(|v| v.as_str()), Some("ws-1"));
+        assert_eq!(
+            p.get("conversationId").and_then(|v| v.as_str()),
+            Some("cid-ws")
+        );
+
+        // end
+        let end = JSONRPCNotification {
+            method: "codex/event/runtime".into(),
+            params: Some(json!({
+                "conversationId": "cid-ws",
+                "msg": { "type": "web_search_end", "call_id": "ws-1", "query": "vite hmr" }
+            })),
+        };
+        let evs_end = map_notification_to_chat_events(&end);
+        assert_eq!(evs_end.len(), 1);
+        let eve = &evs_end[0];
+        assert_eq!(eve.method, "chat.info.web_search.end");
+        let p2 = eve.params.as_object().unwrap();
+        assert_eq!(p2.get("callId").and_then(|v| v.as_str()), Some("ws-1"));
+        assert_eq!(p2.get("query").and_then(|v| v.as_str()), Some("vite hmr"));
+        assert_eq!(
+            p2.get("conversationId").and_then(|v| v.as_str()),
+            Some("cid-ws")
+        );
+
+        super::remove_conversation_id("cid-ws");
+    }
+
+    #[test]
+    fn map_notification_to_chat_events_maps_approval_requests() {
+        // exec approval
+        let exec_appr = JSONRPCNotification {
+            method: "codex/event/runtime".into(),
+            params: Some(json!({
+                "conversationId": "cid-appr",
+                "msg": {
+                    "type": "exec_approval_request",
+                    "call_id": "exec-1",
+                    "command": ["bash","-lc","echo ok"],
+                    "cwd": "/tmp",
+                    "reason": "ask"
+                }
+            })),
+        };
+        let evs_exec = map_notification_to_chat_events(&exec_appr);
+        assert_eq!(evs_exec.len(), 1);
+        let e = &evs_exec[0];
+        assert_eq!(e.method, "chat.info.approval.exec");
+        let pe = e.params.as_object().unwrap();
+        assert_eq!(pe.get("callId").and_then(|v| v.as_str()), Some("exec-1"));
+        assert_eq!(pe.get("cwd").and_then(|v| v.as_str()), Some("/tmp"));
+        assert_eq!(pe.get("reason").and_then(|v| v.as_str()), Some("ask"));
+        let cmd = pe
+            .get("command")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap();
+        assert_eq!(cmd.len(), 3);
+        assert_eq!(
+            pe.get("conversationId").and_then(|v| v.as_str()),
+            Some("cid-appr")
+        );
+
+        // patch approval
+        let patch_appr = JSONRPCNotification {
+            method: "codex/event/runtime".into(),
+            params: Some(json!({
+                "conversationId": "cid-appr",
+                "msg": {
+                    "type": "apply_patch_approval_request",
+                    "call_id": "patch-1",
+                    "reason": "bulk",
+                    "grant_root": "/workspace",
+                    "changes": {"a.ts": {"update":{}}, "b.ts": {"add":{}}}
+                }
+            })),
+        };
+        let evs_patch = map_notification_to_chat_events(&patch_appr);
+        assert_eq!(evs_patch.len(), 1);
+        let p = &evs_patch[0];
+        assert_eq!(p.method, "chat.info.approval.patch");
+        let pp = p.params.as_object().unwrap();
+        assert_eq!(pp.get("callId").and_then(|v| v.as_str()), Some("patch-1"));
+        assert_eq!(pp.get("reason").and_then(|v| v.as_str()), Some("bulk"));
+        assert_eq!(
+            pp.get("grantRoot").and_then(|v| v.as_str()),
+            Some("/workspace")
+        );
+        assert_eq!(pp.get("changeCount").and_then(|v| v.as_u64()), Some(2));
+
+        super::remove_conversation_id("cid-appr");
+    }
+    #[test]
+    fn map_notification_injects_provider_codex() {
+        let notification = JSONRPCNotification {
+            method: "codex/event/runtime".into(),
+            params: Some(json!({
+                "conversationId": "cid-prov",
+                "msg": { "type": "agent_message", "message": "hello" }
+            })),
+        };
+        let events = map_notification_to_chat_events(&notification);
+        assert_eq!(events.len(), 1);
+        let ev = &events[0];
+        assert_eq!(ev.method, "chat.message.completed");
+        assert_eq!(
+            ev.params.get("provider").and_then(|v| v.as_str()),
+            Some("codex")
+        );
+        assert_eq!(
+            ev.params.get("conversationId").and_then(|v| v.as_str()),
+            Some("cid-prov")
+        );
+        super::remove_conversation_id("cid-prov");
     }
 }

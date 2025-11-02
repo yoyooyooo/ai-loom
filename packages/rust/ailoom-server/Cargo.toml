@@ -8,13 +8,14 @@ ailoom-core = { path = "../crates/ailoom-core" }
 ailoom-fs = { path = "../crates/ailoom-fs" }
 ailoom-store = { path = "../crates/ailoom-store" }
 ailoom-stitch = { path = "../crates/ailoom-stitch" }
-codex-protocol = { git = "https://github.com/openai/codex.git", package = "codex-protocol", rev = "b4123b7b1db22a3c0a8b133a23c7b30a477d7b65" }
-codex-app-server-protocol = { git = "https://github.com/openai/codex.git", package = "codex-app-server-protocol", rev = "b4123b7b1db22a3c0a8b133a23c7b30a477d7b65" }
+codex-protocol = { git = "https://github.com/openai/codex.git", package = "codex-protocol", rev = "ca80bc4902b7ca49112907152e8ed0879eaa0b78" }
+codex-app-server-protocol = { git = "https://github.com/openai/codex.git", package = "codex-app-server-protocol", rev = "ca80bc4902b7ca49112907152e8ed0879eaa0b78" }
 axum = { version = "0.7", features = ["macros", "ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util"] }
 tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+ts-rs = { version = "11" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 clap = { version = "4", features = ["derive"] }
@@ -33,6 +34,7 @@ async-trait = "0.1"
 sqlx = { version = "0.7", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
 libsqlite3-sys = { version = "0.26", features = ["bundled"] }
 log = "0.4"
+command-group = { version = "5", features = ["with-tokio"] }
 
 [dev-dependencies]
 tokio-tungstenite = "0.24"

@@ -4,7 +4,10 @@ export function summarizeFirstLine(input: string, max = 80): string {
     const lines = raw.split(/\n/)
     const first = (lines.find((ln) => ln.trim().length > 0) || '').trim()
     if (!first) return ''
-    const title = first.replace(/^[\s#>*_`]+/, '').replace(/[\s#*_`]+$/, '').trim()
+    const title = first
+      .replace(/^[\s#>*_`]+/, '')
+      .replace(/[\s#*_`]+$/, '')
+      .trim()
     return title.length > max ? `${title.slice(0, max)}…` : title
   } catch {
     return ''
@@ -32,7 +35,11 @@ export function stripDuplicatedTitle(content: string, title?: string): string {
     }
   }
   if (firstIdx < 0) return raw
-  const norm = (s: string) => s.replace(/^[\s#>*_`]+/, '').replace(/[\s#*_`]+$/, '').trim()
+  const norm = (s: string) =>
+    s
+      .replace(/^[\s#>*_`]+/, '')
+      .replace(/[\s#*_`]+$/, '')
+      .trim()
   if (norm(lines[firstIdx]) !== norm(title)) return raw
   const out: string[] = []
   for (let i = 0; i < lines.length; i++) {

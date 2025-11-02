@@ -1,4 +1,3 @@
-use crate::ws::chat_events;
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,6 +20,8 @@ pub struct Hub {
     stats: Arc<HubStats>,
     recent: Arc<Mutex<HashMap<String, Instant>>>,
     dedup_window: Duration,
+    // 会话进度聚合：conversationId -> inProgress
+    progress: Arc<Mutex<HashMap<String, bool>>>,
 }
 
 impl Hub {
@@ -38,6 +39,7 @@ impl Hub {
             stats: Arc::new(HubStats::default()),
             recent: Arc::new(Mutex::new(HashMap::new())),
             dedup_window: Duration::from_millis(dedup_ms),
+            progress: Arc::new(Mutex::new(HashMap::new())),
         }
     }
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
@@ -72,6 +74,10 @@ impl Hub {
             .get("conversationId")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let provider_id = params
+            .get("provider")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         // QoS: ring buffer prioritization - avoid evicting high-priority events
         {
             let mut ring = self.ring.lock().unwrap();
@@ -94,6 +100,7 @@ impl Hub {
                         method: method.clone(),
                         params: params.clone(),
                         conversation_id: conversation_id.clone(),
+                        provider_id: provider_id.clone(),
                     });
                 }
             } else {
@@ -102,10 +109,13 @@ impl Hub {
                     method: method.clone(),
                     params: params.clone(),
                     conversation_id: conversation_id.clone(),
+                    provider_id: provider_id.clone(),
                 });
             }
         }
         let method_for_log = method.clone();
+        // 进度聚合：根据事件边界维护 inProgress 映射
+        self.update_progress(&method_for_log, &params);
         let sent = self.tx.send(Event {
             method: std::mem::take(&mut method),
             params,
@@ -127,6 +137,49 @@ impl Hub {
         }
     }
 
+    fn update_progress(&self, method: &str, params: &Value) {
+        // 仅处理 chat.* 且携带 conversationId 的事件
+        if !method.starts_with("chat.") {
+            return;
+        }
+        let cid = params
+            .get("conversationId")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let Some(conversation_id) = cid else { return };
+        let start_methods = [
+            "chat.turn.started",
+            "chat.message.delta",
+            "chat.tool.exec.begin",
+            "chat.tool.patch.begin",
+            "chat.tool.mcp.begin",
+        ];
+        let end_methods = [
+            "chat.message.completed",
+            "chat.message.failed",
+            "chat.message.aborted",
+            "chat.turn.complete",
+            "chat.tool.exec.end",
+            "chat.tool.patch.end",
+            "chat.tool.mcp.end",
+        ];
+        if start_methods.iter().any(|m| *m == method) {
+            if let Ok(mut map) = self.progress.lock() {
+                map.insert(conversation_id, true);
+            }
+        } else if end_methods.iter().any(|m| *m == method) {
+            if let Ok(mut map) = self.progress.lock() {
+                map.insert(conversation_id, false);
+            }
+        }
+    }
+
+    pub fn get_in_progress(&self, conversation_id: &str) -> Option<bool> {
+        self.progress
+            .lock()
+            .ok()
+            .and_then(|m| m.get(conversation_id).copied())
+    }
 
     pub fn resume_after(&self, after: u64) -> (Vec<EventRecord>, bool) {
         let ring = self.ring.lock().unwrap();
@@ -148,6 +201,7 @@ impl Hub {
         &self,
         after: u64,
         conversation_id: Option<&str>,
+        provider_id: Option<&str>,
     ) -> (Vec<EventRecord>, bool) {
         let ring = self.ring.lock().unwrap();
         if ring.is_empty() {
@@ -168,6 +222,11 @@ impl Hub {
                     continue;
                 }
             }
+            if let Some(pid) = provider_id {
+                if e.provider_id.as_deref() != Some(pid) {
+                    continue;
+                }
+            }
             out.push(e.clone());
         }
         (out, truncated)
@@ -183,7 +242,12 @@ impl Hub {
         ring.iter().skip(start).cloned().collect()
     }
 
-    pub fn tail_chat(&self, conversation_id: Option<&str>, n: usize) -> Vec<EventRecord> {
+    pub fn tail_chat(
+        &self,
+        conversation_id: Option<&str>,
+        provider_id: Option<&str>,
+        n: usize,
+    ) -> Vec<EventRecord> {
         let ring = self.ring.lock().unwrap();
         if ring.is_empty() || n == 0 {
             return vec![];
@@ -198,6 +262,11 @@ impl Hub {
                     continue;
                 }
             }
+            if let Some(pid) = provider_id {
+                if e.provider_id.as_deref() != Some(pid) {
+                    continue;
+                }
+            }
             out.push(e.clone());
             if out.len() >= n {
                 break;
@@ -205,6 +274,20 @@ impl Hub {
         }
         out.reverse();
         out
+    }
+
+    /// 获取某会话最近一条事件的 ts（RFC3339 字符串）；若不存在或无 ts 字段则返回 None。
+    pub fn last_event_ts_for_conversation(&self, conversation_id: &str) -> Option<String> {
+        let ring = self.ring.lock().ok()?;
+        for e in ring.iter().rev() {
+            if e.conversation_id.as_deref() != Some(conversation_id) {
+                continue;
+            }
+            if let Some(ts) = e.params.get("ts").and_then(|v| v.as_str()) {
+                return Some(ts.to_string());
+            }
+        }
+        None
     }
 
     pub fn stats_snapshot(&self) -> HubStatsOut {
@@ -271,6 +354,7 @@ pub struct EventRecord {
     pub method: String,
     pub params: Value,
     pub conversation_id: Option<String>,
+    pub provider_id: Option<String>,
 }
 
 #[derive(Default, Debug)]
@@ -313,18 +397,18 @@ mod tests {
         let hub = Hub::new(8);
         hub.broadcast(
             "chat.message.delta".into(),
-            json!({"conversationId":"cid-a","delta":"hi"}),
+            json!({"conversationId":"cid-a","provider":"codex","delta":"hi"}),
         );
         hub.broadcast(
             "chat.message.delta".into(),
-            json!({"conversationId":"cid-b","delta":"yo"}),
+            json!({"conversationId":"cid-b","provider":"codex","delta":"yo"}),
         );
         hub.broadcast(
             "chat.tool.exec.end".into(),
-            json!({"conversationId":"cid-a","callId":"exec-1"}),
+            json!({"conversationId":"cid-a","provider":"codex","callId":"exec-1"}),
         );
 
-        let (events, truncated) = hub.resume_after_chat(0, Some("cid-a"));
+        let (events, truncated) = hub.resume_after_chat(0, Some("cid-a"), None);
         assert!(!truncated);
         assert_eq!(events.len(), 2);
         assert!(events.iter().all(|ev| ev.method.starts_with("chat.")));
@@ -339,15 +423,15 @@ mod tests {
         for i in 0..5 {
             hub.broadcast(
                 "chat.message.delta".into(),
-                json!({"conversationId":"cid-c","delta": format!("{}", i)}),
+                json!({"conversationId":"cid-c","provider":"codex","delta": format!("{}", i)}),
             );
         }
         hub.broadcast(
             "chat.message.completed".into(),
-            json!({"conversationId":"cid-c","text":"done"}),
+            json!({"conversationId":"cid-c","provider":"codex","text":"done"}),
         );
 
-        let events = hub.tail_chat(Some("cid-c"), 3);
+        let events = hub.tail_chat(Some("cid-c"), None, 3);
         assert_eq!(events.len(), 3);
         assert_eq!(
             events
@@ -362,5 +446,25 @@ mod tests {
                 .and_then(|e| e.method.as_str().strip_prefix("chat.")),
             Some("message.completed")
         );
+    }
+
+    #[test]
+    fn resume_after_chat_filters_by_conversation_and_provider() {
+        let hub = Hub::new(16);
+        // same conversation, different providers
+        hub.broadcast(
+            "chat.message.delta".into(),
+            json!({"conversationId":"cid-z","provider":"codex","delta":"x"}),
+        );
+        hub.broadcast(
+            "chat.message.delta".into(),
+            json!({"conversationId":"cid-z","provider":"other","delta":"y"}),
+        );
+        let (only_codex, truncated) = hub.resume_after_chat(0, Some("cid-z"), Some("codex"));
+        assert!(!truncated);
+        assert_eq!(only_codex.len(), 1);
+        let ev = &only_codex[0];
+        assert_eq!(ev.params.get("delta").and_then(|v| v.as_str()), Some("x"));
+        assert_eq!(ev.provider_id.as_deref(), Some("codex"));
     }
 }

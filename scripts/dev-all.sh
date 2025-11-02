@@ -14,6 +14,14 @@ if ! cargo watch -V >/dev/null 2>&1; then
   exit 1
 fi
 
+# 开发提示：检测端口占用，避免多实例并存导致“新建在A、发送在B”
+if command -v lsof >/dev/null 2>&1; then
+  if lsof -iTCP:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "[dev-all] 警告：检测到端口 ${PORT} 已被占用，可能存在另一个后端实例。"
+    echo "[dev-all] 建议先执行：just dev-clean PORT=${PORT}，或手工终止残留进程。"
+  fi
+fi
+
 mkdir -p .ailoom
 
 cleanup() {

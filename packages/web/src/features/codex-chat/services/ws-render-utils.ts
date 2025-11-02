@@ -1,7 +1,10 @@
 export function renderPatchDiff(changes: any, maxFiles: number, maxChars: number): string {
   try {
     const entries = Object.entries(changes || {}) as Array<[string, any]>
-    const limited = entries.slice(0, Math.max(1, Number.isFinite(maxFiles) ? maxFiles : entries.length))
+    const limited = entries.slice(
+      0,
+      Math.max(1, Number.isFinite(maxFiles) ? maxFiles : entries.length)
+    )
     const blocks: string[] = []
     for (const [path, change] of limited) {
       if (!change || typeof change !== 'object') continue
@@ -24,4 +27,3 @@ export function renderPatchDiff(changes: any, maxFiles: number, maxChars: number
     return ''
   }
 }
-

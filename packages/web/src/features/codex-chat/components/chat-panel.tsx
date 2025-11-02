@@ -1,11 +1,27 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { firstValueFrom, from } from 'rxjs'
+import { switchMap } from 'rxjs/operators'
 import { useParams } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { chatApi } from '../services/api'
 import type { ChatConfigResponse } from '../services/api'
 import { subscribeChatEvents } from '../services/ws'
-import { useChatTurnStore, chatTurnActions } from '../stores/chat-turns'
+import {
+  useChatTurnStore,
+  chatTurnActions,
+  chatTurnSelectors,
+  selectConversation
+} from '../stores/chat-turns'
 import { TurnsPanel } from './turns-panel'
+import { MessageInput } from '@/components/ui/message-input'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
+import { Button } from '@/components/ui/button'
+import { SlidersHorizontal, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 import { CodexChatConfigPanelTrigger } from './chat-config-panel'
 import {
   codexChatProviderActions,
@@ -16,6 +32,8 @@ import {
 import type { AskForApproval } from '@/lib/codex-types/AskForApproval'
 import type { SandboxMode } from '@/lib/codex-types/SandboxMode'
 import { chatTrace } from '@/lib/logger'
+import { useChatHydrationStore } from '../stores/chat-hydration'
+import { ws } from '@/lib/ws/singleton'
 
 const APPROVAL_OPTIONS: Array<{ value: AskForApproval; label: string }> = [
   { value: 'on-request', label: '按需请求 (on-request)' },
@@ -47,11 +65,17 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
     }
   }, [params.conversationId])
   const [text, setText] = useState('')
-  const { conversationId, generating, turns } = useChatTurnStore((state) => ({
-    conversationId: state.conversationId,
-    generating: state.generating,
-    turns: state.turns
-  }))
+  const handleRetry = useCallback(
+    (value: string) => {
+      if (!value) return
+      setText(value)
+    },
+    [setText]
+  )
+  const conversationId = useChatTurnStore((state) => state.conversationId)
+  const currentSlice = useChatTurnStore(chatTurnSelectors.currentSlice)
+  const generating = currentSlice.generating
+  const turns = currentSlice.turns
   const [stopping, setStopping] = useState(false)
   const sessionState = useCodexSessionState(conversationId)
   const providerState = useMemo(
@@ -73,10 +97,23 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
       const saved =
         typeof window !== 'undefined' ? localStorage.getItem('chat.conversationId') : null
       // 若路由上已有会话 ID，则以路由为准，避免短暂覆盖导致 UI 闪烁
-      if (saved && !routeConversationKey) chatTurnActions.setConversationId(saved)
+      if (saved && !routeConversationKey) selectConversation(saved, { reason: 'local' })
     } catch {}
     // 仅挂载订阅，不在挂载时 reset，以避免切换面板或热更导致历史被清空
     return () => off()
+  }, [routeConversationKey])
+
+  // 按会话建立 WS 订阅（稳定持有，避免 gating 空窗）；切换路由键时重建
+  useEffect(() => {
+    if (!routeConversationKey) return
+    const sub = (ws as any)
+      .subscribeTopic$('chat', { conversationId: routeConversationKey })
+      .subscribe(() => {})
+    return () => {
+      try {
+        sub.unsubscribe()
+      } catch {}
+    }
   }, [routeConversationKey])
 
   useEffect(() => {
@@ -204,7 +241,7 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
     const r = await chatApi.newConversation(payload)
     chatTrace('chatPanel.newConversation', { payload, conversationId: r.conversationId })
     const newId = r.conversationId
-    chatTurnActions.setConversationId(newId)
+    selectConversation(newId, { reason: 'new' })
 
     codexChatProviderActions.setModels(newId, defaultSession.models)
     codexChatProviderActions.setCapabilities(newId, {
@@ -217,6 +254,10 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
     codexChatProviderActions.setOverrides(newId, defaultSession.overrides)
 
     try {
+      // 标记为“新建会话”，跳过首轮 HTTP baseline（对齐 vibe-kanban 的纯流式体验）
+      ;(await import('@/features/codex-chat/services/conversation-session')).markConversationNew(
+        newId
+      )
       onConversationCreated?.(newId)
     } catch (error) {
       console.warn('[chat] onConversationCreated error', error)
@@ -226,29 +267,75 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
   }
 
   async function onSend() {
-    const t = text.trim()
-    if (!t) return
-    chatTrace('chatPanel.onSend', { textPreview: t.slice(0, 60) })
+    if (generating) return
+    const rawInput = text
+    const trimmed = rawInput.trim()
+    if (!trimmed) return
+
+    const handleFailure = (error: unknown, context: 'ensure' | 'send', cid?: string) => {
+      const err = error as any
+      const status = typeof err?.status === 'number' ? err.status : err?.raw?.response?.status
+      const payloadMessage =
+        typeof err?.data?.error?.message === 'string' ? err.data.error.message : undefined
+      const rawMessage =
+        typeof err?.message === 'string' && err.message.trim().length > 0 ? err.message.trim() : ''
+      const fallback = context === 'ensure' ? '创建会话失败' : '消息发送失败'
+      const finalMessage = (() => {
+        if (context === 'send' && status === 503) {
+          return 'Codex 实例正在恢复，请稍后重试'
+        }
+        if (payloadMessage && payloadMessage.trim().length > 0) return payloadMessage.trim()
+        if (rawMessage) return rawMessage
+        return fallback
+      })()
+      chatTurnActions.failAssistant(finalMessage)
+      chatTurnActions.completeTurn()
+      setText(rawInput)
+      toast.error(finalMessage)
+      if (context === 'ensure') {
+        chatTrace('chatPanel.ensureConversation.fail', { error: rawMessage || fallback })
+      } else {
+        chatTrace('chatPanel.sendMessage.fail', {
+          conversationId: cid,
+          error: rawMessage || payloadMessage || fallback,
+          status
+        })
+      }
+    }
+
+    chatTrace('chatPanel.onSend', { textPreview: trimmed.slice(0, 60) })
     setText('')
-    chatTurnActions.addUserTurn(t)
-    const cid = await ensureConversation().catch((e) => {
-      const msg = (e as Error)?.message || '创建会话失败'
-      chatTurnActions.failAssistant(msg)
-      chatTurnActions.completeTurn()
-      chatTrace('chatPanel.ensureConversation.fail', { error: (e as Error)?.message })
-      throw e
-    })
+    chatTurnActions.addUserTurn(trimmed)
+
+    let cid: string
     try {
-      await chatApi.sendMessage(cid, t)
+      cid = await ensureConversation()
+    } catch (error) {
+      handleFailure(error, 'ensure')
+      return
+    }
+
+    try {
+      // 发送前确保 WS 订阅已就绪，并在持有期间完成发送，避免空窗
+      try {
+        const { ws } = await import('@/lib/ws/singleton')
+        await firstValueFrom(
+          (ws as any)
+            .ensureChatReady$(cid, { tail: 128, timeoutMs: 5000 })
+            .pipe(switchMap(() => from(chatApi.sendMessage(cid, trimmed))))
+        )
+      } catch (e) {
+        // ensure 阶段失败时，回退为直接发送（后端 resume + 泵兜底）
+        await chatApi.sendMessage(cid, trimmed)
+      }
       chatTrace('chatPanel.sendMessage.success', { conversationId: cid })
-    } catch (e) {
-      const msg = (e as Error)?.message
-      chatTurnActions.failAssistant(msg)
-      chatTurnActions.completeTurn()
-      chatTrace('chatPanel.sendMessage.fail', {
-        conversationId: cid,
-        error: (e as Error)?.message
-      })
+      // 主动补偿一次会话级 resume，避免偶发实时丢帧造成界面停滞
+      try {
+        // 使用 convLast 作为游标；after>0 时服务端忽略 tail
+        ;(await import('@/lib/ws/singleton')).ws.resumeChat(cid, { tail: 64 })
+      } catch {}
+    } catch (error) {
+      handleFailure(error, 'send', cid)
     }
   }
 
@@ -256,41 +343,33 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
     if (!conversationId) return
     try {
       setStopping(true)
-      // 等待 Codex 确认中止本轮，避免后续立即新轮被“注入旧轮”
-      await chatApi.interrupt(conversationId, { awaitTurnAborted: true, timeoutMs: 15_000 })
+      // 发送中止请求（不再阻塞等待），由 WS 的 chat.message.aborted 驱动收束
+      await chatApi.interrupt(conversationId)
       chatTrace('chatPanel.interrupt', { conversationId })
+      // 主动触发一次会话级 resume（tail 少量历史），加速收到 aborted 事件的补偿
+      try {
+        ;(await import('@/lib/ws/singleton')).ws.resumeChat(conversationId, { tail: 64 })
+      } catch {}
     } finally {
       setStopping(false)
-      chatTurnActions.abortAssistant()
-      chatTurnActions.completeTurn()
+      // 不再做乐观收束，等待 chat.message.aborted 或 chat.turn.complete
     }
   }
-  const composer = (
-    <>
-      <textarea
-        rows={3}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault()
-            onSend()
-          }
-        }}
-        placeholder={generating ? '生成中，等待完成或停止...' : '输入消息...'}
-        className="min-h-[120px] w-full resize-none rounded-md border border-input bg-background px-3 py-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-        disabled={generating}
-      />
-      <div className="flex flex-wrap items-end gap-3">
+  const configMenu = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button type="button" size="icon" variant="ghost" className="h-8 w-8" aria-label="对话设置">
+          <SlidersHorizontal className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent className="w-[360px] p-3 space-y-3" align="start">
         <ConfigSelect
           label="模型"
           placeholder="跟随默认"
           value={selectedModel}
           options={modelOptions}
           onChange={(value) =>
-            codexChatProviderActions.setOverrides(conversationId, {
-              model: value || undefined
-            })
+            codexChatProviderActions.setOverrides(conversationId, { model: value || undefined })
           }
           disabled={generating}
         />
@@ -298,10 +377,7 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
           label="审批策略"
           placeholder="跟随默认"
           value={selectedApproval}
-          options={APPROVAL_OPTIONS.map((opt) => ({
-            value: opt.value,
-            label: opt.label
-          }))}
+          options={APPROVAL_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label }))}
           onChange={(value) =>
             codexChatProviderActions.setOverrides(conversationId, {
               approvalPolicy: (value as AskForApproval) || undefined
@@ -313,10 +389,7 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
           label="沙箱"
           placeholder="跟随默认"
           value={selectedSandbox}
-          options={SANDBOX_OPTIONS.map((opt) => ({
-            value: opt.value,
-            label: opt.label
-          }))}
+          options={SANDBOX_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label }))}
           onChange={(value) =>
             codexChatProviderActions.setOverrides(conversationId, {
               sandboxMode: (value as SandboxMode) || undefined
@@ -324,43 +397,70 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
           }
           disabled={generating}
         />
-        <CodexChatConfigPanelTrigger />
-      </div>
-      <div className="flex items-center justify-end gap-2">
-        <button
-          onClick={onSend}
-          disabled={!text.trim() || generating}
-          className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors disabled:opacity-50"
-        >
-          发送
-        </button>
-        {generating ? (
-          <button
-            onClick={onStop}
-            disabled={!conversationId || stopping}
-            className="inline-flex items-center justify-center rounded-md border border-input px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50"
-          >
-            {stopping ? '停止中…' : '停止生成'}
-          </button>
-        ) : null}
-      </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+
+  const composer = (
+    <>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          onSend()
+        }}
+      >
+        <div className="px-0">
+          <MessageInput
+            value={text}
+            onChange={(e) => setText((e.target as HTMLTextAreaElement).value)}
+            isGenerating={generating}
+            stop={onStop}
+            submitOnEnter
+            placeholder={generating ? '生成中，等待完成或停止...' : '输入消息...'}
+            className="min-h-12"
+            leftExtras={configMenu}
+          />
+        </div>
+      </form>
+      {/* 发送/停止按钮由 MessageInput 自带，不再重复渲染 */}
     </>
   )
 
   const isEmpty = turns.length === 0
   const lastTurn = turns.length > 0 ? turns[turns.length - 1] : undefined
+  const hydrating = useChatHydrationStore((s) =>
+    routeConversationKey ? !!s.hydrating[routeConversationKey] : false
+  )
 
   if (isEmpty) {
-    // 在 /chat/:id 路由且消息尚未恢复时，显示占位而非“开始新的对话”
+    // 严格等于握手缓冲窗口：仅当握手期（sync_begin→sync_end）显示“正在加载会话...”
     if (routeConversationKey) {
+      if (hydrating) {
+        return (
+          <div
+            className={cn('flex h-full w-full items-center justify-center px-6 py-8', className)}
+          >
+            <div className="text-sm text-muted-foreground">正在加载会话...</div>
+          </div>
+        )
+      }
+      // 非握手期但该会话暂无消息：展示主界面（空 turns）+ 输入区
       return (
-        <div className={cn('flex h-full w-full items-center justify-center px-6 py-8', className)}>
-          <div className="text-sm text-muted-foreground">正在加载会话...</div>
+        <div className={cn('flex h-full min-h-0 flex-1 flex-col gap-3', className)}>
+          <div className="flex-1 min-h-0 overflow-hidden">
+            <TurnsPanel onRetry={handleRetry} />
+          </div>
+          <div className="flex flex-col gap-3 border-t border-border px-4 py-3">{composer}</div>
         </div>
       )
     }
     return (
-      <div className={cn('flex h-full w-full flex-col items-center justify-center px-6 py-8', className)}>
+      <div
+        className={cn(
+          'flex h-full w-full flex-col items-center justify-center px-6 py-8',
+          className
+        )}
+      >
         <div className="w-full max-w-3xl space-y-6">
           <div className="text-center">
             <h2 className="text-lg font-medium text-foreground">开始新的对话</h2>
@@ -376,8 +476,13 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
 
   return (
     <div className={cn('flex h-full min-h-0 flex-1 flex-col gap-3', className)}>
+      {routeConversationKey && hydrating ? (
+        <div className="px-4 pt-2 text-xs text-muted-foreground flex items-center gap-2">
+          <Loader2 className="size-3 animate-spin" /> 正在同步会话…
+        </div>
+      ) : null}
       <div className="flex-1 min-h-0 overflow-hidden">
-        <TurnsPanel />
+        <TurnsPanel onRetry={handleRetry} />
       </div>
       <div className="flex flex-col gap-3 border-t border-border px-4 py-3">{composer}</div>
       {!generating && lastTurn && lastTurn.status === 'failed' ? (

@@ -9,6 +9,11 @@ vi.mock('@/lib/ws/singleton', () => {
   const ws = {
     enabled: true,
     call: (_m: string, _p?: any, _t?: number) => ({}) as any,
+    callOnce: async (m: string, p?: any, t?: number) => {
+      // 委托到 first(call(...))，保持统计行为与语义一致
+      // @ts-ignore
+      return await ws.first(ws.call(m, p, t))
+    },
     first: async (_obs: any) => {
       firstCount++
       if (mode === 'ok') return 42

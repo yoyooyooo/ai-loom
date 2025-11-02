@@ -13,7 +13,13 @@ export type FileChangedPayload = WsMeta & {
 export type TreeChangedPayload = WsMeta & {
   dir?: string
   impactedPaths?: string[]
-  summary?: { created: number; modified: number; deleted: number; moved: number; truncated: boolean }
+  summary?: {
+    created: number
+    modified: number
+    deleted: number
+    moved: number
+    truncated: boolean
+  }
 }
 
 export type AnnotationsCreatedPayload = WsMeta & { annotation: Annotation }
@@ -30,4 +36,3 @@ export type AnnotationsVerifyDonePayload = WsMeta & {
 }
 
 export type SessionResyncPayload = { reason?: string }
-

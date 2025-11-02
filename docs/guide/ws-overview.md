@@ -16,7 +16,18 @@
   - `VITE_WS_WRITE=1`：保存（写入）走 WS 的 `file.save`
   - `VITE_DISABLE_VERIFY=1`：关闭编辑器首帧的注解校验 REST 调用
   - `AILOOM_FSWATCH_ENABLED=1`：后端开启本地文件监听（影响 `file.changed`/`tree.changed`）
-  - `AILOOM_WS_EAGER_SAVE_ECHO=1`：开发兜底，`file.save` 成功后立刻额外广播一次瞬时 `file.changed`（不入 ring），确保“保存即见”。
+- `AILOOM_WS_EAGER_SAVE_ECHO=1`：开发兜底，`file.save` 成功后立刻额外广播一次瞬时 `file.changed`（不入 ring），确保“保存即见”。
+
+### 软停降级（watchdog，自动强制停止 + 热切换）
+
+- 背景：在外部工具/网络检索等阶段，软中止可能无法即时生效。
+- 策略：`POST /api/chat/conversations/:id/interrupt` 默认为“自动模式”。服务器会：
+  1) 立即发起软中止（非阻塞返回 `202`）；
+  2) 后台安装 3s watchdog，若 3s 内未收到该会话的收束事件（`chat.message.aborted|completed|failed|chat.turn.complete`），则静默执行“强制停止 + 预热新实例（engine swap）”；
+  3) 广播两条提示：
+     - `chat.message.aborted { reason:'hard_stop' }`（入环，可 resume）
+     - `chat.info.background { code:'engine_swapped', message }`（入环，可 resume）
+- 影响范围：默认采用“单进程复用”；仅在极少数降级阶段出现瞬时 N=2，完成预热后回到 N=1。
 
 ## 面板结构与交互
 
@@ -71,6 +82,60 @@
 - 写出原则：所有要发给浏览器的帧都走“单写者”，保证“真的写出并 flush 成功才算发出去”。
 
 ## 核心模块（后端）
+
+## 调试与自愈（Supervisor / Force Recover）
+
+为避免“看似在线但业务帧未写出”的半挂场景，服务端内置两路自愈：
+
+- Writer 软超时：
+  - 开关：`AILOOM_BROADCAST_SEND_TIMEOUT_MS`（默认 1000ms）。
+  - 行为：单帧 send/flush 超过阈值即视为异常，关闭连接；前端将重连并按会话 resume。
+
+- Supervisor 追赶：
+  - 开关：`AILOOM_WS_SUPERVISOR=1`（默认开启）；周期：`AILOOM_WS_PUMP_MS`（默认 200ms）。
+  - 机制：比较 `Hub.lastEventId` 与“该连接实际写出的 lastSentEventId”，若落后超阈值（`AILOOM_WS_FORCE_RECOVER_MS`，默认 1000ms）仍未追上，则：
+    - 若 `AILOOM_WS_RECOVER_CLOSE_FIRST=0`：先下发一次 `session.resync`（优先通道），再关闭连接；
+    - 默认（1）：直接关闭连接（close‑first）；前端重连后会自动 resume。
+
+- Force Recover（业务入队但未写出）：
+  - 开关：`AILOOM_WS_FORCE_RECOVER=1`（默认关闭）、`AILOOM_WS_FORCE_RECOVER_MS`（默认 1000ms）。
+  - 机制：若“业务类事件”（file/tree/annotations/resync）到达该连接写队列，但在阈值内未成功写出，则对该连接触发自愈（与上同）。
+
+前端配合：
+- 订阅建立时（`subscribe('chat', {conversationId})`）与重连 onopen，都会主动调用 `events.resume({topic:'chat',filter:{conversationId},after,tail})` 补偿；`after>0` 时忽略 `tail`。
+- 客户端 per‑session 去重游标：`convLast[cid]` 本地存储分区化（按 WS URL），避免不同后端地址串行。
+
+观测与排障：
+- 打开服务端日志：`AILOOM_WS_TRACE_CONN=1`（连接/写出/close-first）、`AILOOM_WS_TRACE_BROADCAST=1`（每次广播）
+- 面板观测：`events/s`、`ringSize/ringCap`、`lastEventId` 与 `session.resync` 次数（右侧显示）；必要时抓帧比对 `eventId` 串联。
+
+## 快速自检清单（Chat）
+
+目标：跟踪一次 follow‑up（用户发送）从 REST 到 WS 渠道的完整闭环，快速定位“发出后页面长时间无变化”的问题。
+
+1) 发送与回显（REST）
+- 后端日志出现：`codex: HTTP send → sendUserMessage conversationId=...`。
+- 立即（入环）广播：`chat.info.user_message { conversationId, text }`（用于 UI 立即有感）。
+
+2) 会话监听（Codex → 本服务）
+- 成功：`addConversationListener` 正常返回，否则日志 `ensure_listener 失败`（已重试 2 次）；失败时会广播 `chat.info.background` 提示 UI。
+
+3) 上游事件与映射（Codex → Bridge → Hub）
+- 通知：`codex.rpc: rpc ⇐ notification method=codex/event/...`。
+- 映射：`bridge.rs` 将 runtime 事件映射为 `chat.*`；若缺 `conversationId`，会打印 warn；若未命中映射（冷门类型），打印 debug。
+
+4) 广播与转发（Hub → 连接）
+- 广播 trace（可选）：`AILOOM_WS_TRACE_BROADCAST=1` 输出 `method=chat.message.delta|completed|...`。
+- 连接写出：`AILOOM_WS_TRACE_CONN=1` 可见 `write ok`；若 flush 超时或 Supervisor 触发，将 close‑first 并促使重连+resume。
+
+5) 客户端订阅与补偿（浏览器）
+- 订阅：`subscribe('chat', { conversationId })` 建立后，立刻调用 `events.resume({ topic:'chat', filter:{ conversationId }, after, tail })` 补偿缺口。
+- 去重：本地 `convLast[cid]` 推进（localStorage 按 WS URL 分区），面板可见 `lastEventId` 增长。
+
+常见异常与去向：
+- 看不到任何 chat.*：检查 2) 监听失败日志；检查 3) 是否有 `codex/event` 通知；检查 4) 是否订阅空窗（前端会随订阅自动 resume 补齐）。
+- 看到 codex/event 但无 chat.*：检查 3) 是否缺会话 ID（warn）；检查映射是否未覆盖该类型（debug）。
+- 连接看似在线但无业务写出：检查 4) writer 超时/自愈关闭；结合 5) 浏览器是否重连+resume（面板 online 变化、补偿后 timelines 恢复）。
 
 - `Hub`（广播枢纽）
   - 类比“电台发射塔”。负责把来自业务/监听的事件分发给所有连接。
@@ -193,6 +258,37 @@
 - 无条件直通（直发不过滤）
   - 为避免订阅时序抖动导致漏发，服务端对以下事件“无条件转发”：`session.stats`、`file.changed`、`tree.changed`、`session.resync`。
   - 开发期可开启 `AILOOM_WS_UNFILTERED=1`，把所有事件都直通（便于定位“写出层”问题）。
+
+## 游标与去重（含服务器重启夹取）
+
+- eventId（SSoT）：Hub 为每条事件分配递增 `eventId`（见 `ws/hub.rs`）。恢复/去重一律以此为准。
+- convLast 与 convAppliedLast：
+  - `convLast[key]`（已看到）：收到一条 `chat.*` 就推进，用于丢重复/乱序。
+  - `convAppliedLast[key]`（已应用）：只有“事件已更新到前端状态”才推进，用于订阅握手的 `after`（优先级高于 `convLast`）。
+  - Key 维度：优先 `provider|conversationId`，回退 `conversationId`（多 Provider 隔离）。
+- baseline（HTTP）与握手协同：
+  - HTTP resume 仅返回“最终态（history）+ 轻量游标事件 `chat.info.turn_state{eventId}`”，不再附带历史 `chat.*`。
+  - 前端用 `turn_state.eventId` 立刻 prime `convAppliedLast`；订阅握手用 `after=convAppliedLast` 只补之后增量。
+- 握手窗口去重：
+  - begin→end 期间，若“最后一轮已 completed 且有助手正文”，丢弃握手补发的 `chat.message.delta` 与 `chat.message.completed`，避免重复气泡。
+- 服务器重启后的 `after` 夹取：
+  - 问题：服务器重启时 `eventId` 可能从 1 重新计数，本地持久化游标过大。
+  - 策略：在 `subscribe('chat', ...)` 与 `events.resume(topic:'chat')` 前读取一次 `session.info.stats.last_event_id`，将 `after = min(after, last_event_id)`。
+  - 代码：`packages/web/src/lib/ws/rx-client.ts`（onopen 重放订阅、`subscribeTopic$`、`resumeChatWithFilter` 均做上界夹取）。
+
+## 多视图订阅与共享
+
+- 同一连接中，相同 `topic+filter` 的订阅通过 token 共享（`share`），只会向服务器发出一次 `subscribe`。
+- 任何一个视图退订后，如果没有其它订阅者，才会发送 `unsubscribe` 并释放 token（避免频繁订阅/退订抖动）。
+- 代码：`WsRxClient.subscribeTopic$` 使用 `using(...).pipe(share({ resetOnRefCountZero:true }))` 实现。
+
+## 测试覆盖（关键路径）
+
+- 握手 begin/end 缓冲排序：`ws-pipeline.test.ts`
+- 订阅/多视图共享与过滤：`rx-client.test.ts`
+- eventId 去重与 resume 过滤：`rx-client.test.ts`
+- 服务器重启后的 after 夹取：`rx-client.test.ts`（新增用例）
+- baseline + 握手的端到端稳定性：`chat-page.e2e.test.tsx`、`integration-resume-ws-store.test.tsx`
 
 ## “短窗熔断”详细说明（What/Why/How）
 

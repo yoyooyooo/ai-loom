@@ -1,4 +1,4 @@
-{"type":"session_meta","payload":{"id":"0199ffff-aaaa-bbbb-cccc-000000000001","timestamp":"2025-10-25T06:07:25.000Z","cwd":"/Users/test/project","originator":"codex_cli_rs","cli_version":"0.50.0","instructions":"demo"}}
+{"type":"session_meta","payload":{"id":"0199ffff-aaaa-bbbb-cccc-000000000001","timestamp":"2025-10-25T06:07:25.000Z","cwd":"/Users/test/project","originator":"codex_cli_rs","cli_version":"0.53.0","instructions":"demo"}}
 {"type":"turn_context","payload":{"cwd":"/Users/test/project","approval_policy":"on-request","sandbox_policy":{"mode":"workspace-write","writable_roots":["/Users/test/project","/Users/test/project/tmp"],"network_access":false,"exclude_tmpdir_env_var":true,"exclude_slash_tmp":false},"model":"gpt-5","effort":"medium","summary":"auto"}}
 {"type":"event_msg","payload":{"type":"user_message","message":"hello"}}
 {"type":"event_msg","payload":{"type":"agent_reasoning","text":"thinking"}}

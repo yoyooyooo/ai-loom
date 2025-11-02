@@ -1,5 +1,7 @@
 # Codex Chat Turn SSOT（单一事实源）
 
+> 说明：事件命名、入环/不入环与字段规范请以《Codex Chat WS 事件（SSoT）》为准（含“事件分类索引”与完整 `chat.info.*` 清单）。本文聚焦 turn 边界、turnSeq 计算与 resume 回放规则，并在必要处提供“映射对照”的导航链接，以避免双处维护产生漂移。
+
 本文描述 Codex Chat 在“以 Turn 为一等公民”的单一事实源（SSOT）模型：实时（WS）与恢复（resume rollout）两路如何统一为同一套数据结构与渲染逻辑，以及若干特殊事件的处理约定。
 
 ## 目标
@@ -16,13 +18,12 @@
   - `codex/event/agent_message` → `chat.message.completed`（当文本为 `Compact task completed` 时标记特殊态用于后续高亮）。
 
 2) 事件处理（前端）
-- 文件：`packages/web/src/features/codex-chat/services/ws-processors.ts:54`
+- 文件：`packages/web/src/features/codex-chat/services/processors/index.ts`
 - 核心映射：
-  - `chat.turn.started` → `markTurnStarted`
-  - `chat.message.delta` → `appendAssistantDelta`
+  - `chat.turn.started` → `markTurnStarted`（不入环，仅提示；避免乱序误开新轮）
+  - `chat.message.delta` → `appendAssistantDelta`（Rx 微批在 `delta-streams.ts` 中完成）
   - `chat.message.completed` → `completeAssistant`
-- `chat.reasoning.delta` → `appendReasoning`（Rx 微批在 `delta-streams.ts` 中完成）
-- `chat.reasoning.end` → `endReasoning`
+  - `chat.reasoning.end` → `endReasoning`（并生成 thinking 步骤，去冗余）
   - `chat.tool.*`（exec/patch/mcp）→ `addStep/appendStep/endStep`
   - `chat.turn.complete` → `completeTurn`
 
@@ -67,17 +68,20 @@
 
 ## 统一渲染（Turn → Timeline）
 
-- Turn 数据结构：`packages/web/src/features/codex-chat/stores/chat-turns.ts:20`（`Turn`、`TurnStep` 等）
+- Turn 数据结构：后端 SSoT（`packages/rust/ailoom-server/src/routes/chat/resume/turn_types.rs`）通过 `ts-rs` 导出到 `packages/web/src/features/codex-chat/types/generated/turns.ts`，前端 store 仅引用生成类型（`chat-turns.types.ts` 做别名）。
 - 渲染组件：`packages/web/src/features/codex-chat/components/turn-item.tsx`
   - 顶部折叠：Working/Finished working（渲染 `turn.steps`）
   - 推理折叠：`turn.reasoning`（标题取首行摘要）
   - 正文：`turn.assistant.text`（常显）
 
+Hydration 提示：
+- “正在加载会话…” 状态严格等价于握手窗口（`chat.session.sync_begin → chat.session.sync_end`），不参与 Store 落库，仅驱动 UI。
+
 #### 实时 vs 恢复的“仅推理”展示差异（避免错觉）
 
 - 实时（WS）：当本轮仅有推理（`reasoning.delta` 尚未形成任何 `steps`）时，依然显示“Working”折叠区，并把当前推理作为临时项置于该折叠区中；一旦收到 `chat.reasoning.end` 或其它工具步骤开始，按正常步骤列表渲染。
-- 恢复（resume）：保持原有行为——当没有任何步骤时，显示独立的“thinking”折叠块（不显示 Working 头部）。
-- 目的：解决“实时初始阶段只见 thinking --- 而非 Working”的体验断层，同时不改变已回放历史的既有视觉。
+- 恢复（resume）：turn-first 投影会把 reasoning 汇总为 `thinking` 步骤，落入 Working 折叠（默认收起）；若快照中确实不存在步骤（极端兼容案例），仍旧回退到独立的“thinking”折叠块。
+- 目的：解决“实时初始阶段只见 thinking --- 而非 Working”的体验断层，同时保持历史快照的可读性。
 
 ### 前端 Working 推导规则（无冗余字段）
 
@@ -103,24 +107,24 @@
 
 - Turn 边界与收尾
   - `chat.turn.started` → 开启/标记当前 Turn（若缺失，首次 `chat.message.delta` 也会触发开启）
-    - 代码：packages/web/src/features/codex-chat/services/ws-processors.ts:24，packages/web/src/features/codex-chat/stores/chat-turns.ts:595
+    - 代码：packages/web/src/features/codex-chat/services/processors/index.ts，packages/web/src/features/codex-chat/stores/chat-turns.ts:595
   - `chat.message.completed` → `completeAssistant(text)`；若仍有 streaming 步骤，保持 Working 状态；否则 Finished
-    - 代码：packages/web/src/features/codex-chat/services/ws-processors.ts:54，packages/web/src/features/codex-chat/stores/chat-turns.ts:659
+    - 代码：packages/web/src/features/codex-chat/services/processors/message.ts，packages/web/src/features/codex-chat/stores/chat-turns.ts:659
   - `chat.message.failed|aborted` → `fail|abortAssistant()` 并 `completeTurn()` 兜底
-    - 代码：packages/web/src/features/codex-chat/services/ws-processors.ts:64,70
+    - 代码：packages/web/src/features/codex-chat/services/processors/reasoning.ts
   - `chat.turn.complete` → `completeTurn()`（明确收尾的屏障）
-    - 代码：packages/web/src/features/codex-chat/services/ws-processors.ts:306
+    - 代码：packages/web/src/features/codex-chat/services/processors/tools.ts
 
 - 推理（Reasoning）
   - `chat.reasoning.delta` → `appendReasoning(delta)`
   - `chat.reasoning.end` → 生成/更新 thinking 步骤（避免重复）
-    - 代码：packages/web/src/features/codex-chat/services/ws-processors.ts:75-86，packages/web/src/features/codex-chat/stores/chat-turns.ts:372, 404
+    - 代码：packages/web/src/features/codex-chat/services/processors/turn.ts，packages/web/src/features/codex-chat/stores/chat-turns.ts:372, 404
 
 - 工具步骤（Steps）
   - Exec：`chat.tool.exec.begin|output|end` → `addStep('exec')` / `appendStep()` / `endStep()`
   - Patch：`chat.tool.patch.begin|end` → `addStep('patch')` / `endStep()`
   - MCP：`chat.tool.mcp.begin|end` → `addStep('mcp')` / `endStep()`
-    - 代码：packages/web/src/features/codex-chat/services/ws-processors.ts:140-201，packages/web/src/features/codex-chat/stores/chat-turns.ts:398-518
+    - 代码：packages/web/src/features/codex-chat/services/processors/info.ts，packages/web/src/features/codex-chat/stores/chat-turns.ts:398-518
 
 - 恢复定位规则（events-only 也适用）
   - 若事件携带 `turnSeq` → 按 `seq` 精确落位。
@@ -183,6 +187,12 @@
 
 注意：结束事件出现后，前端 reducer 必须推进到下一轮并清理本轮的工具索引（tool callId → stepId），避免跨轮污染。
 
+### 乱序与晚到的 `chat.turn.started`
+
+- `chat.turn.started` 不入环（仅作为提示/时间锚点），可能乱序晚到。
+- 当 `startedAt` 早于或等于上一轮的 `completedAt` 或最终消息的 `assistant.ts` 时，视为上一轮的补充信号，前端应忽略该 `started`（不得据此新建 Turn）。
+- 仅当 `startedAt` 晚于上一轮结束边界时，才开启新一轮（即使缺失显式用户消息，也可由第一条 delta/工具隐式开启）。
+
 ## 统一归一化：Provider 原始事件 → `chat.*`
 
 平台层 `chat.*`（部分列举）：
@@ -202,6 +212,7 @@ Provider 常见事件到 `chat.*` 的映射（WS、resume 同源）：
 - `agent_reasoning_delta`/`agent_reasoning` → `chat.reasoning.delta`/`chat.reasoning.end`
 - `exec_command_begin/output_delta/end` → `chat.tool.exec.begin/output/end`
 - `patch_apply_begin/end` → `chat.tool.patch.begin/end`
+  - 注意：Codex 在执行 `apply_patch` 时会先推送 `chat.tool.exec.begin`，随后使用**相同的 `callId`** 发送 `chat.tool.patch.begin/end`。前端/Store 必须用该 `callId` 将已建立的 exec 步骤升级为 patch 步骤，并合并 `changes/adds/dels`、`success` 等补丁元信息；若仅按 first come 记录 exec 而忽略后续 patch 事件，将导致时间线缺失补丁卡片。
 - `mcp_tool_call_begin/end` → `chat.tool.mcp.begin/end`
 - `token_count` → 不产生 `chat.*`，由后端派生 `codex/account/rateLimits/updated` 更新能力/额度面板
 
@@ -274,12 +285,12 @@ Provider 常见事件到 `chat.*` 的映射（WS、resume 同源）：
 - mcp_tool_call_end（event_msg） → chat.tool.mcp.end
   - params：`{ callId, server, tool, arguments?, result }`。
 
-- web_search_begin（event_msg） → chat.tool.search.begin（推荐）或 chat.info.search.begin（当前前端归一化层）
-  - params：`{ query, target? }`。
-  - 备注：若后端尚未提供 `chat.tool.search.*`，可先映射到 `chat.info.*` 作为信息步。
+- web_search_begin（event_msg） → chat.info.web_search.begin
+  - params：`{ callId? }`。
+  - 说明：当前实现走 `chat.info.*` 语义步。未来如引入 `chat.tool.search.*` 可平滑替换。
 
-- web_search_end（event_msg） → chat.tool.search.end（推荐）或 chat.info.search.end
-  - params：`{ result? }`。
+- web_search_end（event_msg） → chat.info.web_search.end
+  - params：`{ callId?, query? }`。
 
 - plan_update（event_msg） → chat.info.plan_update
   - params：`{ title?, body?, items? }`（按平台定义）。
@@ -287,8 +298,10 @@ Provider 常见事件到 `chat.*` 的映射（WS、resume 同源）：
 - turn_diff（event_msg） → chat.info.turn_diff
   - params：`{ diff }`（unified diff 字符串）。
 
-- exec_approval_request / apply_patch_approval_request（event_msg）
-  - 说明：通常通过 App Server 的 ServerRequest 流转，不进入广播 Ring；默认不映射为 `chat.*`。若需呈现，可扩展为 `chat.tool.exec.approval.request` / `chat.tool.patch.approval.request`。
+- exec_approval_request / apply_patch_approval_request（event_msg） → chat.info.approval.exec / chat.info.approval.patch（入环）
+  - params（exec）：`{ callId?, command?: string[], cwd?: string, reason?: string }`
+  - params（patch）：`{ callId?, reason?: string, grantRoot?: string, changeCount: number }`
+  - 说明：当前实现已入环并用于 UI 提示，符合 SSoT“信息与元提示入环可补偿”的约定。
 
 - token_count（event_msg）
   - 说明：不映射 `chat.*`；由后端派生 `codex/account/rateLimits/updated` 更新额度面板与能力。
@@ -388,7 +401,10 @@ Provider 常见事件到 `chat.*` 的映射（WS、resume 同源）：
 
 - plan_update：
   - WS 路径：`codex/event/plan_update` → `chat.info.plan_update`，前端以 `step.kind='plan'` 渲染；
-  - Resume 路径：取决于日志是否包含该事件；如需完全一致，建议保留该 `event_msg` 并按上文统一归一化。
+  - Resume 路径：支持两类来源的归一化：
+    - `event_msg.plan_update` → `chat.info.plan_update`；
+    - `response_item.function_call(name=="update_plan")`（arguments 含 `plan`/`explanation`）→ `chat.info.plan_update`；
+    - 两者均不强制开启新 Turn，若当前有进行中的 Turn，则附加到当前 `turnSeq`；否则作为信息附加（无 `turnSeq`）。
 
 ## 例：跨源一致事件序列（摘要）
 
@@ -452,6 +468,7 @@ type Turn = {
 - 单轮渲染：每个 Turn = 1 用户气泡 + 1 AI 气泡；Reasoning 与工具步骤聚合在该 AI 气泡内。
 - 边界：`chat.turn.started` 开始，`chat.turn.complete` 结束；缺失时以 `chat.message.completed|failed|aborted` 兜底收尾。
 - 工具聚合：以 `callId` 追踪 step，`begin` 建立、`output` 追加、`end` 收尾；turn 完成时清理索引。
+- 去重元数据：当 `chat.message.completed` 落地时，把事件 `eventId` 写入 `turn.meta.extra.assistantCompletedEventId`，供 Rx 微批在收到迟到的 `chat.message.delta` 时比对（仅当 `eventId` 更新或正文追加新尾段时才写入），防止重复 turn。
 
 Store API（面向事件，简要）：
 - 会话：`setConversationId`、`reset`

@@ -11,6 +11,9 @@ pub struct EventAccumulator {
     pub mcp_calls: HashMap<String, (String, String, Option<Value>)>,
     pub current_turn_seq: usize,
     pub turn_open: bool,
+    // reasoning 聚合：优先 summary，其次合并过程
+    pub pending_reasoning_summary: Option<String>,
+    pub pending_reasoning_process: Vec<String>,
 }
 
 impl EventAccumulator {
@@ -34,6 +37,8 @@ impl EventAccumulator {
             return;
         };
         match kind {
+            // 根据最新约定：resume 不使用 response_item.reasoning.summary（不参与渲染），直接忽略，减小传输量
+            "reasoning" => {}
             "function_call" => {
                 let Some(name) = payload.get("name").and_then(|v| v.as_str()) else {
                     return;
@@ -46,6 +51,25 @@ impl EventAccumulator {
                     .and_then(|v| v.as_str())
                     .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
                     .unwrap_or(Value::Null);
+                // Special-case: update_plan 是一个“信息类”函数调用，不应开启新 turn，归并为 chat.info.plan_update
+                if name == "update_plan" {
+                    let explanation = args_val
+                        .get("explanation")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let plan = args_val
+                        .get("plan")
+                        .cloned()
+                        .unwrap_or_else(|| Value::Array(vec![]));
+                    let ev = ChatEvent::InfoPlanUpdate { explanation, plan };
+                    let seq = if self.current_turn_seq > 0 {
+                        Some(self.current_turn_seq)
+                    } else {
+                        None
+                    };
+                    self.events.push((ev, seq));
+                    return;
+                }
                 if name == "shell" {
                     let command = args_val
                         .get("command")
@@ -387,6 +411,8 @@ impl EventAccumulator {
             }
             "agent_message" => {
                 if let Some(text) = payload.get("message").and_then(|v| v.as_str()) {
+                    // 不再在 agent_message 前合并/落地 pending reasoning，按过程事件各自已落地
+
                     if !self.turn_open {
                         self.current_turn_seq += 1;
                         self.turn_open = true;
@@ -712,6 +738,42 @@ impl EventAccumulator {
                         None
                     },
                 ));
+            }
+            // 仅作为信息附加到当前/上一轮，不强制开启新 turn；若当前已有轮，则写入当前 turnSeq
+            "turn_diff" => {
+                let diff = payload
+                    .get("unified_diff")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if diff.is_empty() {
+                    return;
+                }
+                let ev = ChatEvent::InfoTurnDiff { diff };
+                let seq = if self.current_turn_seq > 0 {
+                    Some(self.current_turn_seq)
+                } else {
+                    None
+                };
+                self.events.push((ev, seq));
+            }
+            // 仅作为信息附加到当前/上一轮，不强制开启新 turn；若当前已有轮，则写入当前 turnSeq
+            "plan_update" => {
+                let explanation = payload
+                    .get("explanation")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let plan = payload
+                    .get("plan")
+                    .cloned()
+                    .unwrap_or_else(|| Value::Array(vec![]));
+                let ev = ChatEvent::InfoPlanUpdate { explanation, plan };
+                let seq = if self.current_turn_seq > 0 {
+                    Some(self.current_turn_seq)
+                } else {
+                    None
+                };
+                self.events.push((ev, seq));
             }
             "turn.completed" | "task_complete" => {
                 let ev = ChatEvent::TurnComplete;

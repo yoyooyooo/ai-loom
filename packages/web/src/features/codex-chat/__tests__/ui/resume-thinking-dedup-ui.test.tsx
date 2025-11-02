@@ -1,5 +1,9 @@
 import { describe, it, beforeEach, afterEach, expect } from 'vitest'
-import { chatTurnActions, useChatTurnStore } from '@/features/codex-chat/stores/chat-turns'
+import {
+  chatTurnActions,
+  chatTurnSelectors,
+  useChatTurnStore
+} from '@/features/codex-chat/stores/chat-turns'
 
 describe('UI：thinking 步骤去重（Resume 构建路径）', () => {
   beforeEach(() => {
@@ -9,18 +13,38 @@ describe('UI：thinking 步骤去重（Resume 构建路径）', () => {
     chatTurnActions.reset()
   })
 
-  it('loadSnapshot(events 含重复 reasoning.end) 后仅保留一个 thinking 步骤（供 UI 渲染）', async () => {
-    const history: Array<{ role: any; text: string }> = [{ role: 'user', text: 'hi' }]
-    const events = [
-      { method: 'chat.reasoning.end', params: { text: 'Plan\n\nA\nB' } },
-      { method: 'chat.reasoning.end', params: { text: 'Plan\n\nA\nB' } },
-      { method: 'chat.tool.exec.begin', params: { callId: 'c1', command: ['bash', '-lc', 'echo ok'] } },
-      { method: 'chat.message.completed', params: { text: 'ok' } },
-      { method: 'chat.turn.complete', params: {} }
+  it('loadServerTurns：thinking 步骤可被 UI 渲染', async () => {
+    const turns = [
+      {
+        id: 't1',
+        seq: 1,
+        status: 'completed',
+        user: { text: 'hi', ts: '' },
+        assistant: { text: 'ok' },
+        steps: [
+          {
+            id: 'th1',
+            kind: 'thinking',
+            title: 'thinking: Plan',
+            status: 'completed',
+            ts: '',
+            body: 'Plan\n\nA\nB'
+          },
+          {
+            id: 'ex1',
+            kind: 'exec',
+            title: 'echo ok',
+            status: 'completed',
+            ts: '',
+            meta: { command: ['bash', '-lc', 'echo ok'] },
+            body: 'ok'
+          }
+        ]
+      }
     ]
-    chatTurnActions.loadSnapshot(history as any, events as any)
+    chatTurnActions.loadServerTurns(turns as any)
     const st = useChatTurnStore.getState()
-    const t = st.turns[0]
+    const t = chatTurnSelectors.currentSlice(st).turns[0]
     expect(t.steps.filter((s) => s.kind === 'thinking').length).toBe(1)
   })
 })

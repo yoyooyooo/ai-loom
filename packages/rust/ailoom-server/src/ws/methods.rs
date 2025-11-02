@@ -137,11 +137,16 @@ pub async fn call(method: &str, params: &Value, state: &AppState) -> Result<Valu
                 .and_then(|obj| obj.get("conversationId"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
+            let filter_provider_id = filter
+                .and_then(|obj| obj.get("providerId").or_else(|| obj.get("provider")))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             if let Some(hub) = state.ws_hub.clone() {
                 let conv_id_ref = filter_conversation_id.as_deref();
+                let provider_id_ref = filter_provider_id.as_deref();
                 if matches!(topic, Some("chat")) {
                     if tail > 0 && after == 0 {
-                        let events = hub.tail_chat(conv_id_ref, tail);
+                        let events = hub.tail_chat(conv_id_ref, provider_id_ref, tail);
                         let list: Vec<Value> = events
                             .into_iter()
                             .map(
@@ -150,7 +155,8 @@ pub async fn call(method: &str, params: &Value, state: &AppState) -> Result<Valu
                             .collect();
                         Ok(json!({"events": list, "truncated": false}))
                     } else {
-                        let (events, truncated) = hub.resume_after_chat(after, conv_id_ref);
+                        let (events, truncated) =
+                            hub.resume_after_chat(after, conv_id_ref, provider_id_ref);
                         let list: Vec<Value> = events
                             .into_iter()
                             .map(
@@ -214,5 +220,70 @@ fn list_dir_json(fs: &FsConfig, dir: &str) -> Result<Value, anyhow::Error> {
     match ailoom_fs::list_dir(fs, dir) {
         Ok(entries) => Ok(serde_json::to_value(entries).unwrap()),
         Err(e) => Err(err("INVALID_PATH", &e.to_string())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::AppState;
+    use ailoom_store::Store;
+    use std::path::PathBuf;
+
+    fn tempdir() -> PathBuf {
+        let p =
+            std::env::temp_dir().join(format!("ailoom_ws_test_methods_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[tokio::test]
+    async fn events_resume_chat_filters_by_provider() {
+        let root = tempdir();
+        let fs_cfg = FsConfig::new(root.clone());
+        let db = root.join("ailoom.db");
+        let store = Store::connect_path(&db, &root.to_string_lossy())
+            .await
+            .unwrap();
+        let hub = crate::ws::hub::Hub::new(64);
+        // broadcast mixed providers
+        hub.broadcast(
+            "chat.message.delta".into(),
+            json!({"conversationId":"cid-pp","provider":"codex","delta":"x"}),
+        );
+        hub.broadcast(
+            "chat.message.delta".into(),
+            json!({"conversationId":"cid-pp","provider":"other","delta":"y"}),
+        );
+
+        let state = AppState {
+            fs: fs_cfg,
+            store,
+            root: root.clone(),
+            workspace_root: root,
+            ws_hub: Some(hub),
+        };
+
+        // request only codex provider
+        let params = json!({
+            "after": 0,
+            "topic": "chat",
+            "filter": {"conversationId": "cid-pp", "providerId": "codex"}
+        });
+        let res = call("events.resume", &params, &state).await.unwrap();
+        let events = res
+            .get("events")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(events.len(), 1);
+        let first = events.first().unwrap();
+        assert_eq!(
+            first.get("method").and_then(|v| v.as_str()),
+            Some("chat.message.delta")
+        );
+        let p = first.get("params").and_then(|v| v.as_object()).unwrap();
+        assert_eq!(p.get("delta").and_then(|v| v.as_str()), Some("x"));
+        assert_eq!(p.get("provider").and_then(|v| v.as_str()), Some("codex"));
     }
 }

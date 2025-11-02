@@ -9,10 +9,11 @@ import { WsDebugPanel } from '@/lib/ws/ws-debug-panel'
 import { AppSidebar } from '@/components/app-sidebar'
 import { AppSidebarMobileTrigger } from '@/components/app-sidebar-mobile-trigger'
 import type { SidebarModuleConfig } from '@/components/app-sidebar-config'
+import { Compass, MessageSquare } from 'lucide-react'
 
 const APP_MODULES: SidebarModuleConfig = [
-  { id: 'chat', label: 'Chat', path: '/chat', enabled: true },
-  { id: 'explore', label: 'Explore', path: '/explore', enabled: true }
+  { id: 'chat', label: 'Chat', path: '/chat', enabled: true, icon: MessageSquare },
+  { id: 'explore', label: 'Explore', path: '/explore', enabled: true, icon: Compass }
 ]
 
 function AppShell() {

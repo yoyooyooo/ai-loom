@@ -146,7 +146,31 @@ dev-all PORT='63000':
 
 # 调试版：打开更详细的日志、WS 调试
 dev-all-debug PORT='63000':
-  RUST_LOG="${RUST_LOG:-info,ailoom_server=debug,codex=info}" \
+  # 业务调试档：只看握手、gating 与业务事件，不输出底层帧/IO TRACE
+  RUST_LOG="${RUST_LOG:-info,ws=debug,ailoom_server=debug,codex=info}" \
+  AILOOM_WS_TRACE_CONN="${AILOOM_WS_TRACE_CONN:-1}" \
+  # gating 默认关闭（需要时再临时打开），避免噪音
+  AILOOM_WS_GATING_DEBUG="${AILOOM_WS_GATING_DEBUG:-0}" \
+  # 默认每会话子进程；如需单实例改成 singleton
+  AILOOM_CODEX_MODE="${AILOOM_CODEX_MODE:-per_conv}" \
+  # 使用与线上一致的超时与行为（不下调 RPC 超时，不自动叠加 ensure）
+  AILOOM_CODEX_RPC_TIMEOUT_MS="${AILOOM_CODEX_RPC_TIMEOUT_MS:-}" \
+  AILOOM_WS_AUTO_ENSURE_CODEX="${AILOOM_WS_AUTO_ENSURE_CODEX:-0}" \
+  # 新连接 watchdog 更保守
+  AILOOM_WS_CONN_WATCHDOG_MS="${AILOOM_WS_CONN_WATCHDOG_MS:-1800}" \
+  VITE_WS_DEBUG="${VITE_WS_DEBUG:-1}" \
+  VITE_WS_DEBUG_ROUTE="${VITE_WS_DEBUG_ROUTE:-1}" \
+  bash scripts/dev-all.sh {{PORT}}
+
+# 极限诊断档（仅临时使用）：输出底层帧/IO 等所有 TRACE
+dev-all-trace PORT='63000':
+  RUST_LOG="${RUST_LOG:-trace,ws=trace,ailoom_server=trace,codex=trace}" \
+  AILOOM_WS_TRACE_CONN="${AILOOM_WS_TRACE_CONN:-1}" \
+  AILOOM_WS_SUPERVISOR="${AILOOM_WS_SUPERVISOR:-0}" \
+  AILOOM_WS_RECOVER_CLOSE_FIRST="${AILOOM_WS_RECOVER_CLOSE_FIRST:-0}" \
+  AILOOM_WS_GATING_DEBUG="${AILOOM_WS_GATING_DEBUG:-0}" \
+  AILOOM_WS_AUTO_ENSURE_CODEX="${AILOOM_WS_AUTO_ENSURE_CODEX:-0}" \
+  AILOOM_WS_CONN_WATCHDOG_MS="${AILOOM_WS_CONN_WATCHDOG_MS:-1800}" \
   VITE_WS_DEBUG="${VITE_WS_DEBUG:-1}" \
   VITE_WS_DEBUG_ROUTE="${VITE_WS_DEBUG_ROUTE:-1}" \
   bash scripts/dev-all.sh {{PORT}}

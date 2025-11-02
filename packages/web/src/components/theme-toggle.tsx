@@ -7,6 +7,21 @@ import { useAppStore } from '@/stores/app'
 
 const STYLE_ID = 'theme-toggle-view-transition'
 
+function isViewTransitionSupported() {
+  if (typeof document === 'undefined') return false
+  const hasAPI = typeof (document as any).startViewTransition === 'function'
+  const hasCSS =
+    typeof (window as any).CSS !== 'undefined' &&
+    typeof (window as any).CSS.supports === 'function' &&
+    (window as any).CSS.supports('view-transition-name: none')
+  const prefersReduced =
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  // 仅当 API 与 CSS 都可用且未启用减少动效时才启用视图过渡
+  return hasAPI && hasCSS && !prefersReduced
+}
+
 function injectViewTransition(x?: number, y?: number) {
   if (typeof document === 'undefined') return
   const existing = document.getElementById(STYLE_ID) as HTMLStyleElement | null
@@ -19,6 +34,12 @@ function injectViewTransition(x?: number, y?: number) {
   ::view-transition-group(root) {
     animation-duration: 420ms;
     animation-timing-function: cubic-bezier(0.16,1,0.3,1);
+  }
+  ::view-transition-image-pair(root) {
+    isolation: isolate;
+  }
+  ::view-transition {
+    pointer-events: none;
   }
   ::view-transition-new(root) {
     clip-path: circle(0% at var(--theme-toggle-x, 50%) var(--theme-toggle-y, 50%));
@@ -69,13 +90,14 @@ export function ThemeToggle({ className, showLabel }: ThemeToggleProps) {
   const handleToggle = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
       const runToggle = () => toggleTheme()
-      const supports = typeof document !== 'undefined' && 'startViewTransition' in document
+      const supports = isViewTransitionSupported()
       if (supports) {
-        const fn = (document as any).startViewTransition?.(() => runToggle())
+        // 先注入样式与坐标变量，再启动视图过渡，避免新版本浏览器在过渡开始时就锁定样式，导致动画不生效
         try {
           injectViewTransition(event.clientX, event.clientY)
         } catch {}
-        fn?.finished?.catch(() => {})
+        const vt = (document as any).startViewTransition?.(() => runToggle())
+        vt?.finished?.catch(() => {})
       } else {
         runToggle()
       }

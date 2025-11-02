@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { chatTurnActions, useChatTurnStore } from '@/features/codex-chat/stores/chat-turns'
+import {
+  chatTurnActions,
+  useChatTurnStore,
+  chatTurnSelectors
+} from '@/features/codex-chat/stores/chat-turns'
 
 import basic from '@/features/codex-chat/__tests__/fixtures/resume-events-basic.json'
 import compact from '@/features/codex-chat/__tests__/fixtures/resume-events-compact.json'
@@ -8,7 +12,7 @@ import mcpFx from '@/features/codex-chat/__tests__/fixtures/resume-events-mcp.js
 import failedFx from '@/features/codex-chat/__tests__/fixtures/resume-events-failed.json'
 import abortedFx from '@/features/codex-chat/__tests__/fixtures/resume-events-aborted.json'
 
-describe('loadSnapshot(events-only) → applyEventsToTurns', () => {
+describe('loadServerTurns → store turns', () => {
   beforeEach(() => {
     chatTurnActions.reset()
   })
@@ -17,20 +21,49 @@ describe('loadSnapshot(events-only) → applyEventsToTurns', () => {
   })
 
   it('basic: builds a single completed turn with assistant text', () => {
-    chatTurnActions.loadSnapshot([], (basic as any).events)
-    const state = useChatTurnStore.getState()
-    expect(state.turns).toHaveLength(1)
-    const t = state.turns[0]
+    const turns = [
+      {
+        id: 't1',
+        seq: 1,
+        status: 'completed',
+        user: { text: 'hello', ts: '' },
+        assistant: { text: 'Hello' },
+        steps: []
+      }
+    ]
+    chatTurnActions.loadServerTurns(turns as any)
+    const slice = chatTurnSelectors.currentSlice(useChatTurnStore.getState())
+    expect(slice.turns).toHaveLength(1)
+    const t = slice.turns[0]
     expect(t.status).toBe('completed')
     expect((t.assistant?.text || '').trim()).toBe('Hello')
     expect(t.steps.length).toBe(0)
   })
 
   it('compact: attaches info step to previous turn and does not create a new turn', () => {
-    chatTurnActions.loadSnapshot([], (compact as any).events)
-    const state = useChatTurnStore.getState()
-    expect(state.turns).toHaveLength(1)
-    const t = state.turns[0]
+    const turns = [
+      {
+        id: 't1',
+        seq: 1,
+        status: 'completed',
+        user: { text: 'u', ts: '' },
+        assistant: { text: 'a' },
+        steps: [
+          {
+            id: 'i1',
+            kind: 'info',
+            title: '[Compact] 任务完成',
+            status: 'completed',
+            ts: '',
+            meta: { compactDone: true }
+          }
+        ]
+      }
+    ]
+    chatTurnActions.loadServerTurns(turns as any)
+    const slice = chatTurnSelectors.currentSlice(useChatTurnStore.getState())
+    expect(slice.turns).toHaveLength(1)
+    const t = slice.turns[0]
     expect(t.status).toBe('completed')
     const info = t.steps.find((s) => s.kind === 'info' && s.meta?.compactDone)
     expect(info).toBeTruthy()
@@ -38,8 +71,28 @@ describe('loadSnapshot(events-only) → applyEventsToTurns', () => {
   })
 
   it('exec tool: aggregates begin/output/end as a single step and keeps metadata', () => {
-    chatTurnActions.loadSnapshot([], (execFx as any).events)
-    const t = useChatTurnStore.getState().turns[0]
+    const turns = [
+      {
+        id: 't1',
+        seq: 1,
+        status: 'completed',
+        user: { text: 'u', ts: '' },
+        assistant: { text: 'a' },
+        steps: [
+          {
+            id: 'e1',
+            kind: 'exec',
+            title: 'bash -lc echo ok',
+            status: 'completed',
+            ts: '',
+            meta: { command: ['bash', '-lc', 'echo ok'], cwd: '/tmp' },
+            body: 'ok'
+          }
+        ]
+      }
+    ]
+    chatTurnActions.loadServerTurns(turns as any)
+    const t = chatTurnSelectors.currentTurns(useChatTurnStore.getState())[0]
     const step = t.steps.find((s) => s.kind === 'exec')
     expect(step).toBeTruthy()
     expect(step?.status).toBe('completed')
@@ -47,9 +100,28 @@ describe('loadSnapshot(events-only) → applyEventsToTurns', () => {
     expect(step?.meta?.cwd).toBe('/tmp')
   })
 
-  it('mcp tool: begin/end with server/tool/arguments/result', () => {
-    chatTurnActions.loadSnapshot([], (mcpFx as any).events)
-    const t = useChatTurnStore.getState().turns[0]
+  it('mcp tool: server/tool/args/result', () => {
+    const turns = [
+      {
+        id: 't1',
+        seq: 1,
+        status: 'completed',
+        user: { text: 'u', ts: '' },
+        assistant: { text: 'a' },
+        steps: [
+          {
+            id: 'm1',
+            kind: 'mcp',
+            title: 'sv:tl',
+            status: 'completed',
+            ts: '',
+            meta: { server: 'sv', tool: 'tl', args: { x: 1 }, result: { ok: true } }
+          }
+        ]
+      }
+    ]
+    chatTurnActions.loadServerTurns(turns as any)
+    const t = chatTurnSelectors.currentTurns(useChatTurnStore.getState())[0]
     const step = t.steps.find((s) => s.kind === 'mcp')
     expect(step).toBeTruthy()
     expect(step?.status).toBe('completed')
@@ -59,14 +131,32 @@ describe('loadSnapshot(events-only) → applyEventsToTurns', () => {
   })
 
   it('failed: marks turn as failed', () => {
-    chatTurnActions.loadSnapshot([], (failedFx as any).events)
-    const t = useChatTurnStore.getState().turns[0]
+    chatTurnActions.loadServerTurns([
+      {
+        id: 't1',
+        seq: 1,
+        status: 'failed',
+        user: { text: 'u', ts: '' },
+        assistant: { text: 'error' },
+        steps: []
+      }
+    ] as any)
+    const t = chatTurnSelectors.currentTurns(useChatTurnStore.getState())[0]
     expect(t.status).toBe('failed')
   })
 
   it('aborted: marks turn as aborted', () => {
-    chatTurnActions.loadSnapshot([], (abortedFx as any).events)
-    const t = useChatTurnStore.getState().turns[0]
+    chatTurnActions.loadServerTurns([
+      {
+        id: 't1',
+        seq: 1,
+        status: 'aborted',
+        user: { text: 'u', ts: '' },
+        assistant: { text: '' },
+        steps: []
+      }
+    ] as any)
+    const t = chatTurnSelectors.currentTurns(useChatTurnStore.getState())[0]
     expect(t.status).toBe('aborted')
   })
 })

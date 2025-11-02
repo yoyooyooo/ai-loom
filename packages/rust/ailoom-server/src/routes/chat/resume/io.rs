@@ -106,6 +106,7 @@ pub async fn lookup_path_by_conversation_id(
             .list_conversations(ListConversationsParams {
                 page_size: Some(50),
                 cursor: cursor.clone(),
+                ..Default::default()
             })
             .await
         {

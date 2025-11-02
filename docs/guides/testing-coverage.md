@@ -53,6 +53,13 @@ packages/web/src/
   - 订阅/退订：按会话 filter 切换；会话守卫（只处理当前 cid 的 chat.*）。
   - Codex runtime 元事件：sessionConfigured/auth/rateLimits → Provider Store 覆盖。
 
+- `packages/web/src/features/codex-chat/services/__tests__/core/ws-pipeline.test.ts`
+  - 握手窗口：`sync_begin → events → sync_end` 内缓冲升序回放；窗口外实时直通。
+  - begin/end 缺失、重复 begin/end、跨会话交错时的行为（建议增加 marble 测试）。
+
+- `packages/web/src/features/codex-chat/services/__tests__/core/ws-pipeline-codex.test.ts`
+  - codex/* 分流：sessionConfigured/authStatusChange/rateLimits 的拆分与处理。
+
 - `packages/web/src/features/codex-chat/__tests__/core/ws-reconnect-resume.integration.test.tsx`
   - 断线 → 重连 → 按会话 resume 增量回放，仅融合当前会话；非当前会话帧被过滤。
 
@@ -67,6 +74,7 @@ packages/web/src/
 
 - `packages/web/src/features/codex-chat/__tests__/core/ws-multiconv-switch.test.ts`
   - 会话切换后，上一会话迟到帧不污染新会话；订阅立即切换。
+  - 同连接多订阅 token（相同会话/不同视图）不重复握手，仅实时直通（建议补测）。
 
 ### 边界与特例
 
@@ -81,6 +89,19 @@ packages/web/src/
 
 - `packages/web/src/features/codex-chat/__tests__/core/ws-history-guard.test.tsx`
   - 已有 turns 时，迟到的 session.history 不覆盖现有 turns；空态允许填充。
+
+### Chat info 事件覆盖项（建议新增/核对）
+
+- `chat.info.user_message`：
+  - 发送成功后立即插入 info 步骤（不新开 turn、优先附着到活跃 turn）；重复文本去重；按会话 resume 可回放。
+- `chat.info.plan_update`/`chat.info.turn_diff`：
+  - 渲染为 step.kind=`plan`/`info`；与 `turnSeq` 指向的回合合并；resume 事件的附着位置正确。
+- `chat.info.approval.exec/patch`：
+  - 字段完整（exec：command/cwd/reason；patch：reason/grantRoot/changeCount）；在自动批准场景下仍提示 UI。
+- `chat.info.web_search.begin/end`：
+  - begin/end 配对写入（含 callId），end 可含 query；多个相邻搜索按 callId 匹配。
+- `chat.info.view_image`/`conversation_path`/`review.entered|exited`：
+  - 渲染为 info 步骤；确认入环、可 resume；UI 文案与图标（如有）稳定。
 
 ### Store 不变量（收尾与索引）
 
@@ -139,7 +160,7 @@ packages/web/src/
 - `delta-streams.ts`：
   - 不同 batch 窗口下的拼接边界（例如 16ms 与 0ms）；
   - Vitest 关闭 Rx 微批时（默认在 `subscribeChatEvents` 中），确保实时路径等价。
-- `ws-processors.ts`：
+- `processors/*`：
   - 连续多轮间界（多个 `agent_message` 连续结束多轮）；
   - `chat.reasoning.end` 去重规则与标题提取的极端输入（空行/仅符号）。
 - `chat-turns-snapshot.ts`：
@@ -149,7 +170,7 @@ packages/web/src/
 ## 编写用例的实践技巧
 
 - 模拟 WS：`vi.mock('@/lib/ws/singleton')` + `__emit('chat.*', params)`；断言 Store（`useChatTurnStore.getState()`）而非 DOM。
-- 模拟 Resume：`chatTurnActions.loadSnapshot(history, events)`；或调用 `useResumeAndPoll` 并 spy `chatApi.resumeByConversationId`。
+- 模拟 Resume：`chatTurnActions.loadSnapshot(history, events)`；或调用 `hydrateConversation(conversationId)` 并 spy `chatApi.resumeByConversationId`。
 - 微批 delta：`ensureDeltaPipelines()` 后注入 `chat.reasoning.delta`/`chat.message.delta`；必要时加 setTimeout 小延时。
 - 仅在必要时渲染组件（冒烟）：渲染 `TurnAssistantView` 验证 steps/preview 的存在性，不断言具体 DOM 结构。
 

@@ -5,4 +5,9 @@
 /**
  * MCP representation of a [`codex_core::config_types::SandboxWorkspaceWrite`].
  */
-export type SandboxSettings = { writableRoots: Array<string>, networkAccess: boolean | null, excludeTmpdirEnvVar: boolean | null, excludeSlashTmp: boolean | null, };
+export type SandboxSettings = {
+  writableRoots: Array<string>
+  networkAccess: boolean | null
+  excludeTmpdirEnvVar: boolean | null
+  excludeSlashTmp: boolean | null
+}

@@ -6,6 +6,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use super::Turn;
+
 #[derive(Deserialize, Default)]
 pub struct ResumeBody {
     pub path: Option<String>,
@@ -137,9 +139,18 @@ pub struct ResumeResponsePayload {
     pub history: Vec<ChatHistoryEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<ResumeEventPayload>,
+    /// 后端已按 turn-first 组装好的快照（优先使用）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turns: Vec<Turn>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<ResumeConfigResponse>,
     /// 仅用于提示：根据 rollout JSONL 最近事件粗略判断是否仍在进行中（CLI 会话场景）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub in_progress: Option<bool>,
+    /// 本次 resume 所在会话在 Hub 中的最新 eventId（用于前端推进 convAppliedLast）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upto_event_id: Option<u64>,
+    /// turns 结构版本（便于灰度/演进）
+    #[serde(rename = "turnsSchemaVersion")]
+    pub turns_schema_version: u32,
 }

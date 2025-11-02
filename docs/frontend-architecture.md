@@ -99,6 +99,74 @@ packages/web/src
 - Provider 维度的状态（模型、额度、覆盖、token 统计）集中在 `packages/web/src/stores/codex-chat-provider.ts`，按 `conversationId` 分桶，缺省桶 `__default__` 代表待创建会话。未来扩展到多 Provider 时，可改造为 `sessions[providerId][conversationId]`。
 - 新增 store 时优先沿用此模式：`create<Domain>Slice(set, get)` + `create<State>` 入口文件，确保动作/状态归属清晰，便于 tree-shaking 与单元测试。
 
+### 3.4 Slice × 类型模式（StoreCreator 复用，强制）
+
+为避免各 slice 重复声明中间件类型、提高类型推导与复用性，统一采用“在 store 层声明 `StoreCreator<TSlice>`，各 slice 复用”的模式。此规范等同于示例仓库 `examples/feature-skeleton/stores/index.store.ts` 的做法，并与本仓库 `chat-turns` 的 `ChatTurnStoreCreator` 一致。
+
+规范要点：
+- 在 store 的 `types.ts`（或同文件上方）聚合最终 Store 类型，并声明统一的 `StoreCreator<TSlice>`，将本 store 需要的中间件一次性写入。
+- 每个 slice 工厂以 `StoreCreator<Slice>` 为类型签名；内部可直接使用 `immer` 的可变写法，且 `get()` 能正确感知其它 slice。
+- 入口 `index.store.ts` 用 `create<FinalStore>()(middlewares(...))` 合并所有 slice；中间件仅在此处配置，不在切片中重复。
+
+最小模板：
+
+```ts
+// types.ts（或本文件顶部）
+import type { StateCreator } from 'zustand';
+
+export interface AState { /* ... */ }
+export interface BState { /* ... */ }
+export interface Actions { /* ... */ }
+
+export type FinalStore = { a: AState; b: BState; actions: Actions };
+
+// 统一本 store 需要的中间件（按需替换/增减）
+export type StoreCreator<TSlice> = StateCreator<
+  FinalStore,
+  [
+    ['zustand/immer', never],
+    ['zustand/subscribeWithSelector', never] // 或 ['zustand/devtools', never]
+  ],
+  [],
+  TSlice
+>;
+
+// a.slice.ts
+export type ASlice = FinalStore['a'];
+export const createASlice: StoreCreator<ASlice> = (set, get) => ({
+  /* 状态与动作；可用 set(state => { state.a.xxx = ... }) */
+});
+
+// b.slice.ts
+export type BSlice = FinalStore['b'];
+export const createBSlice: StoreCreator<BSlice> = (set, get) => ({ /* ... */ });
+
+// actions.slice.ts（可选：把跨切片动作集中到 actions 下）
+export type ActionsSlice = FinalStore['actions'];
+export const createActions: StoreCreator<ActionsSlice> = (_set, get) => ({
+  /* 可直接调用 get().a / get().b 的方法与状态 */
+});
+
+// index.store.ts（唯一地方组合中间件与切片）
+import { create } from 'zustand';
+import { immer } from 'zustand/middleware/immer';
+import { subscribeWithSelector } from 'zustand/middleware';
+
+export const useStore = create<FinalStore>()(
+  subscribeWithSelector(
+    immer((...args) => ({
+      a: createASlice(...args),
+      b: createBSlice(...args),
+      actions: createActions(...args),
+    }))
+  )
+);
+```
+
+落实要求：
+- 新增/改造的 store 必须提供统一的 `StoreCreator<TSlice>`；如需 `devtools/persist/subscribeWithSelector`，务必在该类型中声明并在入口一次性套用。
+- 跨切片动作建议集中在 `actions` 下，避免相互隐式调用导致耦合不清；如需订阅派发桥（RxJS/epic），在入口文件建立订阅，避免切片内部管理订阅的生命周期。
+
 ## 4. 命名约定（强制）
 
 - 文件与目录一律 `kebab-case`（a-b-c）。示例：`explorer-page.tsx`、`file-tree-panel.tsx`、`use-explorer-effects.ts`。
@@ -136,7 +204,7 @@ packages/web/src
   - 初始化：`npx shadcn@canary init -c packages/web`
   - 添加组件：`npx shadcn@canary add <component> -c packages/web`
 - Tailwind v4：确保接入 `@tailwindcss/vite`，并在 `styles/globals.css` 定义/映射 CSS 变量与 `@theme inline`，使 `bg-muted`、`text-muted-foreground` 等令牌生效。
- - 文本换行：统一使用 `wrap-break-word`（替代旧的 `break-words`）。
+- 文本换行：统一使用 `wrap-break-word`（替代旧的 `wrap-break-word`）。
 
 ### 7.1 条件渲染选型：ts-pattern（强制）
 

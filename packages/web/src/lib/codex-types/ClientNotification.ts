@@ -5,4 +5,4 @@
 /**
  * Notification sent from the client to the server.
  */
-export type ClientNotification = { "method": "initialized" };
+export type ClientNotification = { method: 'initialized' }

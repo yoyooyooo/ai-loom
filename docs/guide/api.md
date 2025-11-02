@@ -81,4 +81,18 @@ Stitch 生成与预算
 - `NON_TEXT` 或 `HTTP_415` → “该文件不是可预览的文本”
 - `OVER_LIMIT` 或 `HTTP_413` → “文件过大，无法全量读取”
 - `CONFLICT` → “保存冲突：文件已被外部修改，请刷新后再试”
-- 其它 `HTTP_xxx/NETWORK` → 显示通用错误并透出 message
+  - 其它 `HTTP_xxx/NETWORK` → 显示通用错误并透出 message
+
+聊天（Chat）
+- POST `/api/chat/conversations/:conversationId/interrupt`
+  - 作用：请求中止当前会话的本轮生成。
+  - Query：
+    - `await=turnAborted`（可选）→ 同步等待 Codex 确认中止（返回 `{ abortReason?: string }`）；可能阻塞较久，不推荐默认使用。
+    - `hard=1`（可选）→ 立即强制停止当前引擎进程并预热新实例（影响所有并行会话，谨慎使用）。
+  - 默认（无 `await`/`hard`）：非阻塞“自动模式（auto）”。服务端会：
+    1) 立即向 Codex 发送软中止请求；
+    2) 后台安装 3s watchdog，若在 3s 内未观察到该会话的收束事件（`chat.message.aborted|completed|failed|chat.turn.complete`），则静默触发“强制停止 + 热切换新实例”；
+    3) 通过 WS 广播：
+       - `chat.message.aborted { reason:'hard_stop' }`（收束当前回合，入环，可被 resume 补偿）；
+       - `chat.info.background { code:'engine_swapped', message:'...' }`（提示新实例已就绪，入环，可被 resume 补偿）。
+  - 返回：`202 Accepted`（始终尽快返回）。

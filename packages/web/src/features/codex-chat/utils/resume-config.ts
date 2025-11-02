@@ -14,9 +14,7 @@ export type ResumeOverridePatch = {
 
 export function normalizeApproval(value?: string | null): AskForApproval | undefined {
   if (!value) return undefined
-  return APPROVAL_VALUES.includes(value as AskForApproval)
-    ? (value as AskForApproval)
-    : undefined
+  return APPROVAL_VALUES.includes(value as AskForApproval) ? (value as AskForApproval) : undefined
 }
 
 export function normalizeSandbox(value?: string | null): SandboxMode | undefined {
@@ -27,7 +25,9 @@ export function normalizeSandbox(value?: string | null): SandboxMode | undefined
 export function deriveResumeOverrides(config?: ResumeConfigSnapshot | null): ResumeOverridePatch {
   if (!config) return {}
   const overrideModel = config.overrides?.model ?? config.model ?? undefined
-  const overrideApproval = normalizeApproval(config.overrides?.approvalPolicy ?? config.approvalPolicy)
+  const overrideApproval = normalizeApproval(
+    config.overrides?.approvalPolicy ?? config.approvalPolicy
+  )
   const overrideSandbox = normalizeSandbox(config.overrides?.sandboxMode ?? config.sandbox?.mode)
   const patch: ResumeOverridePatch = {}
   if (overrideModel) patch.model = overrideModel

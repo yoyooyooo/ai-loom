@@ -77,10 +77,15 @@ pub fn build_router(state: AppState, web_dist: std::path::PathBuf, no_static: bo
             get(crate::routes::chat::get_chat_config),
         )
         .route(
+            "/api/chat/output",
+            get(crate::routes::chat::get_turn_output),
+        )
+        .route(
             "/api/annotations/verify",
             axum::routing::post(verify_annotations_endpoint),
         )
         .route("/debug/codex", get(crate::routes::debug::codex_debug))
+        .route("/debug/ws", get(crate::routes::debug::ws_debug))
         .route("/ws", get(ws_upgrade_handler))
         .with_state(state)
         .layer(

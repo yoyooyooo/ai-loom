@@ -1,22 +1,38 @@
 import { describe, it, beforeEach, afterEach, expect } from 'vitest'
-import { chatTurnActions, useChatTurnStore } from '@/features/codex-chat/stores/chat-turns'
+import {
+  chatTurnActions,
+  useChatTurnStore,
+  chatTurnSelectors
+} from '@/features/codex-chat/stores/chat-turns'
 
 describe('resume events thinking dedup', () => {
   beforeEach(() => chatTurnActions.reset())
   afterEach(() => chatTurnActions.reset())
 
-  it('adds only one thinking step when multiple reasoning.end with same body', () => {
-    const events = [
-      { method: 'chat.turn.started', params: { turnSeq: 1 } },
-      { method: 'chat.reasoning.end', params: { text: 'Title\n\nDetailed content.' } },
-      { method: 'chat.reasoning.end', params: { text: 'Title\n\nDetailed content.' } },
-      { method: 'chat.message.completed', params: { text: 'answer' } },
-      { method: 'chat.turn.complete', params: { turnSeq: 1 } }
+  it('thinking step provided by server turns', () => {
+    const turns = [
+      {
+        id: 't1',
+        seq: 1,
+        status: 'completed',
+        user: { text: 'hi', ts: '' },
+        assistant: { text: 'answer' },
+        steps: [
+          {
+            id: 'th1',
+            kind: 'thinking',
+            title: 'thinking: Title',
+            status: 'completed',
+            ts: '',
+            body: 'Title\n\nDetailed content.'
+          }
+        ]
+      }
     ]
-    chatTurnActions.loadSnapshot([], events as any)
-    const t = useChatTurnStore.getState().turns[0]
-    const think = t.steps.filter((s) => s.kind === 'thinking')
-    expect(think.length).toBe(1)
-    expect(think[0]?.title?.toLowerCase()).toContain('thinking')
+    chatTurnActions.loadServerTurns(turns as any)
+    const t = chatTurnSelectors.currentTurns(useChatTurnStore.getState())[0]
+    const think = t.steps.find((s) => s.kind === 'thinking')
+    expect(think).toBeTruthy()
+    expect(think?.title?.toLowerCase()).toContain('thinking')
   })
 })

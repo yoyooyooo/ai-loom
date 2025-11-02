@@ -12,4 +12,10 @@
  * Clients should never make tool use decisions based on ToolAnnotations
  * received from untrusted servers.
  */
-export type ToolAnnotations = { destructiveHint?: boolean | null, idempotentHint?: boolean | null, openWorldHint?: boolean | null, readOnlyHint?: boolean | null, title?: string | null, };
+export type ToolAnnotations = {
+  destructiveHint?: boolean | null
+  idempotentHint?: boolean | null
+  openWorldHint?: boolean | null
+  readOnlyHint?: boolean | null
+  title?: string | null
+}

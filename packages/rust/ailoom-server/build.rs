@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -16,6 +17,10 @@ fn cmd_out(cmd: &str, args: &[&str]) -> Option<String> {
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+
+    let export_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/ts-external");
+    let _ = std::fs::create_dir_all(&export_dir);
+    println!("cargo:rustc-env=TS_RS_EXPORT_DIR={}", export_dir.display());
 
     let pkg_ver = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into());
     // 可通过环境变量覆盖（例如 CI 注入 release-vX.Y.Z）

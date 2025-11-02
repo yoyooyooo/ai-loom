@@ -2,12 +2,14 @@ pub mod chat_events;
 pub mod config;
 mod conn;
 pub mod hub;
+pub mod inspect;
 mod methods;
 pub mod protocol;
 pub mod watch;
 pub mod topics {
     pub mod chat;
 }
+pub mod gating_log;
 
 use crate::state::AppState;
 use axum::{extract::ws::WebSocketUpgrade, http::HeaderMap, response::IntoResponse};

@@ -115,6 +115,17 @@ pub enum ChatEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         kind: Option<Value>,
     },
+    /// 来自 provider 的计划更新（如 codex plan_update）
+    InfoPlanUpdate {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        explanation: Option<String>,
+        /// 按上游原样携带（数组或对象）
+        plan: Value,
+    },
+    /// 来自 provider 的当前回合差异（如 codex turn_diff）
+    InfoTurnDiff {
+        diff: String,
+    },
     TurnComplete,
 }
 
@@ -241,6 +252,13 @@ impl ChatEvent {
                 "chat.info.user_message".into(),
                 json!({"text": text, "kind": kind}),
             ),
+            ChatEvent::InfoPlanUpdate { explanation, plan } => (
+                "chat.info.plan_update".into(),
+                json!({"explanation": explanation, "plan": plan}),
+            ),
+            ChatEvent::InfoTurnDiff { diff } => {
+                ("chat.info.turn_diff".into(), json!({"diff": diff}))
+            }
             ChatEvent::TurnComplete => ("chat.turn.complete".into(), Value::Null),
         }
     }

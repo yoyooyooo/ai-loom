@@ -43,6 +43,25 @@
 
 更多细节与术语“接地气”解释，见：`docs/guide/ws-overview.md`（含关键时序、术语、开关说明）。
 
+### 运行时（Per‑Conversation，Provider 通用）
+
+- 目标：从根上消除“监听黑洞/串会话”，并在多会话并发下稳定提供实时事件。
+- 模式：仅支持 per-conv。每个会话独立拉起一个运行时（CLI 子进程或 API 虚拟任务）；前端仍通过“单 WS + 统一 chat.*”协议收取事件（协议不变）。
+- 生命周期
+  - 新建：`spawn_new(provider)` → 建立运行时（CLI：进程+握手 / API：虚拟任务）→ 广播 `chat.session.new`
+  - 发送：`ensure_listener(provider)`（无则 `resume`）→ `sendUserMessage(provider)`
+  - 中断：软中断 `interrupt(provider)`；硬中断仅终止该会话运行时（不影响其它会话）
+- 资源治理（默认值可通过环境变量调整）
+  - `AILOOM_EXEC_IDLE_MS`（默认 60000）：闲置超过阈值回收运行时
+  - `AILOOM_EXEC_MAX_CHILDREN`（默认 6）：最多同时保留的运行时数
+  - `AILOOM_EXEC_GC_INTERVAL_MS`（默认 5000）：后台 GC 周期
+- 握手异步化
+  - `subscribe/subscribeMany` 的握手（`sync_begin → 回放 → sync_end`）在后台任务中异步投递，避免阻塞请求路径
+  - Writer 调度采用配额化轮转（`AILOOM_WS_WRITER_LIVE_QUOTA/FILE_QUOTA`），防止回放/文件风暴饿死 live
+- 观测
+  - `/api/chat/runtime` 与 `session.runtime`：统一 Provider 的会话运行时快照/瞬时广播
+  - `/debug/ws`：每条 WS 连接当前的订阅快照（token/refCount/topic/filter）
+
 ### WS 架构（Mermaid）
 
 ```mermaid

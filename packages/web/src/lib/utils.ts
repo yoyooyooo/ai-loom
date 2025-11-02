@@ -11,7 +11,8 @@ export function formatDateTime(input?: string | Date | null): string {
   try {
     if (!input) return '-'
     const d = typeof input === 'string' ? parseISO(input) : input
-    const when = isNaN((d as Date).getTime()) && typeof input === 'string' ? new Date(input) : (d as Date)
+    const when =
+      isNaN((d as Date).getTime()) && typeof input === 'string' ? new Date(input) : (d as Date)
     if (isNaN(when.getTime())) return '-'
     return formatT(when, 'yyyy-MM-dd HH:mm:ss')
   } catch {
@@ -23,7 +24,8 @@ export function formatDateDay(input?: string | Date | null): string {
   try {
     if (!input) return '-'
     const d = typeof input === 'string' ? parseISO(input) : input
-    const when = isNaN((d as Date).getTime()) && typeof input === 'string' ? new Date(input) : (d as Date)
+    const when =
+      isNaN((d as Date).getTime()) && typeof input === 'string' ? new Date(input) : (d as Date)
     if (isNaN(when.getTime())) return '-'
     return formatT(when, 'yyyy-MM-dd')
   } catch {

@@ -2,7 +2,11 @@ import React from 'react'
 import { describe, it, beforeEach, afterEach, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { subscribeChatEvents } from '@/features/codex-chat/services/ws'
-import { chatTurnActions, useChatTurnStore } from '@/features/codex-chat/stores/chat-turns'
+import {
+  chatTurnActions,
+  useChatTurnStore,
+  chatTurnSelectors
+} from '@/features/codex-chat/stores/chat-turns'
 import { TurnAssistantView } from '@/features/codex-chat/components/turn-item'
 
 vi.mock('@/lib/ws/singleton')
@@ -27,12 +31,15 @@ describe('UI：thinking 步骤去重（WS 路径）', () => {
     __emit('chat.reasoning.end', { conversationId: 'conv-think', text })
     __emit('chat.reasoning.end', { conversationId: 'conv-think', text })
     // 加一个 exec 步骤，确保 thinking 在 steps 列表中（非预览）
-    __emit('chat.tool.exec.begin', { conversationId: 'conv-think', callId: 'c1', command: ['bash', '-lc', 'echo ok'] })
+    __emit('chat.tool.exec.begin', {
+      conversationId: 'conv-think',
+      callId: 'c1',
+      command: ['bash', '-lc', 'echo ok']
+    })
     __emit('chat.message.completed', { conversationId: 'conv-think', text: 'ok' })
     __emit('chat.turn.complete', { conversationId: 'conv-think' })
 
-    const st = useChatTurnStore.getState()
-    const t = st.turns[st.turns.length - 1]
+    const t = chatTurnSelectors.currentTurns(useChatTurnStore.getState()).at(-1)!
     render(<TurnAssistantView turn={t} />)
     fireEvent.click(screen.getByText(/Finished working/))
     // thinking: Plan 只出现一次
@@ -40,4 +47,3 @@ describe('UI：thinking 步骤去重（WS 路径）', () => {
     expect(nodes.length).toBe(1)
   })
 })
-

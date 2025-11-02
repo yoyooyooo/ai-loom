@@ -12,6 +12,7 @@
 
 ## 归一化 `chat.*` 事件
 
+<a id="mock-session"></a>
 ## 会话事件
 
 1) chat.session.new
@@ -24,6 +25,7 @@
 {"jsonrpc":"2.0","method":"chat.session.resumed","params":{"conversationId":"019a0c27-2133-7202-9354-f434d88cb409","eventId":"2","ts":"2025-10-23T12:00:01Z"}}
 ```
 
+<a id="mock-message"></a>
 ## 答案/失败/中止
 
 3) chat.message.delta
@@ -36,6 +38,12 @@
 {"jsonrpc":"2.0","method":"chat.message.completed","params":{"text":"等于 4。","eventId":"4","ts":"2025-10-23T12:00:03Z"}}
 ```
 
+4.1) chat.message.delta（迟到的尾段 → 应比较 `eventId` 后忽略）
+```
+{"jsonrpc":"2.0","method":"chat.message.delta","params":{"delta":"4。","eventId":"4","ts":"2025-10-23T12:00:03.100Z"}}
+```
+> 说明：若 `eventId` 未超过上一步 `chat.message.completed` 的事件号，前端需丢弃，以免重复开启新 turn。
+
 5) chat.message.failed
 ```
 {"jsonrpc":"2.0","method":"chat.message.failed","params":{"error":{"message":"sendUserMessage request failed: ..."},"eventId":"5","ts":"2025-10-23T12:00:04Z"}}
@@ -46,6 +54,7 @@
 {"jsonrpc":"2.0","method":"chat.message.aborted","params":{"eventId":"6","ts":"2025-10-23T12:00:05Z"}}
 ```
 
+<a id="mock-reasoning"></a>
 ## 思考通道（合并到本轮助手消息内、默认折叠展示）
 
 7) chat.reasoning.delta
@@ -58,6 +67,7 @@
 {"jsonrpc":"2.0","method":"chat.reasoning.end","params":{"text":"结论：…","eventId":"8","ts":"2025-10-23T12:00:07Z"}}
 ```
 
+<a id="mock-exec"></a>
 ## Exec 工具
 
 9) chat.tool.exec.begin
@@ -75,6 +85,7 @@
 {"jsonrpc":"2.0","method":"chat.tool.exec.end","params":{"callId":"call_exec_1","exitCode":0,"durationMs":1200,"stdout":"…（截断）","stderr":"","eventId":"11","ts":"2025-10-23T12:00:09Z"}}
 ```
 
+<a id="mock-mcp"></a>
 ## MCP 工具
 
 12) chat.tool.mcp.begin
@@ -87,6 +98,7 @@
 {"jsonrpc":"2.0","method":"chat.tool.mcp.end","params":{"callId":"call_mcp_1","server":"mcphub","tool":"fetcher-fetch_url","arguments":{"url":"https://example.com"},"result":{"status":200,"content":"…"},"eventId":"13","ts":"2025-10-23T12:00:11Z"}}
 ```
 
+<a id="mock-patch"></a>
 ## Patch 工具（默认开启 per-file diff 透出）
 
 14) chat.tool.patch.begin（包含 changes；默认按路径排序、限流：8 文件 / 20000 字符）
@@ -128,11 +140,59 @@
 {"jsonrpc":"2.0","method":"chat.tool.patch.end","params":{"callId":"call_patch_2","success":false,"stdout":"","stderr":"Patch failed: conflict","eventId":"17","ts":"2025-10-23T12:00:15Z"}}
 ```
 
+<a id="mock-info"></a>
 ## 信息与回合结束
 
 18) chat.info.user_message
 ```
 {"jsonrpc":"2.0","method":"chat.info.user_message","params":{"text":"用户消息已发送","kind":null,"eventId":"18","ts":"2025-10-23T12:00:16Z"}}
+```
+
+20) chat.info.plan_update
+```
+{"jsonrpc":"2.0","method":"chat.info.plan_update","params":{"plan":[{"step":"Do A","status":"completed"},{"step":"Do B","status":"pending"}],"explanation":"刷新计划","eventId":"20","ts":"2025-10-23T12:00:18Z"}}
+```
+
+21) chat.info.turn_diff
+```
+{"jsonrpc":"2.0","method":"chat.info.turn_diff","params":{"diff":"--- a/README.md\n+++ b/README.md\n@@ -1,1 +1,1 @@\n-foo\n+bar\n","eventId":"21","ts":"2025-10-23T12:00:19Z"}}
+```
+
+22) chat.info.approval.exec
+```
+{"jsonrpc":"2.0","method":"chat.info.approval.exec","params":{"callId":"exec_42","command":["bash","-lc","rm -rf /tmp/x"],"cwd":"/Users/yoyo/ai-loom","reason":"危险操作","eventId":"22","ts":"2025-10-23T12:00:20Z"}}
+```
+
+23) chat.info.approval.patch
+```
+{"jsonrpc":"2.0","method":"chat.info.approval.patch","params":{"callId":"patch_1","reason":"批量变更","grantRoot":"/Users/yoyo/ai-loom","changeCount":3,"eventId":"23","ts":"2025-10-23T12:00:21Z"}}
+```
+
+24) chat.info.web_search.begin / end
+```
+{"jsonrpc":"2.0","method":"chat.info.web_search.begin","params":{"callId":"ws_1","eventId":"24","ts":"2025-10-23T12:00:22Z"}}
+{"jsonrpc":"2.0","method":"chat.info.web_search.end","params":{"callId":"ws_1","query":"vite hmr","eventId":"25","ts":"2025-10-23T12:00:23Z"}}
+```
+
+26) chat.info.background
+```
+{"jsonrpc":"2.0","method":"chat.info.background","params":{"message":"已接收消息，但实时订阅建立异常，系统将自动重试。","eventId":"26","ts":"2025-10-23T12:00:24Z"}}
+```
+
+27) chat.info.view_image
+```
+{"jsonrpc":"2.0","method":"chat.info.view_image","params":{"callId":"vi_1","path":"/tmp/screenshot.png","eventId":"27","ts":"2025-10-23T12:00:25Z"}}
+```
+
+28) chat.info.conversation_path
+```
+{"jsonrpc":"2.0","method":"chat.info.conversation_path","params":{"path":"/Users/yoyo/.codex/sessions/.../rollout-0001.jsonl","eventId":"28","ts":"2025-10-23T12:00:26Z"}}
+```
+
+29) chat.info.review.entered / review.exited
+```
+{"jsonrpc":"2.0","method":"chat.info.review.entered","params":{"eventId":"29","ts":"2025-10-23T12:00:27Z"}}
+{"jsonrpc":"2.0","method":"chat.info.review.exited","params":{"eventId":"30","ts":"2025-10-23T12:00:28Z"}}
 ```
 
 19) chat.turn.complete
@@ -142,7 +202,7 @@
 
 ---
 
-提示：以上仅为通知事件示例。真实链路中，请关注后端日志：
+提示：以上仅为通知事件示例。完整事件目录、入环/不入环与字段规范，请参考《Codex Chat WS 事件（SSoT）》的“事件分类索引”和“chat.info.* 事件清单”。真实链路中，请关注后端日志：
 - `rpc ⇐ notification method=codex/event/... event_type=<type>`（上游事件）
 - `bridge → chat.* mapped chat_method=<...>`（映射结果）
 

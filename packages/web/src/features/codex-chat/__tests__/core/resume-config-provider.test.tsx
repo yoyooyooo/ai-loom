@@ -2,13 +2,27 @@ import React, { useEffect } from 'react'
 import { describe, it, beforeEach, afterEach, expect, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, waitFor } from '@testing-library/react'
-import { useResumeAndPoll } from '@/features/codex-chat/services/resume-restore'
+import {
+  hydrateConversation,
+  resetConversationSessionForTests
+} from '@/features/codex-chat/services/conversation-session'
+
+vi.mock('@/lib/ws/singleton')
+import { __resetWsMock } from '@/lib/ws/singleton'
 import { chatTurnActions } from '@/features/codex-chat/stores/chat-turns'
 import { chatApi } from '@/features/codex-chat/services/api'
-import { codexChatProviderActions, getCodexSessionState, useCodexChatProviderStore } from '@/stores/codex-chat-provider'
+import {
+  codexChatProviderActions,
+  getCodexSessionState,
+  useCodexChatProviderStore
+} from '@/stores/codex-chat-provider'
 
 function Host({ conversationKey }: { conversationKey: string }) {
-  useResumeAndPoll(conversationKey)
+  useEffect(() => {
+    hydrateConversation(conversationKey, { tail: 0, forceBaseline: true }).catch((error) => {
+      console.warn('[test] hydrate failed', error)
+    })
+  }, [conversationKey])
   return null
 }
 
@@ -25,6 +39,8 @@ describe('Resume 配置 → Provider Store（overrides/capabilities）', () => {
   beforeEach(() => {
     chatTurnActions.reset()
     codexChatProviderActions.resetAll()
+    resetConversationSessionForTests()
+    __resetWsMock()
     vi.spyOn(chatApi, 'getConfig').mockResolvedValue({
       models: [],
       defaults: { model: 'm', approvalPolicy: 'on-request', sandboxMode: 'workspace-write' }
@@ -33,6 +49,8 @@ describe('Resume 配置 → Provider Store（overrides/capabilities）', () => {
   afterEach(() => {
     chatTurnActions.reset()
     codexChatProviderActions.resetAll()
+    resetConversationSessionForTests()
+    __resetWsMock()
     vi.restoreAllMocks()
   })
 
@@ -56,8 +74,16 @@ describe('Resume 配置 → Provider Store（overrides/capabilities）', () => {
       const def = getCodexSessionState(s, undefined)
       const cur = getCodexSessionState(s, 'conv-cfg')
       // overrides 取 overrides 优先
-      expect(def.overrides).toEqual({ model: 'm-override', approvalPolicy: 'untrusted', sandboxMode: 'read-only' })
-      expect(cur.overrides).toEqual({ model: 'm-override', approvalPolicy: 'untrusted', sandboxMode: 'read-only' })
+      expect(def.overrides).toEqual({
+        model: 'm-override',
+        approvalPolicy: 'untrusted',
+        sandboxMode: 'read-only'
+      })
+      expect(cur.overrides).toEqual({
+        model: 'm-override',
+        approvalPolicy: 'untrusted',
+        sandboxMode: 'read-only'
+      })
       // capabilities.model 取 config.model
       expect(def.capabilities.model).toBe('m2')
       expect(cur.capabilities.model).toBe('m2')
@@ -67,4 +93,3 @@ describe('Resume 配置 → Provider Store（overrides/capabilities）', () => {
     })
   })
 })
-
