@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use clap::Parser;
 use tracing_subscriber::{fmt, EnvFilter};
@@ -11,9 +11,11 @@ mod state;
 mod web;
 mod ws;
 
+use ailoom_executors::providers::codex::CodexProvider;
 use ailoom_fs::FsConfig;
 use ailoom_store::Store;
 use paths::{discover_workspace_root, normalize_path_for_key};
+use services::executors::registry::RuntimeRegistry;
 use state::AppState;
 
 #[derive(Debug, Parser)]
@@ -94,12 +96,19 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(4096);
     let hub = ws::hub::Hub::new(ring_cap);
+    let runtime_registry = RuntimeRegistry::new();
+    let hub_adapter = Some(Arc::new(hub.clone()) as ailoom_executors::SharedEventHub);
+    runtime_registry
+        .register_provider(CodexProvider::new(workspace_root.clone(), hub_adapter))
+        .await;
+
     let app_state = AppState {
         fs: fs_cfg.clone(),
         store,
         root: root.clone(),
         workspace_root: workspace_root.clone(),
         ws_hub: Some(hub.clone()),
+        runtime_registry: runtime_registry.clone(),
     };
     // Phase 2: optional FS watcher (env: AILOOM_FSWATCH_ENABLED=1)
     let _watcher = ws::watch::spawn_watcher(app_state.clone());
@@ -124,8 +133,6 @@ async fn main() -> anyhow::Result<()> {
         });
     }
     let app = router::build_router(app_state.clone(), args.web_dist.clone(), args.no_static);
-    // Init Codex per-conv registry GC (background)
-    services::codex::registry::init_gc();
 
     let bind_addr: SocketAddr = match args.port {
         Some(p) => SocketAddr::from(([127, 0, 0, 1], p)),

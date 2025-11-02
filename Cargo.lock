@@ -50,6 +50,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "ailoom-executors"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "codex-app-server-protocol",
+ "codex-protocol",
+ "command-group",
+ "dirs",
+ "futures-core",
+ "once_cell",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "ailoom-fs"
 version = "0.0.0"
 dependencies = [
@@ -67,6 +89,7 @@ name = "ailoom-server"
 version = "0.0.0"
 dependencies = [
  "ailoom-core",
+ "ailoom-executors",
  "ailoom-fs",
  "ailoom-stitch",
  "ailoom-store",
@@ -80,6 +103,7 @@ dependencies = [
  "codex-protocol",
  "command-group",
  "dirs",
+ "futures-core",
  "futures-util",
  "ignore",
  "libsqlite3-sys",

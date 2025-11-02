@@ -111,7 +111,7 @@
 ---
 
 ## 事件与可观测性
-- 维持现有 WS 事件桥接（`packages/rust/ailoom-server/src/services/codex/bridge.rs`），Phase 2 仅更换发送入口，不改变事件。
+- 维持现有 WS 事件桥接（`packages/rust/crates/ailoom-executors/src/providers/codex/bridge.rs`），Phase 2 仅更换发送入口，不改变事件。
 - 调试：
   - 前端 `VITE_WS_DEBUG=1` 观察事件流。
   - 可追加 `VITE_CHAT_CONFIG_DEBUG=1`（可选）在控制台打印覆盖与发送路径选择。
@@ -150,4 +150,3 @@
     - [ ] “本回合覆盖”提示与清理
 
 > 备注：本文档为规划，Phase 1/2 的具体参数字段名在对齐 Codex 版本与本仓路由命名后可微调；实现时请同步更新此文档与 API 注释。
-

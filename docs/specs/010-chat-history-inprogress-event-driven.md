@@ -70,7 +70,7 @@ params: {
 ## 后端改动
 
 - 位置（参考实现）：
-  - `packages/rust/ailoom-server/src/services/codex/bridge.rs`：在 `map_notification_to_chat_events` 归一化 codex 事件处，识别进行中/收束事件；当检测到状态翻转时，额外 `broadcast(chat.info.turn_state)`（如采用推荐事件）。
+  - `packages/rust/crates/ailoom-executors/src/providers/codex/bridge.rs`：在 `map_notification_to_chat_events` 归一化 codex 事件处，识别进行中/收束事件；当检测到状态翻转时，额外 `broadcast(chat.info.turn_state)`（如采用推荐事件）。
   - `packages/rust/ailoom-server/src/ws/hub.rs::{broadcast, resume_after_chat, tail_chat}`：确保 `chat.info.turn_state` 入环并被 `events.resume` 正确返回。
   - `packages/rust/ailoom-server/src/ws/methods.rs::events.resume`：无特殊改动，仅保证按会话过滤和 `eventId` 序（已有）。
 - 数据一致性：无需新增表结构；状态源自入环事件归约。若后续需要可在会话汇总表持久化 `lastTurnStatus/inProgress` 以支持 REST 方案 A（非本规范必要）。
@@ -141,7 +141,7 @@ params: {
 ## 开发拆解（任务列表）
 
 - 后端（可选）
-  - [ ] 在 `services/codex/bridge.rs` 中落 `chat.info.turn_state`（翻转点）。
+  - [ ] 在 `packages/rust/crates/ailoom-executors/src/providers/codex/bridge.rs` 中落 `chat.info.turn_state`（翻转点）。
   - [ ] 校验 `ws/hub.rs`/`ws/methods.rs` 对该事件的入环与 Resume 行为。
 - 前端
   - [ ] 新增 `convInProgress` store/hook 与事件归约逻辑。
@@ -150,4 +150,3 @@ params: {
   - [ ] E2E 覆盖执行中切换/刷新首帧/断线重连。
 - 文档
   - [ ] 按上述指南补齐 `docs/guide/*` 对应章节（在提 PR 时链接本规范）。
-

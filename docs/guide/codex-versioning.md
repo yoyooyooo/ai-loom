@@ -4,7 +4,7 @@
 
 ## 版本来源
 
-- CLI：`packages/rust/ailoom-server/src/services/codex/app_server.rs`
+- CLI：`packages/rust/crates/ailoom-executors/src/providers/codex/app_server.rs`
   - 默认固定为 `@openai/codex@0.53.0`。
   - 支持通过环境变量 `CODEX_VERSION` 覆盖，例如 `CODEX_VERSION=0.53.0 just server-dev`。
 - Rust 依赖：`packages/rust/ailoom-server/Cargo.toml`
@@ -65,7 +65,7 @@
 
 - 上游仓库：<https://github.com/openai/codex>
 - 相关文件：
-- `packages/rust/ailoom-server/src/services/codex/app_server.rs`
+- `packages/rust/crates/ailoom-executors/src/providers/codex/app_server.rs`
 - `packages/rust/ailoom-server/Cargo.toml`
 - `scripts/check-codex-version.sh`
 - `Justfile` 中的 `codex-codegen`（更新协议类型时配合执行）

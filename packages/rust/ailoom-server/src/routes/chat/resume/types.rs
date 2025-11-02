@@ -13,6 +13,8 @@ pub struct ResumeBody {
     pub path: Option<String>,
     #[serde(rename = "conversationId")]
     pub conversation_id: Option<String>,
+    #[serde(rename = "provider")]
+    pub provider: Option<String>,
 }
 
 #[derive(Deserialize, Default)]

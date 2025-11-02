@@ -11,21 +11,25 @@
 
 ## 2. 抽象与类型
 
-- StandardProvider（对外统一；每 Provider 实现）：
-  - `new_conversation(cwd, config) -> conversationId`
-  - `send_user_message(conversationId, text)`
-  - `interrupt(conversationId)`（CLI：JSON‑RPC；API：取消流）
-  - `ensure_listener(conversationId)`（确保事件源建立）
-  - `close(conversationId, reason)`（终止进程或取消虚拟任务）
-  - `subscribe_raw_events(conversationId) -> Stream<ProviderRawEvent>`
-  - `pid/is_alive`（CLI 可用；API 可返回 None/false）
-- ProviderBridge（每 Provider 实现）：
-  - `map_to_chat_events(raw: ProviderRawEvent) -> Vec<BroadcastEvent>`
-  - `BroadcastEvent { method: String, params: Value, persistent: bool }`
+- `ailoom-executors`（标准层 crate，已落地）提供：
+  - `StandardProvider`：所有 Provider 的统一 trait；
+    - `new_conversation(config: SpawnConfig) -> Result<String, ProviderError>`
+    - `ensure_listener(conversation_id)`：确保监听/恢复；
+    - `send_user_message(conversation_id, text)`；
+    - `interrupt(conversation_id)`（CLI：JSON-RPC；API：取消流/请求）；
+    - `terminate(conversation_id)`：终止该会话运行时；
+    - `is_alive(conversation_id)` / `pid(conversation_id)`（默认实现可返回 `false`/`None`）；
+    - `runtime_snapshots()`：返回 `Vec<RuntimeSnapshot>`；
+    - `subscribe_raw_events(conversation_id)`：默认 `Unsupported`，后续按需开放原生事件。
+  - `SpawnConfig`：创建会话时的模型/自定义配置；
+  - `RuntimeSnapshot` + `RuntimeStatus`：统一的在线状态结构；
+  - `ProviderError`：包装 Provider 侧错误（Unavailable/Unsupported/Timeout/...）。
+- Provider 侧桥接（Codex 先行）位于 `packages/rust/crates/ailoom-executors/src/providers/codex/bridge.rs`，负责将运行时原生事件映射为 `chat.*`；后续其它 Provider 按相同模式实现自有 bridge。
 - 运行时持有：
-  - CLI：`AsyncGroupChild` + I/O/JSON‑RPC；API：流式任务与取消句柄。
+  - CLI：`CodexProvider` 内部维护子进程句柄（`CodexClient`），并在 GC 时清理；
+  - API：待新增 Provider 将持有 HTTP 流的取消句柄。
 
-说明：Codex 可将现有 `client.rs/transport.rs/bridge.rs` 适配到上述接口；其余 CLI/API 以同样模式扩展。
+说明：新 Provider 只需实现 `StandardProvider` 并在启动时注册，即可复用 Registry/WS/REST 全路径。
 
 ## 3. Registry 与状态机
 
@@ -83,4 +87,3 @@
 - 入环边界：严格按 SSoT 禁止 `delta/section_break` 入环，避免 resume 噪声。
 - 资源饱和：MAX_CHILDREN 策略明确；无可回收时直观报错与 UI 提示。
 - 跨平台：Unix 进程组；Windows Job 对象/退化；API 型仅需请求取消。
-

@@ -26,6 +26,7 @@ async fn start_server_with_watch(root: &PathBuf) -> (SocketAddr, tokio::task::Jo
         root: ws_root.clone(),
         workspace_root: ws_root,
         ws_hub: Some(hub),
+        runtime_registry: ailoom_server::services::executors::registry::RuntimeRegistry::new(),
     };
     let _watch = ws::watch::spawn_watcher(app_state.clone());
     let app = router::build_router(app_state, PathBuf::from("packages/web/dist"), true);

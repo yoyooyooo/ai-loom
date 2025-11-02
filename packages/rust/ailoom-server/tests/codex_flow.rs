@@ -2,8 +2,9 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use ailoom_executors::{providers::codex::CodexProvider, SpawnConfig};
+use ailoom_server::services::executors::registry::RuntimeRegistry;
 use anyhow::Result;
-use codex_app_server_protocol::NewConversationParams;
 use tokio::time::timeout;
 
 /// 覆盖 per-conv 流程：新建 + 发送 + 关闭 → 第二轮重复
@@ -17,51 +18,48 @@ async fn full_flow() -> Result<()> {
         std::env::set_var("CODEX_VERSION", "0.53.0");
     }
     let workspace = std::env::current_dir()?;
-    std::env::set_var("AILOOM_CODEX_CHILD_GC_INTERVAL_MS", "0");
-    let cid1 = run_round(&workspace, "1+1=?").await?;
+    std::env::set_var("AILOOM_EXEC_GC_INTERVAL_MS", "0");
+
+    let registry = RuntimeRegistry::new();
+    registry
+        .register_provider(CodexProvider::new(workspace.clone(), None))
+        .await;
+
+    let cid1 = run_round(registry.clone(), "1+1=?").await?;
     ensure_session_contains_answer(&cid1, "2").await?;
-    let cid2 = run_round(&workspace, "2+2=?").await?;
+    let cid2 = run_round(registry.clone(), "2+2=?").await?;
     ensure_session_contains_answer(&cid2, "4").await?;
     Ok(())
 }
 
-async fn run_round(workspace: &std::path::Path, prompt: &str) -> Result<String> {
-    let hub = None;
-    let mut params = NewConversationParams::default();
-    params.cwd = Some(workspace.to_string_lossy().to_string());
+async fn run_round(registry: RuntimeRegistry, prompt: &str) -> Result<String> {
+    let spawn_config = SpawnConfig::default();
     let cid = timeout(
         Duration::from_secs(90),
-        ailoom_server::services::codex::registry::spawn_new(
-            workspace.to_path_buf(),
-            hub.clone(),
-            params.clone(),
-        ),
+        registry.new_conversation("codex", spawn_config.clone()),
     )
     .await
-    .map_err(|_| anyhow::anyhow!("timeout waiting for spawn_new"))??;
+    .map_err(|_| anyhow::anyhow!("timeout waiting for new_conversation"))?
+    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
     timeout(
         Duration::from_secs(90),
-        ailoom_server::services::codex::registry::send_user_message(
-            workspace.to_path_buf(),
-            hub.clone(),
-            &cid,
-            prompt.to_string(),
-        ),
+        registry.send_user_message("codex", &cid, prompt),
     )
     .await
-    .map_err(|_| anyhow::anyhow!("timeout waiting for send_user_message"))??;
+    .map_err(|_| anyhow::anyhow!("timeout waiting for send_user_message"))?
+    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
     timeout(
         Duration::from_secs(45),
-        ailoom_server::services::codex::registry::interrupt_conversation(
-            workspace.to_path_buf(),
-            hub.clone(),
-            &cid,
-        ),
+        registry.interrupt_conversation("codex", &cid),
     )
     .await
-    .map_err(|_| anyhow::anyhow!("timeout waiting for interrupt_conversation"))??;
+    .map_err(|_| anyhow::anyhow!("timeout waiting for interrupt_conversation"))?
+    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let _ = ailoom_server::services::codex::registry::hard_kill(&cid).await;
+    let _ = registry.terminate_conversation("codex", &cid).await;
     Ok(cid)
 }
 

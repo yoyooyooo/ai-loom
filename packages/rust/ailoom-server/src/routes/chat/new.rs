@@ -1,12 +1,13 @@
-use crate::services::codex::bridge::store_conversation_id;
-use crate::services::codex::registry;
 use crate::state::AppState;
 use crate::ws::chat_events::{event, ChatEvent};
 use axum::{http::StatusCode, response::IntoResponse, Json};
-use codex_app_server_protocol::NewConversationParams;
 use codex_protocol::{config_types::SandboxMode, protocol::AskForApproval};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Map, Value};
+
+use ailoom_executors::SpawnConfig;
+
+use ailoom_executors::providers::codex::store_conversation_id;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,6 +17,7 @@ pub struct NewConversationRequest {
     pub sandbox_mode: Option<SandboxMode>,
     /// 可选：首条用户消息。提供该字段时，将在创建会话后立即发送，避免“只建不跑”。
     pub text: Option<String>,
+    pub provider: Option<String>,
 }
 
 pub async fn new_conversation(
@@ -24,35 +26,46 @@ pub async fn new_conversation(
 ) -> impl IntoResponse {
     // 每会话子进程：spawn_new → newConversation → ensure_listener
     let req = body.map(|Json(inner)| inner).unwrap_or_default();
-    let mut params = NewConversationParams {
-        cwd: Some(state.workspace_root.to_string_lossy().to_string()),
-        ..Default::default()
-    };
-    if let Some(model) = req.model {
-        params.model = Some(model);
+    let provider = req.provider.clone().unwrap_or_else(|| "codex".to_string());
+
+    let mut options = Map::new();
+    if let Some(policy) = req.approval_policy.clone() {
+        options.insert(
+            "approvalPolicy".into(),
+            serde_json::to_value(policy).unwrap_or(Value::Null),
+        );
     }
-    if let Some(policy) = req.approval_policy {
-        params.approval_policy = Some(policy);
-    }
-    if let Some(sandbox) = req.sandbox_mode {
-        params.sandbox = Some(sandbox);
+    if let Some(sandbox) = req.sandbox_mode.clone() {
+        options.insert(
+            "sandbox".into(),
+            serde_json::to_value(sandbox).unwrap_or(Value::Null),
+        );
     }
 
-    let conversation_id =
-        match registry::spawn_new(state.workspace_root.clone(), state.ws_hub.clone(), params).await
-        {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::warn!(target:"codex", error=%e, "spawn_new 失败");
-                return (
-                    StatusCode::BAD_GATEWAY,
-                    format!("启动 Codex 会话失败：{}", e),
-                )
-                    .into_response();
-            }
-        };
-    tracing::info!(target:"codex", conversationId=%conversation_id, "HTTP /api/chat/conversations → OK");
-    store_conversation_id(&conversation_id);
+    let spawn_config = SpawnConfig {
+        model: req.model.clone(),
+        options: if options.is_empty() {
+            Value::Null
+        } else {
+            Value::Object(options)
+        },
+    };
+
+    let conversation_id = match state
+        .runtime_registry
+        .new_conversation(&provider, spawn_config)
+        .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::warn!(target:"provider", provider=%provider, error=%e, "spawn_new 失败");
+            return (StatusCode::BAD_GATEWAY, format!("启动会话失败：{}", e)).into_response();
+        }
+    };
+    tracing::info!(target:"provider", provider=%provider, conversationId=%conversation_id, "HTTP /api/chat/conversations → OK");
+    if provider == "codex" {
+        store_conversation_id(&conversation_id);
+    }
     // Broadcast session.new for UI to bind
     if let Some(hub) = state.ws_hub.clone() {
         let (m, p) = event(ChatEvent::SessionNew {
@@ -74,12 +87,14 @@ pub async fn new_conversation(
                 json!({"conversationId": conversation_id, "text": text}),
             );
         }
-        let ws_root = state.workspace_root.clone();
-        let ws_hub = state.ws_hub.clone();
         let cid = conversation_id.clone();
         let payload = text.clone();
+        let provider_clone = provider.clone();
+        let runtime_registry = state.runtime_registry.clone();
         tokio::spawn(async move {
-            let _ = registry::send_user_message(ws_root, ws_hub, &cid, payload).await;
+            let _ = runtime_registry
+                .send_user_message(&provider_clone, &cid, &payload)
+                .await;
         });
     }
 

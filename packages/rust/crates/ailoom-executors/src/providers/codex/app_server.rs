@@ -5,7 +5,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
 use super::{client::AppServerClient, transport::JsonRpcPeer};
-use crate::ws::hub::Hub;
+use crate::SharedEventHub;
 
 #[derive(Clone)]
 pub struct CodexClient {
@@ -70,8 +70,8 @@ impl CodexClient {
         Ok(client)
     }
 
-    pub fn register_ws_hub(&self, hub: Hub) {
-        self.app.register_ws_hub(hub);
+    pub fn register_event_hub(&self, hub: SharedEventHub) {
+        self.app.register_event_hub(hub);
     }
 
     pub fn app(&self) -> Arc<AppServerClient> {

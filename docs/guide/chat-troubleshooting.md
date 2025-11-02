@@ -41,8 +41,8 @@
 - 订阅与分发：`packages/web/src/features/codex-chat/services/ws.ts`
 - Store（Zustand）：`packages/web/src/features/codex-chat/stores/chat.ts`
 - 请求封装（axios + RxJS）：`packages/web/src/features/codex-chat/services/api.ts`、`packages/web/src/lib/request.ts`
-- 后端桥接：`packages/rust/ailoom-server/src/services/codex/bridge.rs`
-- Codex 客户端与日志：`packages/rust/ailoom-server/src/services/codex/client.rs`
+- 后端桥接：`packages/rust/crates/ailoom-executors/src/providers/codex/bridge.rs`
+- Codex 客户端与日志：`packages/rust/crates/ailoom-executors/src/providers/codex/client.rs`
 - REST 路由：`packages/rust/ailoom-server/src/routes/chat/{new.rs,send.rs,interrupt.rs,resume/*}`
 
 ## 常用命令

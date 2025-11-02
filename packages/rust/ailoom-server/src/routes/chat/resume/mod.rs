@@ -2,7 +2,6 @@ mod config;
 mod event_accumulator;
 mod handler;
 mod history;
-pub(crate) mod io;
 mod rollout_parser;
 pub(crate) mod service;
 mod turn_types;

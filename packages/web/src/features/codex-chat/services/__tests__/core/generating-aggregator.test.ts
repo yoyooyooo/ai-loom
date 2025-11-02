@@ -19,26 +19,34 @@ vi.mock('@/lib/ws/singleton', () => ({
 }))
 
 describe('generating-aggregator', () => {
-  it('on/off 状态按事件推进，compact 完成不关灯', async () => {
+  it('updates state via runtime events', async () => {
     const stop = initGlobalGeneratingAggregator()
-    const seen: any[] = []
-    const sub = generatingState$().subscribe((s) => seen.push(s))
+    const observed: any[] = []
+    const sub = generatingState$().subscribe((s) => observed.push(s))
 
-    // A: delta 点火
-    hoisted.src.next({ method: 'chat.message.delta', params: { conversationId: 'A', eventId: 1 } })
-    // A: completed（非 compact）→ 仍保持点亮，等待 turn.complete 关灯
-    hoisted.src.next({ method: 'chat.message.completed', params: { conversationId: 'A', eventId: 2, text: 'done' } })
-    // B: compact 完成 → 不点火
-    hoisted.src.next({ method: 'chat.message.delta', params: { conversationId: 'B', eventId: 3 } })
-    hoisted.src.next({ method: 'chat.message.completed', params: { conversationId: 'B', eventId: 4, text: 'Compact task completed' } })
-    // A/B turn.complete → 关灯
-    hoisted.src.next({ method: 'chat.turn.complete', params: { conversationId: 'A', eventId: 6 } })
-    hoisted.src.next({ method: 'chat.turn.complete', params: { conversationId: 'B', eventId: 5 } })
+    hoisted.src.next({
+      method: 'session.runtime',
+      params: {
+        items: [
+          { provider: 'codex', conversationId: 'A', generating: true },
+          { provider: 'codex', conversationId: 'B', generating: false }
+        ]
+      }
+    })
 
-    const last = seen.at(-1)
-    expect(last.byKey['A'].generating).toBe(false)
-    expect(last.byKey['B']).toBeDefined()
-    expect(last.byKey['B'].generating).toBe(false)
+    hoisted.src.next({
+      method: 'chat.info.runtime.generating',
+      params: { provider: 'codex', conversationId: 'B', generating: true, eventId: 10 }
+    })
+    hoisted.src.next({
+      method: 'chat.info.runtime.generating',
+      params: { provider: 'codex', conversationId: 'A', generating: false, eventId: 11 }
+    })
+
+    const last = observed.at(-1)
+    expect(last.byKey['codex|B']?.generating).toBe(true)
+    expect(last.byKey['codex|A']).toBeUndefined()
+
     sub.unsubscribe()
     stop()
     stopGlobalGeneratingAggregator()

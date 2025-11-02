@@ -7,9 +7,9 @@ use crate::{
         codex_not_reachable_hint, conversation_id_of, derive_first_user_message_from_rollout,
         map_error_to_status, normalize_conversation_item, resolve_rollout_path,
     },
-    services::codex::app_server::get_or_start,
     state::AppState,
 };
+use ailoom_executors::providers::codex::get_or_start;
 
 pub async fn get_conversation(
     Path(conversation_id): Path<String>,

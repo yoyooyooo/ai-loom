@@ -30,6 +30,7 @@ async fn start_server(root: &PathBuf) -> (SocketAddr, tokio::task::JoinHandle<()
         root: ws_root.clone(),
         workspace_root: ws_root,
         ws_hub: Some(hub.clone()),
+        runtime_registry: ailoom_server::services::executors::registry::RuntimeRegistry::new(),
     };
     let app = router::build_router(app_state, PathBuf::from("packages/web/dist"), true);
     let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))

@@ -1,32 +1,28 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use axum::{extract::Query, http::StatusCode, response::IntoResponse, Json};
 use codex_app_server_protocol::{
     ListConversationsParams, NewConversationParams, ResumeConversationParams,
 };
 
+use ailoom_executors::ProviderError;
+
 use crate::routes::chat::utils::conversation_path_of;
-use crate::services::codex::app_server::get_or_start;
 use crate::state::AppState;
 use crate::ws::chat_events::{ChatEvent, ChatHistoryEntry};
 
 use super::config::build_resume_config;
 use super::event_accumulator::EventAccumulator;
 use super::history::convert_history_item;
-use super::io::lookup_path_by_conversation_id;
 use super::rollout_parser::load_rollout_snapshot;
 use super::service::broadcast_resume;
 use super::types::{ResumeBody, ResumeConfigResponse, ResumeQuery};
-
-fn is_per_conv_mode() -> bool {
-    std::env::var("AILOOM_CODEX_MODE")
-        .ok()
-        .map(|v| v == "per_conv")
-        .unwrap_or(true)
-}
+use ailoom_executors::providers::codex::{
+    get_or_start, lookup_path_by_conversation_id, AppServerClient,
+};
 
 async fn resume_from_path(
-    app: &crate::services::codex::client::AppServerClient,
+    app: &AppServerClient,
     state: &AppState,
     path: &str,
 ) -> Result<
@@ -102,38 +98,16 @@ async fn resume_from_path(
     };
 
     // per-conv：优先离线恢复（不触发全局 app-server 的 resumeConversation，避免额外 sessionConfigured）
-    let (conversation_id, initial_messages) = if is_per_conv_mode() {
-        if let Some(cid) = cid_from_snapshot.clone() {
-            (cid, Vec::new())
-        } else {
-            // 非常态：无法从快照拿到会话 id，只能回退到在线 resume
-            let resp = app
-                .resume_conversation(ResumeConversationParams {
-                    path: Some(PathBuf::from(path)),
-                    conversation_id: None,
-                    history: None,
-                    overrides: Some(override_params.clone()),
-                })
-                .await
-                .map_err(|e| {
-                    tracing::warn!(target:"codex", error=%e, "resumeConversation 调用失败");
-                    (
-                        StatusCode::BAD_GATEWAY,
-                        format!("resumeConversation 调用失败：{}", e),
-                    )
-                })?;
-            (
-                resp.conversation_id.to_string(),
-                resp.initial_messages.unwrap_or_default(),
-            )
-        }
+    let (conversation_id, initial_messages) = if let Some(cid) = cid_from_snapshot.clone() {
+        (cid, Vec::new())
     } else {
+        // 非常态：无法从快照拿到会话 id，只能回退到在线 resume
         let resp = app
             .resume_conversation(ResumeConversationParams {
                 path: Some(PathBuf::from(path)),
                 conversation_id: None,
                 history: None,
-                overrides: Some(override_params),
+                overrides: Some(override_params.clone()),
             })
             .await
             .map_err(|e| {
@@ -183,18 +157,10 @@ async fn resume_from_path(
         }
     }
 
-    // 在 per-conv 模式下，不在“HTTP resume”路径上对全局实例建立监听，避免与会话专属子进程产生“双监听”。
-    // 转由 registry::ensure_listener 为该会话拉起/确保子进程监听。
-    if is_per_conv_mode() {
-        let _ = crate::services::codex::registry::ensure_listener(
-            state.workspace_root.clone(),
-            state.ws_hub.clone(),
-            &conversation_id,
-        )
+    let _ = state
+        .runtime_registry
+        .warm_conversation("codex", &conversation_id)
         .await;
-    } else {
-        let _ = app.ensure_listener(&conversation_id).await;
-    }
     Ok((
         conversation_id,
         history_messages,
@@ -210,8 +176,16 @@ pub async fn resume_conversation(
     maybe_body: Option<Json<ResumeBody>>,
 ) -> impl IntoResponse {
     let body = maybe_body.map(|b| b.0).unwrap_or_default();
+    let provider = body.provider.as_deref().unwrap_or("codex");
 
     if let Some(path) = body.path.as_ref() {
+        if provider != "codex" {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("provider {} does not support path resume", provider),
+            )
+                .into_response();
+        }
         tracing::info!(target:"codex", path=%path, "HTTP resume → resumeConversation(explicit)");
         // 仅在需要在线 resume 时再懒加载全局 client
         let client = match get_or_start(Some(state.workspace_root.clone())).await {
@@ -221,7 +195,7 @@ pub async fn resume_conversation(
             }
         };
         if let Some(hub) = state.ws_hub.clone() {
-            client.register_ws_hub(hub);
+            client.register_event_hub(Arc::new(hub) as ailoom_executors::SharedEventHub);
         }
         let app = client.app();
         return match resume_from_path(&app, &state, path).await {
@@ -266,70 +240,62 @@ pub async fn resume_conversation(
         tracing::info!(
             target:"codex",
             conversationId=%conversation_id,
+            provider=%provider,
             "HTTP resume → resumeConversation(by id)"
         );
-        // per-conv：如果该会话已由本服务托管（有子进程），则避免任何在线 resume，直接确保监听并返回最小快照
-        if is_per_conv_mode() && crate::services::codex::registry::has_child(conversation_id).await
-        {
-            let _ = crate::services::codex::registry::ensure_listener(
-                state.workspace_root.clone(),
-                state.ws_hub.clone(),
-                conversation_id,
-            )
+        let warm_result = state
+            .runtime_registry
+            .warm_conversation(provider, conversation_id)
             .await;
-            // 计算 uptoEventId，按 SSoT 走 WS 恢复
-            let upto_event_id = if let Some(hub) = state.ws_hub.clone() {
-                let tail = hub.tail_chat(Some(conversation_id), None, 1);
-                tail.into_iter().map(|e| e.id).max()
-            } else {
-                None
-            };
-            return (
-                StatusCode::OK,
-                Json(super::types::ResumeResponsePayload {
-                    conversation_id: conversation_id.clone(),
-                    history: Vec::new(),
-                    events: Vec::new(),
-                    turns: Vec::new(),
-                    config: None,
-                    in_progress: None,
-                    upto_event_id,
-                    turns_schema_version: 1,
-                }),
-            )
-                .into_response();
+
+        if provider != "codex" {
+            match warm_result {
+                Ok(()) => {
+                    let upto_event_id = if let Some(hub) = state.ws_hub.clone() {
+                        let tail = hub.tail_chat(Some(conversation_id), None, 1);
+                        tail.into_iter().map(|e| e.id).max()
+                    } else {
+                        None
+                    };
+                    return (
+                        StatusCode::OK,
+                        Json(super::types::ResumeResponsePayload {
+                            conversation_id: conversation_id.clone(),
+                            history: Vec::new(),
+                            events: Vec::new(),
+                            turns: Vec::new(),
+                            config: None,
+                            in_progress: None,
+                            upto_event_id,
+                            turns_schema_version: 1,
+                        }),
+                    )
+                        .into_response();
+                }
+                Err(err) => {
+                    let status = match err {
+                        ProviderError::Unavailable(_) => StatusCode::NOT_FOUND,
+                        _ => StatusCode::BAD_GATEWAY,
+                    };
+                    return (
+                        status,
+                        format!(
+                            "provider {} 无法恢复会话 {}：{}",
+                            provider, conversation_id, err
+                        ),
+                    )
+                        .into_response();
+                }
+            }
         }
-        // per-conv：如已托管，直接确保监听并返回最小快照（不在线 resume）
-        if is_per_conv_mode() && crate::services::codex::registry::has_child(conversation_id).await
-        {
-            let _ = crate::services::codex::registry::ensure_listener(
-                state.workspace_root.clone(),
-                state.ws_hub.clone(),
-                conversation_id,
-            )
-            .await;
-            let upto_event_id = if let Some(hub) = state.ws_hub.clone() {
-                hub.tail_chat(Some(conversation_id), None, 1)
-                    .into_iter()
-                    .map(|e| e.id)
-                    .max()
-            } else {
-                None
-            };
-            return (
-                StatusCode::OK,
-                Json(super::types::ResumeResponsePayload {
-                    conversation_id: conversation_id.clone(),
-                    history: Vec::new(),
-                    events: Vec::new(),
-                    turns: Vec::new(),
-                    config: None,
-                    in_progress: None,
-                    upto_event_id,
-                    turns_schema_version: 1,
-                }),
-            )
-                .into_response();
+
+        if let Err(err) = warm_result {
+            tracing::warn!(
+                target:"codex",
+                conversationId=%conversation_id,
+                error=%err,
+                "runtime_registry.warm_conversation 失败，尝试 codex rollout 恢复"
+            );
         }
         // 需要在线能力时再懒加载 client
         let client = match get_or_start(Some(state.workspace_root.clone())).await {
@@ -339,7 +305,7 @@ pub async fn resume_conversation(
             }
         };
         if let Some(hub) = state.ws_hub.clone() {
-            client.register_ws_hub(hub);
+            client.register_event_hub(Arc::new(hub) as ailoom_executors::SharedEventHub);
         }
         let app = client.app();
         if let Some(path) = lookup_path_by_conversation_id(&app, conversation_id).await {
@@ -394,13 +360,21 @@ pub async fn resume_conversation(
         }
     }
 
-    // 懒加载 client 仅在 latest 分支需要
+    if provider != "codex" {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("provider {} 不支持默认 resume", provider),
+        )
+            .into_response();
+    }
+
+    // 懒加载 client 仅在 codex latest 分支需要
     let client = match get_or_start(Some(state.workspace_root.clone())).await {
         Ok(c) => c,
         Err(e) => return (StatusCode::BAD_GATEWAY, format!("Codex 未就绪：{}", e)).into_response(),
     };
     if let Some(hub) = state.ws_hub.clone() {
-        client.register_ws_hub(hub);
+        client.register_event_hub(Arc::new(hub) as ailoom_executors::SharedEventHub);
     }
     let app = client.app();
     if let Ok(list) = app

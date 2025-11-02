@@ -1,6 +1,7 @@
 use std::time::Duration;
 
-use codex_app_server_protocol::NewConversationParams;
+use ailoom_executors::{providers::codex::CodexProvider, SpawnConfig};
+use ailoom_server::services::executors::registry::RuntimeRegistry;
 use tokio::time::timeout;
 
 /// 验证 per-conv 子进程两次连续创建不会阻塞。
@@ -15,31 +16,30 @@ async fn spawn_two_conversations() -> anyhow::Result<()> {
         std::env::set_var("CODEX_VERSION", "0.53.0");
     }
     // 关闭自动 GC，避免测试期子进程被背景回收
-    std::env::set_var("AILOOM_CODEX_CHILD_GC_INTERVAL_MS", "0");
+    std::env::set_var("AILOOM_EXEC_GC_INTERVAL_MS", "0");
 
     let workspace = std::env::current_dir()?;
-    let mut params = NewConversationParams::default();
-    params.cwd = Some(workspace.to_string_lossy().to_string());
+    let registry = RuntimeRegistry::new();
+    registry
+        .register_provider(CodexProvider::new(workspace.clone(), None))
+        .await;
 
+    let spawn_config = SpawnConfig::default();
     let cid1 = timeout(
         Duration::from_secs(30),
-        ailoom_server::services::codex::registry::spawn_new(
-            workspace.clone(),
-            None,
-            params.clone(),
-        ),
+        registry.new_conversation("codex", spawn_config.clone()),
     )
     .await??;
     let cid2 = timeout(
         Duration::from_secs(30),
-        ailoom_server::services::codex::registry::spawn_new(workspace.clone(), None, params),
+        registry.new_conversation("codex", spawn_config),
     )
     .await??;
 
     assert_ne!(cid1, cid2);
 
-    let _ = ailoom_server::services::codex::registry::hard_kill(&cid1).await;
-    let _ = ailoom_server::services::codex::registry::hard_kill(&cid2).await;
+    let _ = registry.terminate_conversation("codex", &cid1).await;
+    let _ = registry.terminate_conversation("codex", &cid2).await;
 
     Ok(())
 }

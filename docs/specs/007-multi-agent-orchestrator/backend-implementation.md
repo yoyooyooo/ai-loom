@@ -2,9 +2,9 @@
 
 ## 组件划分
 
-- Codex 客户端（已有）：`services/codex/client.rs`
+- Codex 客户端（已有）：`packages/rust/crates/ailoom-executors/src/providers/codex/client.rs`
   - `new_conversation`、`resume_conversation`、`add_conversation_listener/ensure_listener`、`send_user_message`、`interrupt_conversation`。
-- 归一化桥（已有）：`services/codex/bridge.rs`
+- 归一化桥（已有）：`packages/rust/crates/ailoom-executors/src/providers/codex/bridge.rs`
   - `codex/event/*` → `chat.*`；附 `conversationId` 与 `provider:'codex'`；入 Ring（持久）与 `broadcast_ephemeral`（瞬时）。
 - WS Hub/Ring（已有）：`ws/hub.rs`、`ws/methods.rs`
   - 注入 `eventId/ts`；支持 `events.resume({ topic:'chat', filter:{ conversationId, providerId? } })`。
@@ -106,4 +106,3 @@ fn handle_spawn(parent_cid: &str, d: SpawnDirective) {
 - 归一化/渲染不变：仅新增信息类事件；所有 `chat.message.*`/`chat.reasoning.*`/`chat.tool.*` 行为保持一致。
 - Ring 压力：多子会话并发会增量事件量；建议支持 `AILOOM_WS_RING_CAP` 适当调大，并对工具输出做节流。
 - 安全策略：沿用 `approvalPolicy/sandbox`；禁止子会话放宽权限；必要时提供白名单模型/目录。
-

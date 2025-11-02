@@ -21,17 +21,21 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::instrument;
 
-use crate::ws::hub::Hub;
+use crate::SharedEventHub;
 
 use super::bridge::{
     active_conversation_ids, map_notification, map_notification_to_chat_events, BroadcastEvent,
 };
 use super::transport::{JsonRpcCallbacks, JsonRpcPeer};
 
+pub trait RuntimeEventObserver: Send + Sync {
+    fn on_runtime_event(&self, method: &str, params: &Value);
+}
+
 #[derive(Clone)]
 pub struct AppServerClient {
     rpc: OnceLock<JsonRpcPeer>,
-    hub: Arc<Mutex<Option<Hub>>>,
+    hub: Arc<Mutex<Option<SharedEventHub>>>,
     // conversation_id -> (subscription_id, refcount)
     subscriptions: Arc<Mutex<HashMap<String, (uuid::Uuid, usize)>>>,
     // 强自愈：额外叠加的“并行监听”订阅（可能存在多个 sub_id）
@@ -40,6 +44,7 @@ pub struct AppServerClient {
     active_conversations: Arc<Mutex<HashSet<String>>>,
     // 每会话监听的并发门闩：避免重复 addConversationListener
     listener_guards: Arc<Mutex<HashMap<String, Arc<AsyncMutex<()>>>>>,
+    runtime_observer: Arc<Mutex<Option<Arc<dyn RuntimeEventObserver>>>>,
 }
 
 impl AppServerClient {
@@ -51,6 +56,7 @@ impl AppServerClient {
             extra_subscriptions: Arc::new(Mutex::new(HashMap::new())),
             active_conversations: Arc::new(Mutex::new(HashSet::new())),
             listener_guards: Arc::new(Mutex::new(HashMap::new())),
+            runtime_observer: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -79,8 +85,12 @@ impl AppServerClient {
         self.rpc.get().expect("Codex RPC peer not attached")
     }
 
-    pub fn register_ws_hub(&self, hub: Hub) {
+    pub fn register_event_hub(&self, hub: SharedEventHub) {
         *self.hub.lock().unwrap() = Some(hub);
+    }
+
+    pub fn register_runtime_observer(&self, observer: Arc<dyn RuntimeEventObserver>) {
+        *self.runtime_observer.lock().unwrap() = Some(observer);
     }
 
     /// 调试/观测：返回 (conversationId, refCount) 列表的快照
@@ -578,6 +588,11 @@ impl JsonRpcCallbacks for AppServerClient {
         if let Some(hub) = self.hub.lock().unwrap().clone() {
             // 先映射 runtime → chat.*（简化：不做强自愈相关的短窗去重）
             let mapped = map_notification_to_chat_events(&notification);
+            if let Some(observer) = self.runtime_observer.lock().unwrap().clone() {
+                for event in mapped.iter() {
+                    observer.on_runtime_event(&event.method, &event.params);
+                }
+            }
             for BroadcastEvent {
                 method,
                 params,
@@ -590,11 +605,17 @@ impl JsonRpcCallbacks for AppServerClient {
                     hub.broadcast_ephemeral(method, params);
                 }
             }
+            let mapped_generic = map_notification(&notification);
+            if let Some(observer) = self.runtime_observer.lock().unwrap().clone() {
+                for event in mapped_generic.iter() {
+                    observer.on_runtime_event(&event.method, &event.params);
+                }
+            }
             for BroadcastEvent {
                 method,
                 params,
                 persistent,
-            } in map_notification(&notification)
+            } in mapped_generic.into_iter()
             {
                 if persistent {
                     hub.broadcast(method, params);
@@ -665,10 +686,10 @@ impl JsonRpcCallbacks for AppServerClient {
             .unwrap_or(true);
         if !per_conv {
             tokio::spawn(async move {
-                match crate::services::codex::app_server::get_or_start(None).await {
+                match super::app_server::get_or_start(None).await {
                     Ok(client) => {
                         if let Some(hub) = client.app().hub.lock().unwrap().clone() {
-                            client.register_ws_hub(hub);
+                            client.register_event_hub(hub);
                         }
                         client.app().restore_active_conversation_listeners().await;
                     }

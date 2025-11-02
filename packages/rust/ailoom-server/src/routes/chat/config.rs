@@ -3,11 +3,10 @@ use codex_app_server_protocol::{ListModelsParams, ListModelsResponse};
 use codex_protocol::{config_types::SandboxMode, protocol::AskForApproval};
 use serde::Serialize;
 use serde_json::to_value;
+use std::sync::Arc;
 
-use crate::{
-    routes::chat::utils::codex_not_reachable_hint, services::codex::app_server::get_or_start,
-    state::AppState,
-};
+use crate::{routes::chat::utils::codex_not_reachable_hint, state::AppState};
+use ailoom_executors::providers::codex::get_or_start;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,7 +46,7 @@ pub async fn get_chat_config(
         }
     };
     if let Some(hub) = state.ws_hub.clone() {
-        client.register_ws_hub(hub);
+        client.register_event_hub(Arc::new(hub) as ailoom_executors::SharedEventHub);
     }
     let app = client.app();
 

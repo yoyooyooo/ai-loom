@@ -69,6 +69,18 @@ pub fn build_router(state: AppState, web_dist: std::path::PathBuf, no_static: bo
             get(crate::routes::chat::get_conversation),
         )
         .route(
+            "/api/chat/runtime",
+            get(crate::routes::chat::get_runtime_snapshot),
+        )
+        .route(
+            "/api/chat/conversations/:conversationId/warm",
+            axum::routing::post(crate::routes::chat::warm_runtime),
+        )
+        .route(
+            "/api/chat/conversations/:conversationId/process",
+            axum::routing::delete(crate::routes::chat::delete_runtime_process),
+        )
+        .route(
             "/api/chat/vibe-link",
             axum::routing::post(crate::routes::chat::check_vibe_link),
         )

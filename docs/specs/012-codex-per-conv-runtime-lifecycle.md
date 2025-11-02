@@ -48,6 +48,7 @@
 - 回收：`init_gc()` 循环 + `gc_if_needed()`
   - 环境变量：`AILOOM_EXEC_IDLE_MS`（默认 60000ms）、`AILOOM_EXEC_GC_INTERVAL_MS`（默认 5000ms）、`AILOOM_EXEC_MAX_CHILDREN`（默认 6）。
   - 策略：按 `idle_ms` 选择回收，优先回收超阈值者；资源饱和时可选“硬上限回收最久未使用且非 busy 的会话”。
+- 调度总线：`RuntimeRegistry`（`services/executors/registry.rs`）统一封装上述操作，并通过 `AppState.runtime_registry` 对路由/WS 暴露；任何新 Provider 只需在 `services/executors/providers/*` 实现 `StandardProvider` 并在启动阶段注册。
 
 ## 4. 在线状态机
 
@@ -68,18 +69,19 @@
 入环（ring）事件（SSoT 允许的 info 类）：
 - `chat.info.runtime.child_up`：运行时（子进程或虚拟任务）上线（含 `provider`、`conversationId`、`pid?`、`ts`、`reason`）。
 - `chat.info.runtime.child_down`：运行时下线（显式 kill/GC/异常退出/取消，含 `provider`、`reason`）。
+  - `reason` 约定：`spawn`（新建）、`resume`（rollout 恢复）、`ensure`（被动预热）、`process_gone`（检测到子进程消失并重建）、`idle_timeout`（闲置回收）、`idle_gc`（超限回收）、`hard_kill`（显式释放）。
 
 不入环（瞬时观测）：
-- `session.runtime`（或复用 `session.stats` 扩展字段）：周期广播所有会话的 `{ provider, conversationId, status, idleMs, pid? }`，仅用于调试/状态面板。
+- `session.runtime`（或复用 `session.stats` 扩展字段）：周期广播所有会话的 `{ provider, conversationId, status, idleMs, pid?, generating, ts }`，仅用于调试/状态面板与生成态聚合。
 
 REST：
-- `GET /api/chat/runtime?provider=<all|codex|claude|...>`：返回 `[{ provider, conversationId, status, idleMs, pid? }]`（聚合 Registry + 状态机）。
+- `GET /api/chat/runtime?provider=<all|codex|claude|...>`：返回 `[{ provider, conversationId, status, idleMs, pid?, generating }]`（聚合 Registry + 状态机），默认 `provider=codex`（`provider=all` 返回已注册 Provider 的合并快照）。
 - `POST /api/chat/conversations/:id/warm?provider=...`：预热指定会话（ensure/resume + 监听）。
 - `DELETE /api/chat/conversations/:id/process?provider=...`：释放指定会话运行时（映射 `hard_kill`/取消）。
 
 WS：
 - 保持既有 `chat.session.new`、`chat.session.sync_begin/end`、`chat.info.user_message` 等；
-- 新增上线/下线 `chat.info.runtime.child_up|down` 入环，瞬时快照走 `session.runtime`（不入环）。
+- 新增上线/下线 `chat.info.runtime.child_up|down` 入环，瞬时快照走 `session.runtime`（不入环），并补充 `chat.info.runtime.generating`（入环）用于显式标记“该会话当前是否在生成响应”。
 
 SSoT 约束：
 - 入环只包含上线/下线等“边界”事件，resume 时可回放；瞬时状态用 `broadcast_ephemeral`，不携带 `eventId`，不污染去重/游标。
@@ -113,6 +115,7 @@ SSoT 约束：
 ## 9. 前端联动（建议）
 
 - UI 小绿点/灰点显示会话在线状态；
+- 生成状态拆分：全局 `Generating` 指示器仅追踪 `generating=true` 的会话列表（使用 `chat.info.runtime.generating` + `/api/chat/runtime` 初始种子）；后台预热但未生成的会话不占用指示器。
 - 状态文案区分：启动中（starting）、运行中（running/busy）、空闲（idle）、释放中（terminating）、已离线（offline）；
 - 入口：预热按钮（warm）、结束会话（hard kill）；
 - 调试面板显示 `/api/chat/runtime` 快照（或订阅 `session.runtime`）。

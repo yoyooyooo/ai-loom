@@ -44,10 +44,71 @@ async function applyBaseline(conversationId: string) {
     const res = await chatApi.resumeByConversationId(conversationId)
     if (!res) return
     const serverTurns = Array.isArray((res as any).turns) ? ((res as any).turns as any[]) : []
+    const fallbackTurns = (() => {
+      const history = Array.isArray((res as any)?.history) ? ((res as any).history as any[]) : []
+      if (history.length === 0) return []
+      const out: any[] = []
+      let seq = 0
+      let current: any | null = null
+      const ensureCurrent = () => {
+        if (current) return current
+        seq += 1
+        current = {
+          id: `turn-fallback_${seq}`,
+          seq,
+          conversationId,
+          status: 'streaming',
+          user: { text: '' },
+          assistant: { text: '' },
+          reasoning: undefined,
+          steps: []
+        }
+        out.push(current)
+        return current
+      }
+      for (const entry of history) {
+        if (!entry || typeof entry !== 'object') continue
+        const role = entry.role
+        if (role === 'user') {
+          seq += 1
+          current = {
+            id: `turn-fallback_${seq}`,
+            seq,
+            conversationId,
+            status: 'streaming',
+            user: { text: entry.text ?? '' },
+            assistant: { text: '' },
+            reasoning: undefined,
+            steps: []
+          }
+          out.push(current)
+        } else if (role === 'reasoning') {
+          const turn = current ?? ensureCurrent()
+          const content = entry.reasoning ?? entry.text ?? ''
+          if (!content) continue
+          const title = content.split('\n').find((line: string) => line.trim().length > 0)?.trim()
+          turn.reasoning = {
+            content,
+            title: title || undefined
+          }
+        } else if (role === 'assistant') {
+          const turn = current ?? ensureCurrent()
+          turn.assistant = { text: entry.text ?? '' }
+          if (turn.status !== 'failed' && turn.status !== 'aborted') {
+            turn.status = 'completed'
+          }
+        }
+      }
+      return out.filter((t) => typeof t?.user?.text === 'string' || typeof t?.assistant?.text === 'string')
+    })()
 
     chatTurnActions.__beginFor(conversationId)
     try {
-      if (serverTurns.length > 0) chatTurnActions.loadServerTurns(serverTurns as any)
+      if (serverTurns.length > 0) {
+        chatTurnActions.loadServerTurns(serverTurns as any)
+      } else if (fallbackTurns.length > 0) {
+        chatTurnActions.loadServerTurns(fallbackTurns as any)
+      }
     } finally {
       chatTurnActions.__endEvent()
     }

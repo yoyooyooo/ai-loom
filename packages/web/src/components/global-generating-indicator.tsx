@@ -4,7 +4,15 @@ import { generatingState$ } from '@/features/codex-chat/services/generating-aggr
 import { cn } from '@/lib/utils'
 import { useObservableState } from 'observable-hooks'
 import { map } from 'rxjs/operators'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
+import { Button } from '@/components/ui/button'
 import { useNavigate } from 'react-router-dom'
 
 export type GlobalGeneratingIndicatorProps = {
@@ -63,9 +71,17 @@ export function GlobalGeneratingIndicator({ className, showLabel }: GlobalGenera
   }
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <div className={cn('relative inline-flex items-center cursor-pointer', className)} aria-label={label}>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          className={cn(
+            'relative inline-flex items-center gap-2 px-2 py-1 h-auto',
+            'hover:bg-transparent focus-visible:outline-none focus-visible:ring-0',
+            className
+          )}
+          aria-label={label}
+        >
           <div className={cn('flex aspect-square size-9 items-center justify-center rounded-lg border text-base border-primary/60 bg-primary text-primary-foreground shadow-sm')}>
             <Loader2 className="size-5 animate-spin" style={{ animationDuration: '1.2s' }} />
           </div>
@@ -73,10 +89,40 @@ export function GlobalGeneratingIndicator({ className, showLabel }: GlobalGenera
             {count}
           </span>
           {showLabel ? <span className="ml-2 text-sm text-muted-foreground">{label}</span> : null}
-        </div>
-      </TooltipTrigger>
-      <TooltipContent sideOffset={8}>{renderList()}</TooltipContent>
-    </Tooltip>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" sideOffset={8} className="w-64">
+        <DropdownMenuLabel>进行中的会话</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {items.length === 0 ? (
+          <DropdownMenuItem disabled className="text-xs text-muted-foreground">
+            暂无
+          </DropdownMenuItem>
+        ) : (
+          <div className="max-h-72 overflow-auto">
+            {items.map((key: string) => {
+              const [maybeProvider, maybeCid] = key.includes('|') ? key.split('|') : ['', key]
+              const cid = maybeCid || key
+              const provider = maybeProvider || ''
+              const short = cid.length > 8 ? `${cid.slice(0, 4)}…${cid.slice(-3)}` : cid
+              const text = provider ? `${provider}:${short}` : short
+              return (
+                <DropdownMenuItem
+                  key={key}
+                  onSelect={(event) => {
+                    event.preventDefault()
+                    navigate(`/chat/${encodeURIComponent(cid)}`)
+                  }}
+                  className="cursor-pointer text-xs"
+                >
+                  {text}
+                </DropdownMenuItem>
+              )
+            })}
+          </div>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 

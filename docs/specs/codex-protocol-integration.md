@@ -29,9 +29,9 @@
 ## 背景
 
 - 现状
-- 后端通过子进程方式运行 Codex App Server：`npx @openai/codex@0.53.0 app-server`（见 `packages/rust/ailoom-server/src/services/codex/app_server.rs`）。
+- 后端通过子进程方式运行 Codex App Server：`npx @openai/codex@0.53.0 app-server`（见 `packages/rust/crates/ailoom-executors/src/providers/codex/app_server.rs`）。
   - 传输层：自研 JSON‑RPC 管道（`jsonrpc.rs`），包含 `jsonrpc: "2.0"` 字段；官方 `jsonrpc_lite` 不要求该字段。
-  - 类型层：在本仓库内手写了一批请求/响应与事件字段，桥接为前端 WS 事件（SSoT），核心位于 `packages/rust/ailoom-server/src/services/codex/bridge.rs`。
+  - 类型层：在本仓库内手写了一批请求/响应与事件字段，桥接为前端 WS 事件（SSoT），核心位于 `packages/rust/crates/ailoom-executors/src/providers/codex/bridge.rs`。
   - 前端：遵循 WS‑first；UI 与缓存以 `chat_events` 为唯一事实来源（SSoT）。
 - 痛点
   - 类型重复维护、魔法字符串较多，协议演进时易“手抄错漏”。
@@ -102,7 +102,7 @@
 
 - 文档与规范
   - 契约与入口：在本规格与前端 README 中明确“后端门面接口”“前端事件入口”与“Query Key 约定”。
-  - 命名边界：对外暴露使用中性命名（chat/conversation）；Codex 细节限定在 `services/codex/*` 命名空间。
+  - 命名边界：对外暴露使用中性命名（chat/conversation）；Codex 细节限定在 `packages/rust/crates/ailoom-executors/src/providers/codex/*` 命名空间。
 
 ## Capabilities 与“输入框侧边配置面板”
 
@@ -205,7 +205,7 @@ codex-app-server-protocol = { git = "https://github.com/openai/codex.git", packa
 - 写入 Cargo.toml：
   - 用 `sed -i.bak` 或 `sd` 将 `rev = "..."` 更新为 `$sha`（两处：`codex-protocol` 与 `codex-app-server-protocol`）。
 - 写入 App Server 版本：
-  - 在 `packages/rust/ailoom-server/src/services/codex/app_server.rs` 中，将 `@openai/codex@...` 替换为 `@openai/codex@$CODEx_VERSION`（建议后续改为读取 `CODEx_VERSION` 环境变量）。
+  - 在 `packages/rust/crates/ailoom-executors/src/providers/codex/app_server.rs` 中，将 `@openai/codex@...` 替换为 `@openai/codex@$CODEx_VERSION`（建议后续改为读取 `CODEx_VERSION` 环境变量）。
 - 验证：
   - `npx @openai/codex@$CODEx_VERSION --version`（或 `codex --version`）
   - `cargo update -p codex-app-server-protocol --precise <sha>`（可选）+ `cargo check -p ailoom-server`
@@ -297,9 +297,9 @@ codex-app-server-protocol = { git = "https://github.com/openai/codex.git", packa
 ```
 
 - 相关文件
-  - 后端启动：`packages/rust/ailoom-server/src/services/codex/app_server.rs`
-  - 客户端封装：`packages/rust/ailoom-server/src/services/codex/client.rs`
-  - 桥接/事件映射：`packages/rust/ailoom-server/src/services/codex/bridge.rs`
+  - 后端启动：`packages/rust/crates/ailoom-executors/src/providers/codex/app_server.rs`
+  - 客户端封装：`packages/rust/crates/ailoom-executors/src/providers/codex/client.rs`
+  - 桥接/事件映射：`packages/rust/crates/ailoom-executors/src/providers/codex/bridge.rs`
 - 前端 WS 类型：`packages/web/src/lib/ws/types.ts`
 - Codex 聊天前端：`packages/web/src/features/codex-chat/`
 - Codex Provider Store：`packages/web/src/stores/codex-chat-provider.ts`

@@ -12,6 +12,8 @@
 - Chat 时间线 SSoT：`docs/guide/codex-chat-turn-ssot.md`（Turn-first 单一事实源；WS 与 resume 事件映射/开始与结束边界/幂等；Compact 特例）
 - Codex Chat WS SSoT：`docs/guide/codex-chat-ws-ssot.md`（Codex 运行时事件 → 平台层 `chat.*`；入环/不入环清单；按会话 resume 与去重）
   - 事件总览：参见文档内“事件分类索引”（会话/消息/推理/工具/信息/回合）与“chat.info.\* 事件清单”。
+- per‑conv 运行时与在线状态（通用 Provider）：`docs/specs/012-codex-per-conv-runtime-lifecycle.md`
+- 执行器标准层（CLI/API 通用抽象）：`docs/specs/013-executors-standard-layer.md`
 - 按会话 Resume：`docs/specs/004-chat-resume-multisession.md`（`events.resume{ topic, filter.conversationId }`、多会话断点与隔离）
 - Codex 协议接入：`docs/specs/codex-protocol-integration.md`（`codex/event/*` → 平台层 `chat.*` 映射与会话元事件）
 - 多 Provider 规划：`docs/specs/multi-provider-architecture.md`（长期演进与原地切换）
@@ -44,9 +46,12 @@
   - 规范：`docs/guide/ws-overview.md`
   - 服务端：`ws/hub.rs::{broadcast,broadcast_ephemeral,stats_snapshot}`、`ws/conn.rs`（Forwarder/Writer/Pump/Supervisor）
 - Codex 接入与映射（codex/event/_ → chat._）
-  - 服务端：`services/codex/bridge.rs::{map_notification_to_chat_events,provider_payload}`、`.../client.rs`
+  - 服务端：`packages/rust/crates/ailoom-executors/src/providers/codex/bridge.rs::{map_notification_to_chat_events,provider_payload}`、`.../client.rs`
+- 多 Provider 执行器（统一抽象）
+  - 规范：`docs/specs/013-executors-standard-layer.md`
+  - 服务端（规划）：`services/executors/{registry.rs,providers/*}`（provider 无关运行时与桥接）
 - 工具执行/输出/聚合（exec/patch/mcp）
-  - 服务端映射：`services/codex/bridge.rs` 中 `exec_*`/`patch_*`/`mcp_tool_call_*`
+  - 服务端映射：`packages/rust/crates/ailoom-executors/src/providers/codex/bridge.rs` 中 `exec_*`/`patch_*`/`mcp_tool_call_*`
 - 前端聚合：`features/codex-chat/services/processors/*`、`stores/chat-turns*.ts`
 - 文件保存与监听
   - 服务端：`ws/methods.rs::file.save`、`ws/watch.rs`（fswatch 合批）
@@ -55,7 +60,7 @@
   - 服务端：`routes/chat/resume/*`
   - 前端：`features/codex-chat/stores/chat-turns-snapshot.ts`、`stores/chat-resume.ts`
 - 能力/认证/额度（codex/\*）
-  - 服务端：`services/codex/bridge.rs::{map_server_notification,map_generic_notification}`
+  - 服务端：`packages/rust/crates/ailoom-executors/src/providers/codex/bridge.rs::{map_server_notification,map_generic_notification}`
   - 前端：`features/codex-chat/services/ws-capabilities.ts`
 - 调试面板（WS 观测）
   - 前端：`lib/ws/ws-debug-panel.tsx`
@@ -71,6 +76,10 @@
 - `conversationId`、`convLast`、`lastEventId`、`session.resync`
 - `map_notification_to_chat_events`、`codex/event/`、`chat.tool.exec|patch|mcp`
 - `chat.message.completed|delta|failed|aborted`、`chat.reasoning.end|delta`、`chat.turn.complete`
+- `chat.info.runtime.child_up|chat.info.runtime.child_down`、`session.runtime`
+- `/api/chat/runtime`、`POST .../warm`、`DELETE .../process`
+- 查询参数：`provider=<codex|...>`（省略时默认 `codex`）
+- `AILOOM_EXEC_IDLE_MS|AILOOM_EXEC_GC_INTERVAL_MS|AILOOM_EXEC_MAX_CHILDREN|AILOOM_EXEC_USE_PROC_GROUP`
 
 搜索示例（ripgrep）：
 

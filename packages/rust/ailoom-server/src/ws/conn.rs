@@ -7,7 +7,6 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 
-use crate::services::codex::bridge::active_conversation_ids;
 use crate::ws::gating_log;
 use crate::ws::inspect;
 use crate::{
@@ -18,6 +17,7 @@ use crate::{
         protocol::{RpcNotification, RpcRequest, RpcResponse},
     },
 };
+use ailoom_executors::providers::codex::active_conversation_ids;
 
 #[derive(Clone)]
 struct SubFilter {
@@ -36,6 +36,7 @@ pub async fn handle_connection(state: AppState, mut socket: WebSocket) {
     static CONN_COUNTER: AtomicU64 = AtomicU64::new(1);
     let conn_id = CONN_COUNTER.fetch_add(1, Ordering::Relaxed);
     let trace = std::env::var("AILOOM_WS_TRACE_CONN").unwrap_or_else(|_| "0".into()) == "1";
+    let runtime_registry = state.runtime_registry.clone();
 
     // send welcome（不携带 eventId，避免误推动客户端 lastEventId 导致 resume 丢失业务事件）
     let welcome = RpcNotification {
@@ -60,12 +61,12 @@ pub async fn handle_connection(state: AppState, mut socket: WebSocket) {
     // 默认关闭连接级 watchdog；如需启用，显式设置 AILOOM_WS_CONN_WATCHDOG=1
     if std::env::var("AILOOM_WS_CONN_WATCHDOG").unwrap_or_else(|_| "0".into()) != "0" {
         let hub_for_watchdog = hub_opt.clone();
-        let workspace_root = state.workspace_root.clone();
         // 延迟时间可配置，默认更保守（1800ms）
         let delay_ms: u64 = std::env::var("AILOOM_WS_CONN_WATCHDOG_MS")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(1800);
+        let runtime_registry = runtime_registry.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(delay_ms)).await;
             let ids = active_conversation_ids();
@@ -91,12 +92,7 @@ pub async fn handle_connection(state: AppState, mut socket: WebSocket) {
                         }
                     }
                 }
-                let _ = crate::services::codex::registry::ensure_listener(
-                    workspace_root.clone(),
-                    hub_for_watchdog.clone(),
-                    &cid,
-                )
-                .await;
+                let _ = runtime_registry.warm_conversation("codex", &cid).await;
                 tracing::info!(target:"codex", conversationId=%cid, "ws-conn watchdog: ensure_listener (per-conv)");
             }
         });

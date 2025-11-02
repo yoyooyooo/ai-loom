@@ -13,7 +13,7 @@
 ## 实时（WS）路径
 
 1) 事件归一化（服务端）
-- 文件：`packages/rust/ailoom-server/src/services/codex/bridge.rs:62`
+- 文件：`packages/rust/crates/ailoom-executors/src/providers/codex/bridge.rs:62`
 - 将 `codex/event/*` 归一化为平台层 `chat.*` 并附带 `conversationId` 后入环，例如：
   - `codex/event/agent_message` → `chat.message.completed`（当文本为 `Compact task completed` 时标记特殊态用于后续高亮）。
 

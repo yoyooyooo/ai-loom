@@ -8,9 +8,9 @@ use crate::{
         derive_first_user_message_from_rollout, derive_lineage_from_rollout,
         derive_turns_from_rollout, normalize_conversation_item, resolve_rollout_path,
     },
-    services::codex::app_server::get_or_start,
     state::AppState,
 };
+use ailoom_executors::providers::codex::get_or_start;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -262,6 +262,7 @@ mod tests {
             root: root.clone(),
             workspace_root: root,
             ws_hub: Some(hub),
+            runtime_registry: crate::services::executors::registry::RuntimeRegistry::new(),
         };
 
         // request only codex provider

@@ -1,0 +1,22 @@
+[package]
+name = "ailoom-executors"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+base64 = "0.22"
+command-group = { version = "5.0", features = ["with-tokio"] }
+codex-app-server-protocol = { git = "https://github.com/openai/codex.git", package = "codex-app-server-protocol", rev = "ca80bc4902b7ca49112907152e8ed0879eaa0b78" }
+codex-protocol = { git = "https://github.com/openai/codex.git", package = "codex-protocol", rev = "ca80bc4902b7ca49112907152e8ed0879eaa0b78" }
+dirs = "5"
+futures-core = "0.3"
+once_cell = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["macros", "rt", "sync", "time", "process", "io-util"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4"] }
+time = { version = "0.3", features = ["formatting"] }

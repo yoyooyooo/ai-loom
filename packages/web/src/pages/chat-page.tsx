@@ -19,6 +19,11 @@ import { hydrateConversation } from '@/features/codex-chat/services/conversation
 import type { Subscription } from 'rxjs'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { ChatTopToolbar } from '@/features/codex-chat/components/chat-top-toolbar'
+import { useObservableState } from 'observable-hooks'
+import {
+  generatingState$,
+  getGeneratingSnapshot
+} from '@/features/codex-chat/services/generating-aggregator'
 
 type ConversationListPage = { items: ConversationListItem[]; nextCursor?: string | null }
 const encodeParam = (segment: string) => encodeURIComponent(segment)
@@ -127,12 +132,17 @@ export default function ChatPage() {
     }
   }, [routeConversationKey])
 
-  // 安装聊天历史的 WS 失效器：新会话/收束后自动刷新历史列表（observable-hooks）
+  // 安装聊天历史的 WS 失效器：新会话/收束后自动刷新历史列表
   useChatHistoryInvalidator(qc)
 
-  const inProgressConversationId = generating
-    ? (computedActiveConversationId ?? undefined)
-    : undefined
+  const [generatingState] = useObservableState(() => generatingState$(), getGeneratingSnapshot())
+  const generatingKeys = useMemo(() => {
+    const entries = Object.entries(generatingState.byKey || {})
+    const keys = entries
+      .filter(([, entry]) => entry?.generating)
+      .map(([key]) => key)
+    return new Set(keys)
+  }, [generatingState])
 
   const handleConversationCreated = useCallback(
     async (newId: string) => {
@@ -245,7 +255,7 @@ export default function ChatPage() {
           onRetry={() => refetch()}
           onSelect={handleSelectHistory}
           activeConversationId={computedActiveConversationId ?? undefined}
-          inProgressConversationId={inProgressConversationId}
+          generatingKeys={generatingKeys}
           hasNextPage={hasNextPage}
           isFetchingNextPage={isFetchingNextPage}
           onLoadMore={() => fetchNextPage()}

@@ -47,7 +47,7 @@ pub fn active_conversation_ids() -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub(crate) fn store_conversation_id(id: &str) {
+pub fn store_conversation_id(id: &str) {
     if let Ok(mut guard) = active_conversations().lock() {
         guard.insert(id.to_string());
     }

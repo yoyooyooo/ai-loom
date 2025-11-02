@@ -348,6 +348,16 @@ impl Hub {
     }
 }
 
+impl ailoom_executors::EventHub for Hub {
+    fn broadcast(&self, method: String, params: Value) {
+        Hub::broadcast(self, method, params);
+    }
+
+    fn broadcast_ephemeral(&self, method: String, params: Value) {
+        Hub::broadcast_ephemeral(self, method, params);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct EventRecord {
     pub id: u64,

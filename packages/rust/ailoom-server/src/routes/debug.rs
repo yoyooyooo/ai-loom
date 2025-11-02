@@ -8,11 +8,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::{
-    services::codex::{app_server, bridge::active_conversation_ids, registry},
-    state::AppState,
-    ws::hub::HubStatsOut,
-};
+use crate::{state::AppState, ws::hub::HubStatsOut};
+use ailoom_executors::providers::codex::{active_conversation_ids, current as codex_current};
 
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,7 +71,12 @@ pub async fn codex_debug(
         .collect::<Vec<_>>();
 
     // Codex client 状态快照
-    let codex_json = match app_server::current().await {
+    let registry_snapshots = state
+        .runtime_registry
+        .runtime_snapshots(Some("codex"))
+        .await;
+
+    let codex_json = match codex_current().await {
         Some(client) => {
             let alive = client.is_alive().await;
             let app = client.app();
@@ -85,18 +87,16 @@ pub async fn codex_debug(
                 .collect::<Vec<_>>();
             let active = app.active_conversations_snapshot();
             let bridge_active = active_conversation_ids();
-            let reg = registry::snapshot().await;
             serde_json::json!({
                 "alive": alive,
                 "subscriptions": subs,
                 "activeConversations": active,
                 "bridgeActiveConversations": bridge_active,
-                "registryChildren": reg,
+                "runtime": registry_snapshots,
             })
         }
         None => {
-            let reg = registry::snapshot().await;
-            serde_json::json!({"alive": false, "subscriptions": [], "activeConversations": [], "bridgeActiveConversations": [], "registryChildren": reg})
+            serde_json::json!({"alive": false, "subscriptions": [], "activeConversations": [], "bridgeActiveConversations": [], "runtime": registry_snapshots})
         }
     };
 

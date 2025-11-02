@@ -161,3 +161,40 @@ sequenceDiagram
 
 实现差异（对齐方向）
 - `/api/file` 返回体字段当前为 snake_case，前端按 camelCase 使用（见 `fs-and-limits.md` 的对齐说明）。
+
+## 后端分包与目录架构（Workspace）
+
+- Crates（职责）
+  - `ailoom-core`：通用类型/错误/常量。
+  - `ailoom-fs`：受 root 沙箱的读写、分段/全文读取、原子写、忽略合并。
+  - `ailoom-store`：SQLite（WAL、迁移、CRUD），聊天镜像/投影存取（按 011 规范）。
+  - `ailoom-stitch`：拼接/省略/统计。
+  - `ailoom-executors`（新增，标准层）：
+    - 提供统一抽象 `StandardProvider`、`SpawnConfig`、`RuntimeSnapshot`/`RuntimeStatus`、`ProviderError`；
+    - CLI Provider（Codex/Claude/Gemini CLI）与 API Provider（OpenAI/Anthropic/Gemini）共用一套生命周期接口；
+    - 约束：所有 Provider 均需桥接原生事件为平台层 `chat.*`，上线/下线统一产出 `chat.info.runtime.child_*`。
+
+- Server 二进制（`ailoom-server`）目录要点
+  - `src/routes/*`：HTTP 路由（chat/tree/file/annotations/stitch等）
+    - `routes/chat/*`：新建/发送/中断/恢复/输出/配置；后续新增 runtime 路由：
+      - `GET /api/chat/runtime?provider=...`
+      - `POST /api/chat/conversations/:id/warm?provider=...`
+      - `DELETE /api/chat/conversations/:id/process?provider=...`
+  - `src/ws/*`：WS Hub/Conn（广播、ring/resume、priority/file/tree分流、Writer单写者、Supervisor自愈）
+  - `src/services/*`：
+    - `services/executors/*`：
+      - `registry.rs`（per‑conv 运行时 Registry + 统一调度/GC）
+    - `packages/rust/crates/ailoom-executors/src/providers/*`：具体 Provider、JSON-RPC transport、事件桥接与运行时生命周期（Codex 先行，后续复用）。
+  - `src/state.rs`：AppState 组合（db/fs/hub/workspace_root）。
+  - `src/bin/main.rs`：Axum 启动/绑定与 graceful shutdown。
+
+- 事件约束与 SSoT（统一）
+  - Provider 原生事件 → Provider 自带 bridge（现阶段：`packages/rust/crates/ailoom-executors/src/providers/codex/bridge.rs`）→ 平台层 `chat.*`；
+  - 入环：`chat.message.*`、`chat.reasoning.end`、`chat.tool.*`、`chat.info.*`、`chat.turn.complete`；
+  - 不入环：`chat.turn.started`、`chat.reasoning.delta|section_break`、`session.runtime`、能力/认证 `codex/*`；
+  - Resume：`events.resume({ topic:'chat', filter:{ conversationId } })`。
+
+- 环境变量（统一执行器前缀）
+  - `AILOOM_EXEC_IDLE_MS`、`AILOOM_EXEC_GC_INTERVAL_MS`、`AILOOM_EXEC_MAX_CHILDREN`、`AILOOM_EXEC_USE_PROC_GROUP`、`AILOOM_EXEC_RPC_TIMEOUT_MS`。
+
+备注：分包边界仅文档化约定，落地时以小步提交迁移。现有 Codex 专属模块优先迁移为通用 Provider 实现，保持对前端 `chat.*` 协议的完全兼容。

@@ -60,7 +60,7 @@
 
 ## 服务端改造
 
-文件：`packages/rust/ailoom-server/src/ws/hub.rs`、`.../ws/methods.rs`、`.../services/codex/bridge.rs`
+文件：`packages/rust/ailoom-server/src/ws/hub.rs`、`.../ws/methods.rs`、`packages/rust/crates/ailoom-executors/src/providers/codex/bridge.rs`
 
 - EventRecord 增加 `conversation_id: Option<String>`：
   - 在 `Hub::broadcast(method, params)` 中，从 `params.conversationId`（若存在）提取并写入 `EventRecord`。

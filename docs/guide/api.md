@@ -87,6 +87,7 @@ Stitch 生成与预算
 - POST `/api/chat/conversations/:conversationId/interrupt`
   - 作用：请求中止当前会话的本轮生成。
   - Query：
+    - `provider`（可选，默认 `codex`）→ 指定运行时 Provider。
     - `await=turnAborted`（可选）→ 同步等待 Codex 确认中止（返回 `{ abortReason?: string }`）；可能阻塞较久，不推荐默认使用。
     - `hard=1`（可选）→ 立即强制停止当前引擎进程并预热新实例（影响所有并行会话，谨慎使用）。
   - 默认（无 `await`/`hard`）：非阻塞“自动模式（auto）”。服务端会：
@@ -96,3 +97,15 @@ Stitch 生成与预算
        - `chat.message.aborted { reason:'hard_stop' }`（收束当前回合，入环，可被 resume 补偿）；
        - `chat.info.background { code:'engine_swapped', message:'...' }`（提示新实例已就绪，入环，可被 resume 补偿）。
   - 返回：`202 Accepted`（始终尽快返回）。
+
+运行时（Runtime）
+- GET `/api/chat/runtime?provider=<all|codex|claude|...>`
+  - 作用：返回当前各会话运行时快照。
+  - 响应：`[{ provider: string, conversationId: string, status: 'starting'|'running'|'busy'|'idle'|'terminating'|'offline', idleMs: number, pid?: number, generating?: boolean }]`
+- POST `/api/chat/conversations/:id/warm?provider=...`
+  - 作用：预热/建立监听（若运行时不存在则恢复或拉起）。
+  - 响应：`{ ok: true }`
+- DELETE `/api/chat/conversations/:id/process?provider=...`
+  - 作用：释放指定会话运行时（CLI：终止子进程；API：取消流）。
+  - 响应：`{ ok: true }`
+  - 说明：`provider` 省略时默认 `codex`；GET 接口 `provider=all|codex|...`，其余接口省略视为 `codex`。

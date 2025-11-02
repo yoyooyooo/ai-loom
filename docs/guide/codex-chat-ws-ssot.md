@@ -83,7 +83,7 @@
 
 关键文件：
 
-- 后端：`packages/rust/ailoom-server/src/services/codex/{transport.rs,bridge.rs,client.rs}`、`packages/rust/ailoom-server/src/ws/{hub.rs,chat_events.rs}`。
+- 后端：`packages/rust/crates/ailoom-executors/src/providers/codex/{transport.rs,bridge.rs,client.rs}`、`packages/rust/ailoom-server/src/ws/{hub.rs,chat_events.rs}`。
 - 前端：
   - 配线与握手窗口：`packages/web/src/features/codex-chat/services/ws.ts`、`packages/web/src/features/codex-chat/services/ws-pipeline.ts`
   - 处理器入口与分层：`packages/web/src/features/codex-chat/services/processors/index.ts`（session/message/reasoning/turn/tools/info）
@@ -424,6 +424,9 @@ type ChatInfoRuntimeChildDown = { provider: string; conversationId: string; pid?
 - `chat.info.runtime.child_down`
   - 用途：Provider 运行时下线（显式 kill/GC/异常退出/取消）（可 resume）。
   - params：`{ provider, conversationId, pid?, reason? }`。
+- `chat.info.runtime.generating`
+  - 用途：后端判定会话当前是否正在生成（per-conv 子进程仍在线但无任务时会返回 `false`）。
+  - params：`{ provider, conversationId, generating: boolean }`。
 
 说明：以上 `chat.info.*` 均通过 `hub.broadcast` 入环；`params` 统一注入 `provider` 与可用的 `conversationId`，可被 `events.resume` 按会话补偿。
 

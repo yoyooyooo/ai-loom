@@ -32,7 +32,7 @@ export type HistoryListProps = {
   onSelect?: (item: ConversationListItem) => void
   activeConversationId?: string
   pendingConversationId?: string | null
-  inProgressConversationId?: string
+  generatingKeys?: Set<string>
   hasNextPage?: boolean
   isFetchingNextPage?: boolean
   onLoadMore?: () => void
@@ -51,7 +51,7 @@ export function HistoryList({
   onSelect,
   activeConversationId,
   pendingConversationId,
-  inProgressConversationId,
+  generatingKeys,
   hasNextPage,
   isFetchingNextPage,
   onLoadMore,
@@ -171,8 +171,14 @@ export function HistoryList({
                 const isActive = k === activeConversationId
                 const isPending = k === pendingConversationId
                 const isDeleting = k === deletingKey
+                const keyWithProvider =
+                  typeof item.providerId === 'string' && item.providerId
+                    ? `${item.providerId}|${k}`
+                    : k
                 const isInProgress =
-                  (item as any)?.inProgress === true || inProgressConversationId === k
+                  (item as any)?.inProgress === true ||
+                  generatingKeys?.has(keyWithProvider) ||
+                  generatingKeys?.has(k)
                 const paddingLeft = 16 + depth * INDENT_STEP
                 const lineageTip =
                   typeof lineageDepth === 'number' && lineageDepth > depth

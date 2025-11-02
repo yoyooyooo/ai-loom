@@ -8,6 +8,7 @@ export type ConversationListItem = {
   preview: string
   timestamp: string
   model?: string | null
+  providerId?: string | null
   conversationId?: string | null
   parentId?: string | null
   rootId?: string | null
@@ -15,6 +16,15 @@ export type ConversationListItem = {
   createdAt?: string | null
   turns?: number | null
   inProgress?: boolean | null
+}
+
+export type RuntimeSnapshot = {
+  provider: string
+  conversationId: string
+  status: 'starting' | 'running' | 'busy' | 'idle' | 'terminating' | 'offline'
+  idleMs: number
+  pid?: number | null
+  generating?: boolean
 }
 
 export type ChatHistoryItem = {
@@ -259,6 +269,20 @@ export const chatApi = {
       return res.data
     } catch (e) {
       throw toHttpError(e, 'listConversations failed')
+    }
+  },
+  async runtimeSnapshots(params?: { provider?: string }) {
+    try {
+      const res = await rxRequest<{ items: RuntimeSnapshot[] }>({
+        method: 'GET',
+        url: `/api/chat/runtime`,
+        params,
+        timeoutMs: 5_000,
+        retries: 0
+      })
+      return res.data
+    } catch (e) {
+      throw toHttpError(e, 'runtimeSnapshots failed')
     }
   },
   async getTurnOutput(conversationId: string, blobId: string): Promise<string> {

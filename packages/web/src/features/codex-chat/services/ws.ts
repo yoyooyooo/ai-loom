@@ -133,19 +133,19 @@ export function subscribeChatEvents() {
   if (GEN_MODE !== 'off') {
     try {
       stopGenAgg = initGlobalGeneratingAggregator()
-      // 种子：列表接口的 inProgress（仅初始化，后续以 WS 纠偏）。Vitest 下跳过 HTTP。
+      // 初始种子：使用 runtime 快照（非 Vitest 环境）
       const isVitest = typeof process !== 'undefined' && !!(process as any)?.env?.VITEST
       if (!isVitest) {
         chatApi
-          .listConversations({ pageSize: 100 })
+          .runtimeSnapshots({ provider: 'codex' })
           .then((res) => {
             const items = Array.isArray((res as any)?.items) ? (res as any).items : []
             for (const it of items) {
-              const cid = (it as any)?.conversationId || (it as any)?.id
+              const cid = (it as any)?.conversationId
               if (!cid) continue
-              const provider = (it as any)?.providerId || (it as any)?.provider || ''
+              const provider = (it as any)?.provider || (it as any)?.providerId || ''
               const key = provider ? `${provider}|${cid}` : cid
-              if ((it as any)?.inProgress === true) seedGenerating(key, true)
+              seedGenerating(key, !!(it as any)?.generating)
             }
           })
           .catch(() => {})

@@ -380,6 +380,7 @@ mod tests {
             root,
             workspace_root,
             ws_hub: None,
+            runtime_registry: crate::services::executors::registry::RuntimeRegistry::new(),
         }
     }
 

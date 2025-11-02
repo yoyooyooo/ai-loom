@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 ailoom-core = { path = "../crates/ailoom-core" }
 ailoom-fs = { path = "../crates/ailoom-fs" }
+ailoom-executors = { path = "../crates/ailoom-executors" }
 ailoom-store = { path = "../crates/ailoom-store" }
 ailoom-stitch = { path = "../crates/ailoom-stitch" }
 codex-protocol = { git = "https://github.com/openai/codex.git", package = "codex-protocol", rev = "ca80bc4902b7ca49112907152e8ed0879eaa0b78" }
@@ -27,6 +28,7 @@ uuid = { version = "1", features = ["v4"] }
 time = { version = "0.3", features = ["formatting", "macros"] }
 bytecount = "0.6"
 futures-util = "0.3"
+futures-core = "0.3"
 notify = "6"
 ignore = "0.4"
 base64 = "0.22"
