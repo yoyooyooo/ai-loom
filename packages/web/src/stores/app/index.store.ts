@@ -7,6 +7,7 @@ import { subscribeWithSelector } from 'zustand/middleware'
 import type { AppStore } from './types'
 import { createAppCoreSlice } from './slices/app-core.slice'
 import { createAppPreferencesSlice } from './slices/app-preferences.slice'
+import { createAppSettingsSlice } from './slices/app-settings.slice'
 
 export const useAppStore = create<AppStore>()(
   devtools(
@@ -14,7 +15,8 @@ export const useAppStore = create<AppStore>()(
       subscribeWithSelector(
         immer((...args) => ({
           ...createAppCoreSlice(...args),
-          ...createAppPreferencesSlice(...args)
+          ...createAppPreferencesSlice(...args),
+          ...createAppSettingsSlice(...args)
         }))
       ),
       { name: 'ailoom.app' }

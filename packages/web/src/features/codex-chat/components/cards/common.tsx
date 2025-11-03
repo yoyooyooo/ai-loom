@@ -10,7 +10,8 @@ import {
   List as ListIcon,
   FileText as FileTextIcon,
   Info as InfoIcon,
-  Brain as BrainIcon
+  Brain as BrainIcon,
+  ArrowRightLeft as ArrowRightLeftIcon
 } from 'lucide-react'
 
 export type StepCardProps = {
@@ -19,18 +20,53 @@ export type StepCardProps = {
 }
 
 // 已取消顶部状态徽标，Working/Finished/Failed/Aborted 状态通过可展开区标题表达
-export function stepStatusBadge(status: TurnStep['status']) {
-  if (status === 'streaming')
+export function stepStatusBadge(
+  status: TurnStep['status'],
+  options?: { hideStreaming?: boolean }
+) {
+  if (status === 'streaming') {
+    if (options?.hideStreaming) return null
     return <Loader2 className="size-3.5 text-muted-foreground animate-spin" />
+  }
   if (status === 'failed') return <span className="text-xs text-destructive">[failed]</span>
   if (status === 'aborted') return <span className="text-xs text-muted-foreground">[aborted]</span>
   return null
 }
 
-export function StepIcon({ kind }: { kind: TurnStep['kind'] }) {
+function detectPrimaryExecCommand(step?: TurnStep): string | undefined {
+  if (!step || !Array.isArray(step.meta?.command)) return undefined
+  const command = (step.meta.command as string[]).map((part) => String(part))
+  if (command.length === 0) return undefined
+  const head = command[0]
+  const flag = command[1] || ''
+  const isShellWrapper = /(?:^|\/)(?:ba?sh|zsh|sh)$/.test(head) && (flag === '-lc' || flag === '-c')
+  if (isShellWrapper && command.length >= 3) {
+    const script = command.slice(2).join(' ').trim()
+    if (script) {
+      const firstLine = script.split(/\r?\n/)[0] || ''
+      const firstToken = firstLine.trim().split(/\s+/)[0] || ''
+      if (firstToken) return normalizeCommandName(firstToken)
+    }
+    return normalizeCommandName(head)
+  }
+  return normalizeCommandName(head)
+}
+
+function normalizeCommandName(raw: string): string {
+  const stripped = raw.replace(/^['"]+/, '').replace(/['"]+$/, '')
+  if (!stripped) return stripped
+  const last = stripped.split('/').filter(Boolean).pop()
+  return (last || stripped).toLowerCase()
+}
+
+export function StepIcon({ kind, step }: { kind: TurnStep['kind']; step?: TurnStep }) {
   const cls = 'size-3.5 shrink-0 text-muted-foreground'
   return match(kind)
-    .with('exec', () => <TerminalIcon className={cls} />)
+    .with('exec', () => {
+      const primary = detectPrimaryExecCommand(step)
+      if (primary === 'mv') return <ArrowRightLeftIcon className={cls} />
+      return <TerminalIcon className={cls} />
+    })
     .with('patch', () => <FileDiffIcon className={cls} />)
     .with('mcp', () => <PlugIcon className={cls} />)
     .with('search', () => <SearchIcon className={cls} />)

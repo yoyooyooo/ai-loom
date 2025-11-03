@@ -4,7 +4,9 @@ export type Turn = { id: string, seq: number, conversationId: string | null, sta
 
 export type TurnAssistant = { text: string, ts: string | null, };
 
-export type TurnReasoning = { title: string | null, content: string, };
+export type TurnReasoning = { title: string | null, content: string, raw: string | null, items: Record<string, TurnReasoningItem> | null | undefined, activeItemId: string | null, };
+
+export type TurnReasoningItem = { id: string, content: string | null, raw: string | null, summary: string | null, };
 
 export type TurnStatus = "streaming" | "completed" | "failed" | "aborted";
 

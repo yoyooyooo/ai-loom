@@ -159,4 +159,72 @@ describe('loadServerTurns → store turns', () => {
     const t = chatTurnSelectors.currentTurns(useChatTurnStore.getState())[0]
     expect(t.status).toBe('aborted')
   })
+
+  it('exec step with rg command becomes search step with output preserved', () => {
+    chatTurnActions.loadServerTurns([
+      {
+        id: 't1',
+        seq: 1,
+        status: 'completed',
+        user: { text: 'u', ts: '' },
+        assistant: { text: 'a' },
+        steps: [
+          {
+            id: 's1',
+            kind: 'exec',
+            title: 'bash -lc rg "todo" packages',
+            status: 'completed',
+            ts: '',
+            meta: {
+              command: ['bash', '-lc', 'rg "todo" packages'],
+              cwd: '/repo',
+              callId: 'call-search',
+              exitCode: 0
+            },
+            body: 'packages/web/src/app.ts:1:todo\n'
+          }
+        ]
+      }
+    ] as any)
+    const t = chatTurnSelectors.currentTurns(useChatTurnStore.getState())[0]
+    const search = t.steps.find((s) => s.kind === 'search')
+    expect(search).toBeTruthy()
+    expect(search?.meta?.query).toBe('todo')
+    expect(search?.meta?.target).toBe('/repo/packages')
+    expect(search?.meta?.exitCode).toBe(0)
+    expect(search?.body).toBe('packages/web/src/app.ts:1:todo\n')
+    expect(t.steps.some((s) => s.kind === 'exec')).toBe(false)
+  })
+
+  it('exec step with cat command becomes read step', () => {
+    chatTurnActions.loadServerTurns([
+      {
+        id: 't1',
+        seq: 1,
+        status: 'completed',
+        user: { text: 'u', ts: '' },
+        assistant: { text: 'a' },
+        steps: [
+          {
+            id: 's2',
+            kind: 'exec',
+            title: 'bash -lc cat README.md',
+            status: 'completed',
+            ts: '',
+            meta: {
+              command: ['bash', '-lc', 'cat README.md'],
+              cwd: '/repo',
+              callId: 'call-read'
+            },
+            body: 'Hello world\n'
+          }
+        ]
+      }
+    ] as any)
+    const t = chatTurnSelectors.currentTurns(useChatTurnStore.getState())[0]
+    const read = t.steps.find((s) => s.kind === 'read')
+    expect(read).toBeTruthy()
+    expect(read?.meta?.file).toBe('/repo/README.md')
+    expect(read?.body).toBe('Hello world\n')
+  })
 })

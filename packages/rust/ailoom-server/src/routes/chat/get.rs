@@ -4,12 +4,12 @@ use serde_json::{json, Value};
 
 use crate::{
     routes::chat::utils::{
-        codex_not_reachable_hint, conversation_id_of, derive_first_user_message_from_rollout,
-        map_error_to_status, normalize_conversation_item, resolve_rollout_path,
+        codex_not_reachable_hint, conversation_id_of, map_error_to_status,
+        normalize_conversation_item, resolve_rollout_path,
     },
     state::AppState,
 };
-use ailoom_executors::providers::codex::get_or_start;
+use ailoom_executors::providers::codex::{get_or_start, load_rollout_summary, RolloutSummary};
 
 pub async fn get_conversation(
     Path(conversation_id): Path<String>,
@@ -59,11 +59,52 @@ pub async fn get_conversation(
                         {
                             if let Some(abs) = resolve_rollout_path(path_str, &state.workspace_root)
                             {
-                                if let Some(first_user) =
-                                    derive_first_user_message_from_rollout(&abs)
-                                {
+                                if let Ok(summary) = load_rollout_summary(&abs).await {
+                                    let RolloutSummary {
+                                        preview,
+                                        depth,
+                                        parent_id,
+                                        root_id,
+                                        in_progress,
+                                    } = summary;
                                     if let Some(obj) = normalized.as_object_mut() {
-                                        obj.insert("preview".into(), Value::String(first_user));
+                                        if let Some(preview) = preview {
+                                            obj.insert("preview".into(), Value::String(preview));
+                                        }
+                                        if obj.get("depth").and_then(|d| d.as_i64()).is_none() {
+                                            if let Some(depth) = depth {
+                                                obj.insert("depth".into(), Value::from(depth));
+                                            }
+                                        }
+                                        if obj.get("parentId").and_then(|d| d.as_str()).is_none() {
+                                            if let Some(pid) = parent_id {
+                                                let self_id = obj
+                                                    .get("conversationId")
+                                                    .and_then(|x| x.as_str())
+                                                    .map(|s| s.to_string())
+                                                    .unwrap_or_default();
+                                                if self_id.is_empty() || self_id != pid {
+                                                    obj.insert(
+                                                        "parentId".into(),
+                                                        Value::String(pid),
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        if obj.get("rootId").and_then(|d| d.as_str()).is_none() {
+                                            if let Some(root_id) = root_id {
+                                                obj.insert("rootId".into(), Value::String(root_id));
+                                            }
+                                        }
+                                        if obj.get("inProgress").and_then(|b| b.as_bool()).is_none()
+                                        {
+                                            if let Some(in_prog) = in_progress {
+                                                obj.insert(
+                                                    "inProgress".into(),
+                                                    Value::Bool(in_prog),
+                                                );
+                                            }
+                                        }
                                     }
                                 }
                             }

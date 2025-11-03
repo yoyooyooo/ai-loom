@@ -76,31 +76,259 @@ describe('parseExploreActions', () => {
     expect(acts.some((a) => a.kind === 'search')).toBe(true)
   })
 
-  it('parses find as list (files and dirs), including pipes and || true', () => {
+  it('honors cd before command when resolving paths', () => {
+    const acts = parseExploreActions(
+      ['bash', '-lc', 'cd packages && rg -n "todo" src'],
+      '/home'
+    ) as any[]
+    const search = acts.find((a) => a.kind === 'search')
+    expect(search).toBeTruthy()
+    expect(search.target).toBe('/home/packages/src')
+  })
+
+  it('prefers real rg target when flags appear before scope', () => {
+    const acts = parseExploreActions(
+      ['bash', '-lc', 'rg -n "ShellTool" -S codex-rs/core/src'],
+      '/w'
+    ) as any[]
+    const search = acts.find((a) => a.kind === 'search')
+    expect(search).toBeTruthy()
+    expect(search.target).toBe('/w/codex-rs/core/src')
+  })
+
+  it('parses find as search, including pipes and || true', () => {
     const acts1 = parseExploreActions(
       ['bash', '-lc', "find packages -maxdepth 2 -type f -print | sed 's,^,FILE: ,'"],
       '/w'
-    )
-    expect(acts1.filter((a) => a.kind === 'list' && (a as any).label === 'List find')).toHaveLength(
-      1
-    )
+    ) as any[]
+    const search1 = acts1.filter((a) => a.kind === 'search')
+    expect(search1).toHaveLength(1)
+    expect(search1[0].target).toBe('/w/packages')
+    expect(search1[0].flags?.type).toBe('f')
 
     const acts2 = parseExploreActions(
       ['bash', '-lc', 'find packages -maxdepth 2 -type d -print'],
       '/w'
-    )
-    expect(acts2.filter((a) => a.kind === 'list' && (a as any).label === 'List find')).toHaveLength(
-      1
-    )
+    ) as any[]
+    const search2 = acts2.filter((a) => a.kind === 'search')
+    expect(search2).toHaveLength(1)
+    expect(search2[0].flags?.type).toBe('d')
 
     const acts3 = parseExploreActions(
       ['bash', '-lc', 'find . -maxdepth 1 -type f -print || true'],
       '/w'
+    ) as any[]
+    const search3 = acts3.filter((a) => a.kind === 'search')
+    expect(search3).toHaveLength(1)
+    expect(search3[0].target).toBe('/w')
+  })
+
+  it('parses cat -- paths and sed ranges', () => {
+    const acts1 = parseExploreActions(['bash', '-lc', 'cat -- ./-strange-file-name'], '/w') as any[]
+    expect(acts1.filter((a) => a.kind === 'read')).toHaveLength(1)
+    expect(acts1[0].path).toBe('/w/-strange-file-name')
+
+    const acts2 = parseExploreActions(['bash', '-lc', "sed -n '12,20p' Cargo.toml"], '/w') as any[]
+    const read2 = acts2.find((a) => a.kind === 'read')
+    expect(read2).toBeTruthy()
+    expect(read2?.path).toBe('/w/Cargo.toml')
+    expect((read2 as any).start).toBe(12)
+    expect((read2 as any).end).toBe(20)
+  })
+
+  it('parses sed range with input redirection', () => {
+    const acts = parseExploreActions(['bash', '-lc', "sed -n '5,10p' < README.md"], '/work') as any[]
+    const read = acts.find((a) => a.kind === 'read')
+    expect(read).toBeTruthy()
+    expect(read?.path).toBe('/work/README.md')
+  })
+
+  it('preserves search target for rg --files glob and tree flags', () => {
+    const acts = parseExploreActions(
+      ['bash', '-lc', "rg --files -g '!target' | head -n 50"],
+      '/repo'
+    ) as any[]
+    const list = acts.find((a) => a.kind === 'list') as any
+    expect(list).toBeTruthy()
+    expect(list.target).toBe('/repo')
+    expect(list.targetDisplay).toBe('!target')
+
+    const actsTree = parseExploreActions(['bash', '-lc', 'tree -L 2 src'], '/repo') as any[]
+    const listTree = actsTree.find((a) => a.kind === 'list') as any
+    expect(listTree).toBeTruthy()
+    expect(listTree.target).toBe('/repo/src')
+    expect(listTree.flags?.depth).toBe(2)
+  })
+
+  it('maps ls --time-style and rg search with cd correctly', () => {
+    const acts = parseExploreActions(['bash', '-lc', 'ls --time-style=long-iso ./dist'], '/repo') as any[]
+    const list = acts.find((a) => a.kind === 'list') as any
+    expect(list.target).toBe('/repo/dist')
+    expect(list.targetDisplay).toBe('.')
+
+    const acts2 = parseExploreActions(
+      ['bash', '-lc', "cd packages && rg --colors=never -n foo src"],
+      '/repo'
+    ) as any[]
+    const search = acts2.find((a) => a.kind === 'search') as any
+    expect(search).toBeTruthy()
+    expect(search.query).toBe('foo')
+    expect(search.target).toBe('/repo/packages/src')
+    expect(search.targetDisplay).toBe('src')
+  })
+
+  it('drops yes pipe prefix and parses search query with spaces', () => {
+    const acts = parseExploreActions(['bash', '-lc', "yes | rg -n 'foo bar' -S"], '/repo') as any[]
+    const search = acts.find((a) => a.kind === 'search') as any
+    expect(search).toBeTruthy()
+    expect(search.query).toBe('foo bar')
+  })
+
+  it('parses history rg samples including || true', () => {
+    const acts = parseExploreActions(
+      ['bash', '-lc', 'rg "chat\\.message\\.aborted" packages/web'],
+      '/repo'
+    ) as any[]
+    const search = acts.find((a) => a.kind === 'search') as any
+    expect(search).toBeTruthy()
+    expect(search.query).toBe('chat.message.aborted')
+    expect(search.target).toBe('/repo/packages/web')
+
+    const acts2 = parseExploreActions(
+      ['bash', '-lc', 'rg -n --hidden -S "serena|Serena|SERENA" || true'],
+      '/repo'
+    ) as any[]
+    const searches = acts2.filter((a) => a.kind === 'search') as any[]
+    expect(searches).toHaveLength(1)
+    expect(searches[0]?.query).toBe('serena|Serena|SERENA')
+    expect(searches[0]?.target).toBeUndefined()
+  })
+
+  it('parses rg with quoted single quote query and path', () => {
+    const acts = parseExploreActions(
+      ['bash', '-lc', `rg -n "'patch'" packages/web/src/features/codex-chat/stores -S`],
+      '/repo'
+    ) as any[]
+    const search = acts.find((a) => a.kind === 'search') as any
+    expect(search).toBeTruthy()
+    expect(search.query).toBe('patch')
+    expect(search.target).toBe('/repo/packages/web/src/features/codex-chat/stores')
+  })
+
+  it('parses single-string command input for rg', () => {
+    const acts = parseExploreActions(
+      [`bash -lc rg -n "'patch'" packages/web/src/features/codex-chat/stores -S`],
+      '/repo'
+    ) as any[]
+    const search = acts.find((a) => a.kind === 'search') as any
+    expect(search).toBeTruthy()
+    expect(search.query).toBe('patch')
+    expect(search.target).toBe('/repo/packages/web/src/features/codex-chat/stores')
+  })
+
+  it('parses sed -n range as read step', () => {
+    const acts = parseExploreActions(
+      ['bash', '-lc', `sed -n '1,200p' packages/web/src/features/codex-chat/services/processors/turn.ts`],
+      '/repo'
+    ) as any[]
+    const read = acts.find((a) => a.kind === 'read') as any
+    expect(read).toBeTruthy()
+    expect(read.path).toBe(
+      '/repo/packages/web/src/features/codex-chat/services/processors/turn.ts'
     )
-    // 目标为 '.' 会被规整为 undefined，但仍视为 List
-    const lists3 = acts3.filter((a) => a.kind === 'list') as any[]
-    expect(lists3.length).toBe(1)
-    expect(lists3[0].label).toBe('List find')
+    expect(read.start).toBe(1)
+    expect(read.end).toBe(200)
+  })
+
+  it('parses single-string sed command as read', () => {
+    const acts = parseExploreActions(
+      [`bash -lc sed -n '1,200p' packages/web/src/features/codex-chat/services/processors/turn.ts`],
+      '/repo'
+    ) as any[]
+    const read = acts.find((a) => a.kind === 'read') as any
+    expect(read).toBeTruthy()
+    expect(read.path).toBe(
+      '/repo/packages/web/src/features/codex-chat/services/processors/turn.ts'
+    )
+  })
+
+  it('parses already tokenized commands with quoted tokens', () => {
+    const acts = parseExploreActions(
+      ['sed', '-n', "'1,160p'", 'packages/web/src/features/codex-chat/services/ws.ts'],
+      '/repo'
+    ) as any[]
+    const read = acts.find((a) => a.kind === 'read') as any
+    expect(read).toBeTruthy()
+    expect(read.path).toBe('/repo/packages/web/src/features/codex-chat/services/ws.ts')
+
+    const acts2 = parseExploreActions(
+      ['rg', '-n', "'apply_patch'", 'packages'],
+      '/repo'
+    ) as any[]
+    const search = acts2.find((a) => a.kind === 'search') as any
+    expect(search).toBeTruthy()
+    expect(search.query).toBe('apply_patch')
+    expect(search.target).toBe('/repo/packages')
+  })
+
+  it('parses cat and ls samples from history', () => {
+    const catActs = parseExploreActions(
+      [
+        'bash',
+        '-lc',
+        'cat packages/web/src/features/codex-chat/__tests__/fixtures/resume-events-aborted.json'
+      ],
+      '/repo'
+    ) as any[]
+    const read = catActs.find((a) => a.kind === 'read') as any
+    expect(read).toBeTruthy()
+    expect(read.path).toBe(
+      '/repo/packages/web/src/features/codex-chat/__tests__/fixtures/resume-events-aborted.json'
+    )
+
+    const lsActs = parseExploreActions(
+      ['bash', '-lc', 'ls packages/web/src/features/codex-chat/services/processors'],
+      '/repo'
+    ) as any[]
+    const list = lsActs.find((a) => a.kind === 'list') as any
+    expect(list).toBeTruthy()
+    expect(list.target).toBe('/repo/packages/web/src/features/codex-chat/services/processors')
+    expect(list.targetDisplay).toBe('processors')
+  })
+
+  it('parses rg with double-dash terminator and absolute target', () => {
+    const acts = parseExploreActions(
+      [
+        'bash',
+        '-lc',
+        "rg -n -C2 -- '--codex-run-as-apply-patch' /Users/yoyo/.codex/sessions/sample.jsonl"
+      ],
+      '/repo'
+    ) as any[]
+    const search = acts.find((a) => a.kind === 'search') as any
+    expect(search).toBeTruthy()
+    expect(search.query).toBe('--codex-run-as-apply-patch')
+    expect(search.target).toBe('/Users/yoyo/.codex/sessions/sample.jsonl')
+  })
+
+  it('parses find and fd commands with quoted queries', () => {
+    const findActs = parseExploreActions(
+      ['bash', '-lc', 'find packages -maxdepth 2 -type f'],
+      '/repo'
+    ) as any[]
+    const findSearch = findActs.find((a) => a.kind === 'search') as any
+    expect(findSearch).toBeTruthy()
+    expect(findSearch.target).toBe('/repo/packages')
+    expect(findSearch.flags?.type).toBe('f')
+
+    const fdActs = parseExploreActions(
+      ['bash', '-lc', "fd -t f --hidden 'codex-run-as-apply-patch'"],
+      '/repo'
+    ) as any[]
+    const fdSearch = fdActs.find((a) => a.kind === 'search') as any
+    expect(fdSearch).toBeTruthy()
+    expect(fdSearch.query).toBe('codex-run-as-apply-patch')
+    expect(fdSearch.flags?.hidden).toBe(true)
   })
 })
 
@@ -187,14 +415,15 @@ describe('buildExploreText', () => {
     expect(s.flags.hidden).toBe(true)
   })
 
-  it('find without -name becomes list with depth/type flags', () => {
+  it('find without -name becomes search with type flag', () => {
     const acts = parseExploreActions(
       ['bash', '-lc', 'find packages -maxdepth 2 -type f'],
       '/w'
     ) as any[]
-    const l = acts.find((a) => a.kind === 'list')
-    expect(l.flags.depth).toBe(2)
-    expect(l.flags.type).toBe('f')
+    const s = acts.find((a) => a.kind === 'search') as any
+    expect(s).toBeTruthy()
+    expect(s.target).toBe('/w/packages')
+    expect(s.flags?.type).toBe('f')
   })
 
   it('rg -n -o ".." | sed … → 正确解析查询与仅一个 search 动作', () => {

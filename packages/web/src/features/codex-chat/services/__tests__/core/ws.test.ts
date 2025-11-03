@@ -66,13 +66,34 @@ describe('subscribeChatEvents', () => {
     expect(events).toEqual(['alpha', 'beta'])
   })
 
+  const RUNTIME_METHODS = [
+    'chat.info.runtime.generating',
+    'session.runtime',
+    'chat.turn.started',
+    'chat.turn.complete',
+    'chat.message.delta',
+    'chat.message.completed',
+    'chat.message.failed',
+    'chat.message.aborted'
+  ]
+
   it('不再建立全量 chat 订阅（按会话由会话层负责）', async () => {
     stop = subscribeChatEvents()
-    expect(__getFilters()).toEqual([])
+    expect(__getFilters()).toEqual([
+      {
+        topic: 'chat',
+        filter: { methods: RUNTIME_METHODS }
+      }
+    ])
     chatTurnActions.setConversationId('first')
     await new Promise((r) => setTimeout(r, 0))
-    // ws.ts 不负责按会话订阅；此处仅断言无全量订阅
-    expect(__getFilters()).toEqual([])
+    // ws.ts 不负责按会话订阅；此处仅断言不存在“全量”订阅，保留 runtime 订阅即可
+    expect(__getFilters()).toEqual([
+      {
+        topic: 'chat',
+        filter: { methods: RUNTIME_METHODS }
+      }
+    ])
   })
 
   it('processes codex runtime events and keeps single user message', () => {

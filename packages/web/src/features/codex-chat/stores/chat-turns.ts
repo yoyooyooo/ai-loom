@@ -57,8 +57,12 @@ export const chatTurnActions: TurnStoreActions = {
     useChatTurnStore.getState().completeAssistant(text, ts, eventId),
   failAssistant: (message) => useChatTurnStore.getState().failAssistant(message),
   abortAssistant: () => useChatTurnStore.getState().abortAssistant(),
-  appendReasoning: (delta) => useChatTurnStore.getState().appendReasoning(delta),
-  endReasoning: (summary) => useChatTurnStore.getState().endReasoning(summary),
+  appendReasoning: (delta, opts) => useChatTurnStore.getState().appendReasoning(delta, opts),
+  endReasoning: (summary, opts) => useChatTurnStore.getState().endReasoning(summary, opts),
+  markReasoningItemStarted: (itemId) =>
+    useChatTurnStore.getState().markReasoningItemStarted(itemId),
+  markReasoningItemCompleted: (itemId, opts) =>
+    useChatTurnStore.getState().markReasoningItemCompleted(itemId, opts),
   markFinalMessageStarted: () => useChatTurnStore.getState().markFinalMessageStarted(),
   unmarkFinalMessageStarted: () => useChatTurnStore.getState().unmarkFinalMessageStarted(),
   addStep: (kind, callId, title, meta) =>
@@ -125,7 +129,8 @@ const EMPTY_SLICE: ConvSlice = {
   generating: false,
   lastAccess: undefined,
   turnIndex: {},
-  streamingIndex: {}
+  streamingIndex: {},
+  reasoningIndex: {}
 }
 
 export const chatTurnSelectors = {

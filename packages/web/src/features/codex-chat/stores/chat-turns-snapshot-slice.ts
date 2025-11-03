@@ -1,7 +1,93 @@
-import type { ChatTurnStore, ChatTurnStoreCreator, ConvSlice, Turn } from './chat-turns.types'
+import type { ChatTurnStore, ChatTurnStoreCreator, ConvSlice, Turn, TurnStep } from './chat-turns.types'
 import { createId } from '@/lib/id'
-import { summarizeFirstLine } from './chat-turns-utils'
 import { STAGING_CID } from './chat-turns-core'
+import {
+  buildReadStepParts,
+  buildListStepParts,
+  buildSearchStepParts
+} from '@/features/codex-chat/services/ws-step-builders'
+import { parseExploreActions } from '@/features/codex-chat/utils/explore-utils'
+
+type EnrichedStep = TurnStep & { meta: Record<string, unknown> | null | undefined }
+
+function createStepId(base?: string, suffix?: number | string) {
+  if (!base) return createId('step')
+  return suffix != null ? `${base}:${suffix}` : base
+}
+
+function enrichExecStep(step: any): EnrichedStep[] {
+  const meta = step?.meta
+  const commandRaw = meta?.command
+  if (!Array.isArray(commandRaw) || commandRaw.length === 0) return [step]
+  const command = commandRaw.map((c: any) => String(c))
+  const cwd = typeof meta?.cwd === 'string' ? meta.cwd : undefined
+  const actions = parseExploreActions(command, cwd)
+  if (!Array.isArray(actions) || actions.length === 0) return [step]
+  const callId =
+    (typeof meta?.callId === 'string' && meta.callId) ||
+    (typeof step?.id === 'string' && step.id) ||
+    createId('exec')
+  const ctx = { command, cwd, callId }
+  const status = typeof step?.status === 'string' ? step.status : 'completed'
+  const ts = typeof step?.ts === 'string' ? step.ts : step?.ts ?? null
+  const exitCode = meta?.exitCode
+  const stdout = meta?.stdout
+  const stderr = meta?.stderr
+  const out: EnrichedStep[] = []
+  let first = true
+  let idx = 0
+  for (const action of actions) {
+    let built:
+      | ReturnType<typeof buildReadStepParts>
+      | ReturnType<typeof buildListStepParts>
+      | ReturnType<typeof buildSearchStepParts>
+      | null = null
+    let kind: TurnStep['kind'] | null = null
+    if (action.kind === 'read') {
+      built = buildReadStepParts(action as any, ctx)
+      kind = 'read'
+    } else if (action.kind === 'list') {
+      built = buildListStepParts(action as any, ctx)
+      kind = 'list'
+    } else if (action.kind === 'search') {
+      built = buildSearchStepParts(action as any, ctx)
+      kind = 'search'
+    }
+    if (!built || !kind) continue
+    const metaPatch: Record<string, unknown> = { ...(built.meta || {}) }
+    if (exitCode != null) metaPatch.exitCode = exitCode
+    if (stdout != null) metaPatch.stdout = stdout
+    if (stderr != null) metaPatch.stderr = stderr
+    const newStep: EnrichedStep = {
+      id: createStepId(step.id || callId, idx),
+      kind,
+      title: built.title,
+      body: first ? (step.body ?? null) : null,
+      tags: built.tags ?? null,
+      status,
+      ts,
+      meta: metaPatch
+    }
+    out.push(newStep)
+    first = false
+    idx += 1
+  }
+  return out.length > 0 ? out : [step]
+}
+
+function enrichSteps(stepsInput: any[]): EnrichedStep[] {
+  const steps = Array.isArray(stepsInput) ? stepsInput : []
+  const out: EnrichedStep[] = []
+  for (const step of steps) {
+    if (!step || typeof step !== 'object') continue
+    if (step.kind === 'exec') {
+      out.push(...enrichExecStep(step))
+    } else {
+      out.push(step as EnrichedStep)
+    }
+  }
+  return out
+}
 
 type SnapshotCreator = ChatTurnStoreCreator<ChatTurnStoreCreator.Snapshot>
 
@@ -9,6 +95,7 @@ function createEmptySlice(): ConvSlice {
   return {
     turns: [],
     activeTurnId: undefined,
+    pendingCompletionTurnId: undefined,
     nextSeq: 0,
     toolIndex: {},
     toolHistory: {},
@@ -34,6 +121,7 @@ function assignTurnsToSlice(state: ChatTurnStore, cid: string, slice: ConvSlice,
   slice.turnIndex = {}
   if (!(slice as any).toolHistory) (slice as any).toolHistory = {}
   const history = slice.toolHistory
+  slice.pendingCompletionTurnId = undefined
   for (const key of Object.keys(history)) delete history[key]
   if (!state.turnLocator) state.turnLocator = {}
   for (let i = 0; i < turns.length; i += 1) {
@@ -84,11 +172,13 @@ export function createSnapshotSlice(
               t?.assistant && typeof t.assistant.text === 'string' ? t.assistant : undefined
             const reasoning =
               t?.reasoning && typeof t.reasoning === 'object' ? t.reasoning : undefined
-            const steps = Array.isArray(t?.steps) ? t.steps : []
+            const rawSteps = Array.isArray(t?.steps) ? t.steps : []
+            const steps = enrichSteps(rawSteps)
             return { id, seq, conversationId: convId, status, user, assistant, reasoning, steps }
           })
           assignTurnsToSlice(s, key, conv, normalized as any)
           conv.activeTurnId = undefined
+          conv.pendingCompletionTurnId = undefined
           conv.nextSeq =
             normalized.length > 0 ? Math.max(...normalized.map((x: any) => x.seq || 0)) : 0
           conv.toolIndex = {}

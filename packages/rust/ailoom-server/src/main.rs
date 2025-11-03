@@ -15,6 +15,7 @@ use ailoom_executors::providers::codex::CodexProvider;
 use ailoom_fs::FsConfig;
 use ailoom_store::Store;
 use paths::{discover_workspace_root, normalize_path_for_key};
+use routes::settings::{apply_codex_home_env, sanitize_codex_home, DEFAULT_CODEX_HOME};
 use services::executors::registry::RuntimeRegistry;
 use state::AppState;
 
@@ -89,6 +90,23 @@ async fn main() -> anyhow::Result<()> {
             Store::connect_path(&fallback, &workspace_key).await?
         }
     };
+
+    // Hydrate runtime settings (e.g. CODEX_HOME) from persistent store
+    match store.get_setting("runtime", "codexHome").await.map(|opt| {
+        opt.and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| DEFAULT_CODEX_HOME.to_string())
+    }) {
+        Ok(value) => {
+            let sanitized = sanitize_codex_home(&value);
+            apply_codex_home_env(&sanitized);
+            tracing::info!(target: "codex", codex_home = %sanitized, "Runtime CODEX_HOME 已应用");
+        }
+        Err(err) => {
+            let fallback = sanitize_codex_home(DEFAULT_CODEX_HOME);
+            apply_codex_home_env(&fallback);
+            tracing::warn!(target: "codex", error = %err, "读取持久化 CODEX_HOME 失败，使用默认值");
+        }
+    }
 
     // Init WS hub (Phase 1: enabled by default)
     let ring_cap = std::env::var("AILOOM_WS_RING_CAP")

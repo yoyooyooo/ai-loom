@@ -1,6 +1,216 @@
 use crate::state::AppState;
 use crate::ws::chat_events::{event, ChatEvent, ChatHistoryEntry};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
+
+fn last_path_segment(path: &str) -> Option<String> {
+    let trimmed = path.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.rsplit('/').next().unwrap_or(trimmed).to_string())
+}
+
+#[derive(Debug)]
+struct ApplyPatchSummary {
+    first_path: Option<String>,
+    files: usize,
+    adds: usize,
+    dels: usize,
+    body: String,
+}
+
+fn parse_apply_patch_command(command: &[String]) -> Option<ApplyPatchSummary> {
+    if command.is_empty() {
+        return None;
+    }
+    let joined = command.join("\n");
+    if !joined.contains("*** Begin Patch") {
+        return None;
+    }
+    let mut paths: Vec<String> = Vec::new();
+    for line in joined.lines() {
+        let trimmed = line.trim();
+        for prefix in ["*** Add File:", "*** Update File:", "*** Delete File:"] {
+            if let Some(rest) = trimmed.strip_prefix(prefix) {
+                paths.push(rest.trim().to_string());
+                break;
+            }
+        }
+    }
+    let start = joined.find("*** Begin Patch")?;
+    let after_start = &joined[start..];
+    let end_rel = after_start.find("*** End Patch")?;
+    let end = start + end_rel + "*** End Patch".len();
+    let patch_text = joined[start..end].to_string();
+    let mut adds = 0usize;
+    let mut dels = 0usize;
+    for line in patch_text.lines() {
+        if line.starts_with('+') {
+            adds += 1;
+        } else if line.starts_with('-') {
+            dels += 1;
+        }
+    }
+    let files = if !paths.is_empty() {
+        paths.len()
+    } else if !patch_text.is_empty() {
+        1
+    } else {
+        0
+    };
+    Some(ApplyPatchSummary {
+        first_path: paths.first().cloned(),
+        files,
+        adds,
+        dels,
+        body: patch_text,
+    })
+}
+
+fn render_patch_diff_from_changes(changes: &Value) -> Option<String> {
+    let obj = changes.as_object()?;
+    if obj.is_empty() {
+        return None;
+    }
+    let mut blocks: Vec<String> = Vec::new();
+    for (path, change) in obj.iter() {
+        if let Some(update) = change
+            .get("update")
+            .and_then(|v| v.get("unified_diff"))
+            .and_then(|v| v.as_str())
+        {
+            blocks.push(format!("### {}\n\n```diff\n{}\n```", path, update));
+            continue;
+        }
+        if let Some(add) = change
+            .get("add")
+            .and_then(|v| v.get("content"))
+            .and_then(|v| v.as_str())
+        {
+            let formatted = add.replace('\n', "\n+ ");
+            blocks.push(format!("### {}\n\n```diff\n+ {}\n```", path, formatted));
+            continue;
+        }
+        if let Some(del) = change
+            .get("delete")
+            .and_then(|v| v.get("content"))
+            .and_then(|v| v.as_str())
+        {
+            let formatted = del.replace('\n', "\n- ");
+            blocks.push(format!("### {}\n\n```diff\n- {}\n```", path, formatted));
+            continue;
+        }
+    }
+    if blocks.is_empty() {
+        return None;
+    }
+    Some(blocks.join("\n\n"))
+}
+
+fn apply_patch_step_metadata(
+    step: &mut Value,
+    title: &str,
+    body_from_changes: Option<&String>,
+    call_id: &Option<String>,
+    first_path: &Option<String>,
+    files: usize,
+    adds: Option<usize>,
+    dels: Option<usize>,
+    auto_approved: bool,
+    changes_value: &Value,
+) {
+    if let Some(obj) = step.as_object_mut() {
+        obj.insert("kind".into(), Value::String("patch".into()));
+        obj.insert("title".into(), Value::String(title.to_string()));
+        obj.insert("status".into(), Value::String("streaming".into()));
+        if let Some(body) = body_from_changes {
+            obj.insert("body".into(), Value::String(body.clone()));
+        }
+        let meta_entry = obj
+            .entry("meta".to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        if let Some(meta_obj) = meta_entry.as_object_mut() {
+            if let Some(cid) = call_id {
+                meta_obj.insert("callId".into(), json!(cid));
+            }
+            let mut patch_meta = Map::new();
+            patch_meta.insert("files".into(), json!(files));
+            if let Some(first) = first_path {
+                patch_meta.insert("firstPath".into(), Value::String(first.clone()));
+            }
+            if let Some(adds_val) = adds {
+                patch_meta.insert("adds".into(), json!(adds_val));
+            }
+            if let Some(dels_val) = dels {
+                patch_meta.insert("dels".into(), json!(dels_val));
+            }
+            patch_meta.insert("autoApproved".into(), json!(auto_approved));
+            patch_meta.insert("changes".into(), changes_value.clone());
+            meta_obj.insert("patch".into(), Value::Object(patch_meta));
+        }
+    }
+}
+
+fn upgrade_exec_step_to_patch_if_apply_patch(step: &mut Value) -> bool {
+    let obj = match step.as_object_mut() {
+        Some(obj) => obj,
+        None => return false,
+    };
+    if obj.get("kind").and_then(|v| v.as_str()) != Some("exec") {
+        return false;
+    }
+    let meta_snapshot = match obj.get("meta").and_then(|v| v.as_object()) {
+        Some(m) => m,
+        None => return false,
+    };
+    if meta_snapshot.contains_key("patch") {
+        return false;
+    }
+    let command_values = match meta_snapshot.get("command").and_then(|v| v.as_array()) {
+        Some(arr) => arr,
+        None => return false,
+    };
+    let command: Vec<String> = command_values
+        .iter()
+        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+        .collect();
+    let Some(summary) = parse_apply_patch_command(&command) else {
+        return false;
+    };
+    {
+        let meta_value = obj
+            .entry("meta".to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        if let Some(meta_obj) = meta_value.as_object_mut() {
+            let mut patch_meta = Map::new();
+            patch_meta.insert("adds".into(), json!(summary.adds));
+            patch_meta.insert("dels".into(), json!(summary.dels));
+            patch_meta.insert("files".into(), json!(summary.files));
+            if let Some(first) = summary.first_path.clone() {
+                patch_meta.insert("firstPath".into(), Value::String(first));
+            }
+            meta_obj.insert("patch".into(), Value::Object(patch_meta));
+        }
+    }
+    let title = if let Some(ref path) = summary.first_path {
+        let name = last_path_segment(path).unwrap_or_else(|| path.clone());
+        if summary.files > 1 {
+            format!("patch {} (+{})", name, summary.files.saturating_sub(1))
+        } else {
+            format!("patch {}", name)
+        }
+    } else if summary.files > 0 {
+        format!("patch {} files", summary.files)
+    } else {
+        "patch (apply_patch)".to_string()
+    };
+    obj.insert("kind".into(), Value::String("patch".into()));
+    obj.insert("title".into(), Value::String(title));
+    if !summary.body.is_empty() {
+        obj.insert("body".into(), Value::String(summary.body.clone()));
+    }
+    true
+}
 
 use super::types::ResumeEventPayload;
 use super::{Turn, TurnStepKind};
@@ -84,7 +294,9 @@ pub fn filter_events_for_http_resume(
         .iter()
         .cloned()
         .filter(|(ev, _)| match ev {
-            CE::MessageDelta { .. } | CE::ReasoningDelta { .. } => false,
+            CE::MessageDelta { .. } | CE::ReasoningDelta { .. } | CE::ReasoningRawDelta { .. } => {
+                false
+            }
             _ => true,
         })
         .collect()
@@ -367,8 +579,8 @@ pub fn build_turns_from_history_and_events(
     }
     // 事件 → steps/边界
     use crate::ws::chat_events::ChatEvent as CE;
-    for (ev, maybe_seq) in events.iter() {
-        let idx = if let Some(s) = maybe_seq { *s } else { seq }; // 附加到指定/最后一轮
+    for (ev, maybe_seq) in events.iter().cloned() {
+        let idx = if let Some(s) = maybe_seq { s } else { seq }; // 附加到指定/最后一轮
         let turn = if let Some(pos) = turns.iter().position(|t| t.seq == idx) {
             Some(pos)
         } else if idx > 0 {
@@ -389,9 +601,9 @@ pub fn build_turns_from_history_and_events(
         let Some(pos) = turn else { continue };
         let t = turns.get_mut(pos).unwrap();
         match ev {
-            CE::ReasoningEnd { text } => {
-                let title = summarize_first_line(text);
-                let body = strip_dup_title(text, &title);
+            CE::ReasoningEnd { text, .. } => {
+                let title = summarize_first_line(&text);
+                let body = strip_dup_title(&text, &title);
                 let full_title = if title.is_empty() {
                     "thinking".to_string()
                 } else {
@@ -486,6 +698,7 @@ pub fn build_turns_from_history_and_events(
                         obj.insert("stderr".into(), json!(stderr));
                     }
                     last.as_object_mut().unwrap().insert("meta".into(), meta);
+                    let _ = upgrade_exec_step_to_patch_if_apply_patch(last);
                 }
             }
             CE::ToolPatchBegin {
@@ -497,14 +710,80 @@ pub fn build_turns_from_history_and_events(
                 dels,
                 changes,
             } => {
-                let title = first_path.clone().unwrap_or_else(|| "patch".to_string());
-                t.steps.push(json!({
-                    "id": format!("step-resume-patch-{}-{}", idx, t.steps.len()+1),
-                    "kind": "patch",
-                    "title": title,
-                    "status": "streaming",
-                    "meta": {"callId": call_id, "patch": {"files": files, "adds": adds, "dels": dels, "firstPath": first_path}, "autoApproved": auto_approved, "changes": changes}
-                }));
+                let changes_value = changes.clone().unwrap_or_else(|| Value::Object(Map::new()));
+                let body_from_changes = render_patch_diff_from_changes(&changes_value);
+                let title = if let Some(ref head) = first_path {
+                    let name = last_path_segment(head).unwrap_or_else(|| head.clone());
+                    if files > 1 {
+                        format!("patch {} (+{})", name, files.saturating_sub(1))
+                    } else {
+                        format!("patch {}", name)
+                    }
+                } else if files > 0 {
+                    format!("patch {} files", files)
+                } else {
+                    "patch".to_string()
+                };
+                let mut applied = false;
+                if let Some(ref cid) = call_id {
+                    if let Some(step) = t.steps.iter_mut().rev().find(|s| {
+                        s.get("meta")
+                            .and_then(|m| m.get("callId"))
+                            .and_then(|v| v.as_str())
+                            == Some(cid)
+                    }) {
+                        apply_patch_step_metadata(
+                            step,
+                            &title,
+                            body_from_changes.as_ref(),
+                            &call_id,
+                            &first_path,
+                            files,
+                            adds,
+                            dels,
+                            auto_approved,
+                            &changes_value,
+                        );
+                        applied = true;
+                    }
+                } else if let Some(step) = t
+                    .steps
+                    .iter_mut()
+                    .rev()
+                    .find(|s| s.get("kind").and_then(|v| v.as_str()) == Some("exec"))
+                {
+                    apply_patch_step_metadata(
+                        step,
+                        &title,
+                        body_from_changes.as_ref(),
+                        &call_id,
+                        &first_path,
+                        files,
+                        adds,
+                        dels,
+                        auto_approved,
+                        &changes_value,
+                    );
+                    applied = true;
+                }
+                if !applied {
+                    let mut obj = json!({
+                        "id": format!("step-resume-patch-{}-{}", idx, t.steps.len()+1)
+                    });
+                    apply_patch_step_metadata(
+                        &mut obj,
+                        &title,
+                        body_from_changes.as_ref(),
+                        &call_id,
+                        &first_path,
+                        files,
+                        adds,
+                        dels,
+                        auto_approved,
+                        &changes_value,
+                    );
+                    t.steps.push(obj);
+                }
             }
             CE::ToolPatchEnd {
                 call_id,
@@ -520,7 +799,7 @@ pub fn build_turns_from_history_and_events(
                                 .and_then(|v| v.as_str())
                                 == call_id.as_deref())
                 }) {
-                    let status = if *success { "completed" } else { "failed" };
+                    let status = if success { "completed" } else { "failed" };
                     last.as_object_mut()
                         .unwrap()
                         .insert("status".into(), Value::String(status.into()));

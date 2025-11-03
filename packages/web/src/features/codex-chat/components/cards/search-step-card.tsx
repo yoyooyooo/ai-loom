@@ -24,11 +24,13 @@ export function SearchStepCard({ step, turn }: StepCardProps) {
     <details className="border-b border-border pb-1">
       <summary className="flex items-center gap-2 truncate text-sm">
         <StepIcon kind={step.kind} />
-        <span className="truncate">
+        <span className="flex items-center gap-1">
           {query ? (
             <>
               {'Search '}
-              <span className="text-primary font-bold">{query}</span>
+              <span className="text-primary font-bold truncate max-w-[800px] inline-flex">
+                {query}
+              </span>
               {name ? (
                 <>
                   {' in '}

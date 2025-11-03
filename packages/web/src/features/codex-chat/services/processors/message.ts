@@ -98,7 +98,7 @@ export function handleMessage(method: string, params: any, opts: { useRxDelta: b
             : undefined
         if (cid && eventId > 0) ws.primeConversationCursor(cid, eventId)
       } catch {}
-      chatTurnActions.completeTurn()
+      chatTurnActions.completeTurn({ finalizeGenerating: false })
       return true
     }
     case 'chat.message.failed': {
@@ -112,7 +112,7 @@ export function handleMessage(method: string, params: any, opts: { useRxDelta: b
             : undefined
         if (cid && eid > 0) ws.primeConversationCursor(cid, eid)
       } catch {}
-      chatTurnActions.completeTurn()
+      chatTurnActions.completeTurn({ finalizeGenerating: false })
       return true
     }
     case 'chat.message.aborted': {
@@ -125,7 +125,7 @@ export function handleMessage(method: string, params: any, opts: { useRxDelta: b
             : undefined
         if (cid && eid > 0) ws.primeConversationCursor(cid, eid)
       } catch {}
-      chatTurnActions.completeTurn()
+      chatTurnActions.completeTurn({ finalizeGenerating: true })
       return true
     }
   }

@@ -82,8 +82,12 @@ export function handleTools(
         }
       } else {
         const src = command.join('\n')
+        const isInternalApplyPatch = command.some(
+          (part) => typeof part === 'string' && part.includes('--codex-run-as-apply-patch')
+        )
         const isApplyPatch =
-          /apply_patch|applypatch|git\s+apply/i.test(src) || /\*\*\*\s+Begin Patch/.test(src)
+          !isInternalApplyPatch &&
+          (/apply_patch|applypatch|git\s+apply/i.test(src) || /\*\*\*\s+Begin Patch/.test(src))
         if (isApplyPatch) {
           // 识别 apply_patch 补丁块，直接作为 patch 卡片展示
           const r = buildPatchFromApplyPatchCommand({ command, cwd, callId })

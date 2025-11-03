@@ -1,6 +1,8 @@
 import { rxRequest, toHttpError } from '@/lib/request'
 import type { AskForApproval } from '@/lib/codex-types/AskForApproval'
 import type { SandboxMode } from '@/lib/codex-types/SandboxMode'
+import type { ReasoningEffort } from '@/lib/codex-types/ReasoningEffort'
+import type { ReasoningSummary } from '@/lib/codex-types/ReasoningSummary'
 import type { Turn } from '../types/generated/turns'
 
 export type ConversationListItem = {
@@ -52,6 +54,7 @@ export type ChatConfigResponse = {
     approvalPolicy?: AskForApproval | null
     sandboxMode?: SandboxMode | null
   }
+  codexUnavailable?: boolean
 }
 
 export type ResumeSandboxConfig = {
@@ -97,6 +100,19 @@ export type NewConversationOverrides = {
   model?: string
   approvalPolicy?: AskForApproval
   sandboxMode?: SandboxMode
+}
+
+export type SendUserTurnRequest = {
+  text: string
+  model?: string
+  approvalPolicy?: AskForApproval
+  sandboxMode?: SandboxMode
+  sandboxWritableRoots?: string[]
+  sandboxNetworkAccess?: boolean
+  sandboxExcludeTmpdirEnvVar?: boolean
+  sandboxExcludeSlashTmp?: boolean
+  effort?: ReasoningEffort | null
+  summary?: ReasoningSummary
 }
 
 export const chatApi = {
@@ -191,6 +207,20 @@ export const chatApi = {
       throw toHttpError(e, 'sendMessage failed')
     }
   },
+  async sendUserTurn(conversationId: string, payload: SendUserTurnRequest) {
+    try {
+      const res = await rxRequest({
+        method: 'POST',
+        url: `/api/chat/conversations/${encodeURIComponent(conversationId)}/turns`,
+        data: payload,
+        timeoutMs: 180_000,
+        retries: 0
+      })
+      return res.data
+    } catch (e) {
+      throw toHttpError(e, 'sendUserTurn failed')
+    }
+  },
   async interrupt(
     conversationId: string,
     opts?: { awaitTurnAborted?: boolean; timeoutMs?: number; hard?: boolean }
@@ -259,7 +289,11 @@ export const chatApi = {
   },
   async listConversations(params?: { pageSize?: number; cursor?: string }) {
     try {
-      const res = await rxRequest<{ items: ConversationListItem[]; nextCursor?: string | null }>({
+      const res = await rxRequest<{
+        items: ConversationListItem[]
+        nextCursor?: string | null
+        codexUnavailable?: boolean
+      }>({
         method: 'GET',
         url: `/api/chat/conversations`,
         params,
@@ -301,12 +335,15 @@ export const chatApi = {
       throw toHttpError(e, 'getTurnOutput failed')
     }
   },
-  async deleteConversation(path: string) {
+  async deleteConversation(conversationId: string, providerId?: string | null) {
     try {
       await rxRequest({
         method: 'DELETE',
         url: `/api/chat/conversations`,
-        data: { path },
+        data: {
+          conversationId,
+          providerId: providerId ?? 'codex'
+        },
         timeoutMs: 8_000,
         retries: 0
       })

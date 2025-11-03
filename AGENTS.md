@@ -30,6 +30,8 @@
 - 去重与游标：WS 以 `eventId` 去重；Resume 结合顺序/`turnSeq`/`callId`；前端按会话维护 `convLast[cid]` 并持久化。
 - Turn-first 边界：首条内容隐式开启；`completed|failed|aborted|turn.complete` 收束；`Compact task completed` 仅作 info 步骤，不结束/新建 Turn。
 - 自愈策略：Supervisor 比较 `hub.lastEventId` 与连接 `lastSent`，落后超阈值触发 `session.resync` + 关闭连接，随后重连 + resume。
+- RxJS 约定：Observable 统一以 `$` 结尾，Subject 统一以 `$$` 结尾，跨文件引用不得改名；WS 相关 Observable/Subject 必须统一在 `packages/web/src/lib/ws/runtime-subjects.ts` 定义与导出；禁止在业务模块顶层随意 `new Subject()`。
+ - RxJS 编排：少量必要的模块顶层 Observable/Subject 即可；业务逻辑优先在管道内闭合，使用 `scan`、`withLatestFrom` 等操作符折叠状态或派生数据，减少外部变量与手写订阅，保持函数式、可读、易拆分；跨模块暴露一律通过 `packages/web/src/lib/ws/runtime-subjects.ts` 统一出口。
 
 ## 文件索引（话题→文件）
 
@@ -64,6 +66,8 @@
   - 前端：`features/codex-chat/services/ws-capabilities.ts`
 - 调试面板（WS 观测）
   - 前端：`lib/ws/ws-debug-panel.tsx`
+ - WS 运行时 Subjects 汇总
+   - 前端：`packages/web/src/lib/ws/runtime-subjects.ts`
   
 - Store 组合与类型（Slice-first + StoreCreator）
   - 规范：`docs/frontend-architecture.md`（3.4 小节）
@@ -77,6 +81,7 @@
 - `map_notification_to_chat_events`、`codex/event/`、`chat.tool.exec|patch|mcp`
 - `chat.message.completed|delta|failed|aborted`、`chat.reasoning.end|delta`、`chat.turn.complete`
 - `chat.info.runtime.child_up|chat.info.runtime.child_down`、`session.runtime`
+- `packages/web/src/lib/ws/runtime-subjects.ts`
 - `/api/chat/runtime`、`POST .../warm`、`DELETE .../process`
 - 查询参数：`provider=<codex|...>`（省略时默认 `codex`）
 - `AILOOM_EXEC_IDLE_MS|AILOOM_EXEC_GC_INTERVAL_MS|AILOOM_EXEC_MAX_CHILDREN|AILOOM_EXEC_USE_PROC_GROUP`
@@ -92,6 +97,7 @@
 - 一键联动：`just dev-all`（后端热重载 + 前端 Vite Dev）
 - 仅后端：`just server-dev` / 运行：`just server-run`
 - 仅前端：`just web-dev [VITE_API_BASE=...]`；类型检查（完成大模块/大改动后执行）：`just web-typecheck`
+- 大改造或单个模块需求完成后：执行 `lfiles -m 800` 排查 800 行以上文件；800+ 必须尽快评估拆分，1000+ 视作紧急拆分任务。
 - 大模块完成后统一格式化：`just fmt`（Rust + Web 一键格式化）
 - 测试：`just test-all`（或 `just server-test` / `just web-test`）
 - Ring、去重与调试：`VITE_WS_DEBUG=1` 打开面板；`AILOOM_WS_RING_CAP` 调整事件环；`AILOOM_WS_DEDUP_MS` 调整 file.changed 去重窗口。

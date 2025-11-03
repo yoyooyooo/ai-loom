@@ -39,6 +39,16 @@
      - `cwd`、`effort`、`summary` 等补充信息。
      - `overrides`：传回给前端的原始覆盖键值（例如 `sandbox_workspace_write.network_access=true`）。
 
+### `/api/chat/conversations/:conversationId/turns`
+
+- 位置：`packages/rust/ailoom-server/src/routes/chat/turn.rs`
+- 行为：
+  1. 接收 `{ text, model?, approvalPolicy?, sandboxMode?, sandboxNetworkAccess?, sandboxWritableRoots?, effort?, summary? }`（均为可选值，`text` 必填）。
+  2. 合并工作区根目录（`cwd`）与覆盖项，构造 Codex JSON-RPC `sendUserTurn`，从而在当前会话内即时切换模型/审批/沙箱等配置。
+  3. 覆盖项缺失时沿用最近一次成功发送时保存的会话配置；若 Provider 未实现 `send_user_turn`，返回 `501 Not Implemented` 并提醒前端回退至新建会话。
+- 额外广播：与 `/messages` 一致，在 HTTP 接收阶段即入环 `chat.info.user_message`，确保 UI 及时回显用户输入。
+- 用途：支持“已存在的会话”按回合切换配置；新建会话后的首条消息也会走该接口，确保配置立即生效。
+
 ## 前端状态：Provider Store
 
 - 现状：`packages/web/src/stores/codex-chat-provider.ts`
@@ -67,10 +77,10 @@
 ## UI 与交互
 
 - 配置面板：`packages/web/src/features/codex-chat/components/chat-config-panel.tsx`
-  - 通过 `CodexChatConfigPanelTrigger` 按钮访问，展示“当前模型 / 默认值 / 覆盖 / 额度 / 会话元数据”。
-  - 模型列表通过 `models` 渲染；支持标记默认模型。
+  - 通过 `CodexChatConfigPanelTrigger` 按钮访问，展示“当前模型 / 默认值 / 覆盖 / 额度 / 会话元数据”，并允许编辑 `model / approvalPolicy / sandboxMode`。
+  - 模型列表通过 `models` 渲染；支持标记默认模型。选择结果会写入 Provider Store 的 `overrides`，作为后续 `newConversation` 与每次 `sendUserTurn` 的覆盖来源。
 - 恢复提示：`chat-page.tsx` 会在成功恢复后弹出 “已恢复到历史会话” banner，并同步刷新历史列表。
-- 输入框覆写：当前版本仍以“恢复回放后直接与 Codex 原生 CLI 保持一致”为目标，未提供 UI 写入配置的入口（后续可在此基础上扩展）。
+- 输入框覆写：当会话存在时，后续发送改走 `/turns`，每一轮都会把最新的覆盖值写入 Codex；无会话时仍通过 `/conversations` 先创建再发送首轮 `sendUserTurn`。
 
 ## 开发校验
 

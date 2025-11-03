@@ -32,7 +32,7 @@ export function PlanStepCard({ step }: StepCardProps) {
       <div className="flex items-center gap-2 truncate text-sm">
         <StepIcon kind={step.kind} />
         <span className="truncate">{step.title || 'Plan 更新'}</span>
-        {stepStatusBadge(step.status)}
+        {stepStatusBadge(step.status, { hideStreaming: true })}
       </div>
       {plan.length > 0 ? (
         <ul className="mt-1 pl-3 space-y-1">

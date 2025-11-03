@@ -3,21 +3,22 @@
 import React, { useMemo, useState } from 'react'
 import { cva, type VariantProps } from 'class-variance-authority'
 import { motion } from 'framer-motion'
-import { Ban, ChevronRight, Code2, Loader2, Terminal } from 'lucide-react'
+import { Ban, ChevronRight, Code2, Loader2, TextSelect, Terminal } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { FilePreview } from '@/components/ui/file-preview'
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 const chatBubbleVariants = cva(
-  'group/message relative wrap-break-word rounded-lg p-3 text-sm shrink-0 max-w-[80%] sm:max-w-[70%]',
+  'group/message relative wrap-break-word rounded-lg p-3 text-sm shrink-0',
   {
     variants: {
       isUser: {
         // 浅色下沿用主题主色；深色下按需调整为 #303030，文字白色
-        true: 'bg-primary text-primary-foreground dark:bg-[#303030] dark:text-white',
-        false: 'bg-muted text-foreground'
+        true: 'bg-primary text-primary-foreground dark:bg-[#303030] dark:text-white max-w-[80%] ',
+        false: 'bg-muted text-foreground max-w-[calc(100%-50px)]'
       },
       animation: {
         none: '',
@@ -119,6 +120,29 @@ type MessagePart =
   | FilePart
   | StepStartPart
 
+const IDE_CONTEXT_HEADER = '# Context from my IDE setup:'
+const IDE_REQUEST_HEADER = '## My request for Codex:'
+
+function splitIdeInjectedContext(raw: string) {
+  const input = typeof raw === 'string' ? raw : ''
+  if (!input) return { request: input, context: '' }
+  if (!input.startsWith(IDE_CONTEXT_HEADER)) {
+    return { request: input, context: '' }
+  }
+  const normalized = input.replace(/\r\n/g, '\n')
+  const requestIndex = normalized.indexOf(IDE_REQUEST_HEADER)
+  if (requestIndex < 0) {
+    return { request: input, context: '' }
+  }
+  const context = normalized.slice(0, requestIndex).trim()
+  const afterHeader = normalized.slice(requestIndex + IDE_REQUEST_HEADER.length)
+  const request = afterHeader.replace(/^\s+/, '')
+  if (!request) {
+    return { request: input, context }
+  }
+  return { request, context }
+}
+
 export interface Message {
   id: string
   role: 'user' | 'assistant' | (string & {})
@@ -156,6 +180,12 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   }, [experimental_attachments])
 
   const isUser = role === 'user'
+  const { request: userRequestContent, context: userContext } = useMemo(() => {
+    if (!isUser) {
+      return { request: content, context: '' }
+    }
+    return splitIdeInjectedContext(content)
+  }, [content, isUser])
   void createdAt
 
   if (isUser) {
@@ -172,8 +202,32 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
           </div>
         ) : null}
 
-        <div className={cn(chatBubbleVariants({ isUser, animation }))}>
-          <MarkdownRenderer>{content}</MarkdownRenderer>
+        <div className="flex w-full justify-end">
+          <div className="relative max-w-[80%]">
+            {userContext ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="查看 IDE 上下文"
+                  className="absolute -left-6 top-1 z-10 flex h-5 w-5 items-center justify-center text-muted-foreground/70 transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-ring"
+                  >
+                  <TextSelect className="h-3.5 w-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent
+                  side="left"
+                  align="end"
+                  className="max-w-xs whitespace-pre-wrap text-left leading-relaxed text-background"
+                >
+                  {userContext}
+                </TooltipContent>
+              </Tooltip>
+            ) : null}
+            <div className={cn(chatBubbleVariants({ isUser, animation }), 'max-w-full')}>
+              <MarkdownRenderer>{userRequestContent}</MarkdownRenderer>
+            </div>
+          </div>
         </div>
 
         {/* 时间展示已移除 */}

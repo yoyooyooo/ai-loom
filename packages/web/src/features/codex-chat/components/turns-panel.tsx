@@ -253,7 +253,11 @@ export function TurnsPanel({ onRetry }: TurnsPanelProps = {}) {
 
   return (
     <div className="relative h-full">
-      <div ref={listRef} id={CHAT_SCROLLER_ID} className="h-full space-y-3 overflow-auto px-4 py-3">
+      <div
+        ref={listRef}
+        id={CHAT_SCROLLER_ID}
+        className="h-full space-y-3 overflow-x-hidden overflow-y-auto px-4 py-3"
+      >
         {turns.map((turn) => (
           <React.Fragment key={turn.id}>
             <TurnUserView turn={turn} />

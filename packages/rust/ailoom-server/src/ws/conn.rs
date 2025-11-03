@@ -23,10 +23,220 @@ use ailoom_executors::providers::codex::active_conversation_ids;
 struct SubFilter {
     topic: String,
     filter: Value,
+    parsed: Option<ParsedFilter>,
     // 引用计数：同一连接、相同 topic+filter 的多次订阅会合并为一条，直到计数归零才真正移除
     ref_count: u32,
     // 退订宽限期版本号：每次从 >0 → 0 时递增；用于延时移除时校验是否仍为同一代
     zero_gen: u64,
+}
+
+#[derive(Clone, Debug)]
+enum ParsedFilter {
+    Chat(ChatFilter),
+}
+
+#[derive(Clone, Debug)]
+struct ChatFilter {
+    conversation_id: Option<String>,
+    method_matchers: Vec<MethodMatcher>,
+}
+
+#[derive(Clone, Debug)]
+enum MethodMatcher {
+    Exact(String),
+    Prefix(String),
+}
+
+impl MethodMatcher {
+    fn from_pattern(pattern: &str) -> Result<Self, String> {
+        if pattern.is_empty() {
+            return Err("methods entry must not be empty".into());
+        }
+        if let Some(prefix) = pattern.strip_suffix('*') {
+            if prefix.is_empty() {
+                return Err("methods entry prefix must not be empty".into());
+            }
+            Ok(MethodMatcher::Prefix(prefix.to_string()))
+        } else {
+            Ok(MethodMatcher::Exact(pattern.to_string()))
+        }
+    }
+
+    fn matches(&self, method: &str) -> bool {
+        match self {
+            MethodMatcher::Exact(m) => method == m,
+            MethodMatcher::Prefix(p) => method.starts_with(p.as_str()),
+        }
+    }
+}
+
+impl ChatFilter {
+    fn from_value(filter: &Value) -> Result<Self, String> {
+        let conversation_id = filter
+            .get("conversationId")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let mut method_matchers: Vec<MethodMatcher> = Vec::new();
+        if let Some(methods_val) = filter.get("methods") {
+            match methods_val {
+                Value::String(s) => {
+                    method_matchers.push(MethodMatcher::from_pattern(s.trim())?);
+                }
+                Value::Array(arr) => {
+                    for item in arr.iter() {
+                        let Some(ms) = item.as_str() else {
+                            return Err("methods array must contain strings".into());
+                        };
+                        method_matchers.push(MethodMatcher::from_pattern(ms.trim())?);
+                    }
+                }
+                _ => {
+                    return Err("methods must be string or array of strings".into());
+                }
+            }
+        }
+
+        Ok(ChatFilter {
+            conversation_id,
+            method_matchers,
+        })
+    }
+
+    fn matches(&self, ev: &Event) -> bool {
+        let method = ev.method.as_str();
+        let mut method_allowed = false;
+
+        if self.method_matchers.is_empty() {
+            // 默认：与旧逻辑一致，仅接收 chat.* / codex/*
+            method_allowed = method.starts_with("chat.") || method.starts_with("codex/");
+        } else {
+            method_allowed = self
+                .method_matchers
+                .iter()
+                .any(|matcher| matcher.matches(method));
+        }
+
+        if !method_allowed {
+            return false;
+        }
+
+        if let Some(cid) = &self.conversation_id {
+            let params_id = ev
+                .params
+                .get("conversationId")
+                .or_else(|| ev.params.get("conversationID"))
+                .and_then(|v| v.as_str());
+            if params_id != Some(cid.as_str()) {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
+impl SubFilter {
+    fn matches(&self, ev: &Event) -> bool {
+        match self.topic.as_str() {
+            "file" => {
+                if ev.method != "file.changed" {
+                    return false;
+                }
+                if let Some(p) = ev.params.get("path").and_then(|v| v.as_str()) {
+                    if let Some(pp) = self.filter.get("path").and_then(|v| v.as_str()) {
+                        if pp == p {
+                            return true;
+                        }
+                    }
+                    if let Some(pref) = self.filter.get("prefix").and_then(|v| v.as_str()) {
+                        if p.starts_with(pref) {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            "tree" => {
+                if ev.method != "tree.changed" {
+                    return false;
+                }
+                let want = self
+                    .filter
+                    .get("dir")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if want.is_empty() {
+                    return true;
+                }
+                if let Some(dir) = ev.params.get("dir").and_then(|v| v.as_str()) {
+                    if dir == want {
+                        return true;
+                    }
+                }
+                if let Some(imps) = ev.params.get("impactedPaths").and_then(|v| v.as_array()) {
+                    for it in imps {
+                        if let Some(pp) = it.as_str() {
+                            if pp.starts_with(&(want.to_string() + "/")) || pp == want {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                false
+            }
+            "annotations" => {
+                if !ev.method.starts_with("annotations.") {
+                    return false;
+                }
+                let want = self.filter.get("filePath").and_then(|v| v.as_str());
+                if want.is_none() {
+                    return true;
+                }
+                let wantp = want.unwrap();
+                if ev.method == "annotations.deleted" {
+                    return true;
+                }
+                if let Some(obj) = ev.params.get("annotation").and_then(|v| v.as_object()) {
+                    if let Some(fp) = obj.get("filePath").and_then(|v| v.as_str()) {
+                        if fp == wantp {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            "chat" => {
+                match &self.parsed {
+                    Some(ParsedFilter::Chat(chat)) => chat.matches(ev),
+                    None => {
+                        // 兼容旧逻辑：仅 conversationId，接受所有 chat.* / codex/*
+                        if !(ev.method.starts_with("chat.") || ev.method.starts_with("codex/")) {
+                            return false;
+                        }
+                        let want = self.filter.get("conversationId").and_then(|v| v.as_str());
+                        if want.is_none() {
+                            return true;
+                        }
+                        let params_id = ev.params.get("conversationId").and_then(|v| v.as_str());
+                        if params_id.is_none() {
+                            return false;
+                        }
+                        params_id == want
+                    }
+                }
+            }
+            _ => false,
+        }
+    }
+}
+
+fn parse_filter(topic: &str, filter: &Value) -> Result<Option<ParsedFilter>, String> {
+    match topic {
+        "chat" => Ok(Some(ParsedFilter::Chat(ChatFilter::from_value(filter)?))),
+        _ => Ok(None),
+    }
 }
 
 pub async fn handle_connection(state: AppState, mut socket: WebSocket) {
@@ -877,75 +1087,17 @@ fn normalize_filter(filter: &Value) -> String {
 fn subs_match_any(subs: &HashMap<String, SubFilter>, ev: &Event) -> bool {
     let gating_debug =
         std::env::var("AILOOM_WS_GATING_DEBUG").unwrap_or_else(|_| "0".into()) == "1";
-    for (_t, s) in subs.iter() {
-        if s.topic == "file" && ev.method == "file.changed" {
-            if let Some(p) = ev.params.get("path").and_then(|v| v.as_str()) {
-                let f = &s.filter;
-                if let Some(pp) = f.get("path").and_then(|v| v.as_str()) {
-                    if pp == p {
-                        return true;
-                    }
-                }
-                if let Some(pref) = f.get("prefix").and_then(|v| v.as_str()) {
-                    if p.starts_with(pref) {
-                        return true;
-                    }
-                }
-            }
-        } else if s.topic == "tree" && ev.method == "tree.changed" {
-            // if filter.dir matches or empty
-            let want = s.filter.get("dir").and_then(|v| v.as_str()).unwrap_or("");
-            if want.is_empty() {
-                return true;
-            }
-            if let Some(dir) = ev.params.get("dir").and_then(|v| v.as_str()) {
-                if dir == want {
-                    return true;
-                }
-            }
-            if let Some(imps) = ev.params.get("impactedPaths").and_then(|v| v.as_array()) {
-                for it in imps {
-                    if let Some(pp) = it.as_str() {
-                        if pp.starts_with(&(want.to_string() + "/")) || pp == want {
-                            return true;
-                        }
-                    }
-                }
-            }
-        } else if s.topic == "annotations" && ev.method.starts_with("annotations.") {
-            let want = s.filter.get("filePath").and_then(|v| v.as_str());
-            if want.is_none() {
-                return true;
-            }
-            let wantp = want.unwrap();
-            if ev.method == "annotations.deleted" {
-                return true;
-            }
-            if let Some(obj) = ev.params.get("annotation").and_then(|v| v.as_object()) {
-                if let Some(fp) = obj.get("filePath").and_then(|v| v.as_str()) {
-                    if fp == wantp {
-                        return true;
-                    }
-                }
-            }
-        } else if s.topic == "chat"
-            && (ev.method.starts_with("chat.") || ev.method.starts_with("codex/"))
-        {
-            let want = s.filter.get("conversationId").and_then(|v| v.as_str());
-            if want.is_none() {
-                return true;
-            }
-            let params_id = ev.params.get("conversationId").and_then(|v| v.as_str());
-            if params_id.is_none() {
-                continue;
-            }
-            if params_id == want {
-                return true;
-            }
+    for s in subs.values() {
+        if s.matches(ev) {
+            return true;
         }
     }
     // 未命中：如启用 gating debug，输出一次丢弃原因
-    if gating_debug && (ev.method.starts_with("chat.") || ev.method.starts_with("codex/")) {
+    if gating_debug
+        && (ev.method.starts_with("chat.")
+            || ev.method.starts_with("codex/")
+            || ev.method == "session.runtime")
+    {
         let cid = ev
             .params
             .get("conversationId")
@@ -982,6 +1134,17 @@ async fn handle_request(
             if topic.is_empty() {
                 return RpcResponse::err(id, "INVALID_PARAMS", "topic required", None);
             }
+            let parsed = match parse_filter(topic, &filter) {
+                Ok(p) => p,
+                Err(err) => {
+                    return RpcResponse::err(
+                        id,
+                        "INVALID_FILTER",
+                        &err,
+                        Some(json!({"topic": topic, "filter": filter_dbg })),
+                    );
+                }
+            };
             let token = format!("{}:{}", topic, normalize_filter(&filter));
             let mut is_new = false;
             {
@@ -995,6 +1158,7 @@ async fn handle_request(
                         SubFilter {
                             topic: topic.to_string(),
                             filter,
+                            parsed: parsed.clone(),
                             ref_count: 1,
                             zero_gen: 0,
                         },
@@ -1029,6 +1193,11 @@ async fn handle_request(
                         .or_else(|| filter_obj.get("provider"))
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
+
+                    // 仅针对带 conversationId 的订阅执行握手
+                    if filter_conversation_id.is_none() {
+                        return;
+                    }
 
                     // 不再在订阅时自动 ensure；保持极简，依赖发送/新建链路与 resume 语义
 
@@ -1127,27 +1296,69 @@ async fn handle_request(
             if items.is_empty() {
                 return RpcResponse::err(id, "INVALID_PARAMS", "items required", None);
             }
-            let mut results: Vec<Value> = Vec::with_capacity(items.len());
-            // 先处理订阅表与 ref_count，再异步执行握手，避免在请求路径上阻塞
+
+            #[derive(Clone)]
+            struct PreparedSub {
+                token: String,
+                topic: String,
+                filter: Value,
+                parsed: Option<ParsedFilter>,
+                begin_after_val: Value,
+                begin_tail_val: Value,
+                after_u64: u64,
+                tail_usize: usize,
+            }
+
+            let mut prepared: Vec<PreparedSub> = Vec::with_capacity(items.len());
             for it in items.iter() {
                 let topic = it.get("topic").and_then(|v| v.as_str()).unwrap_or("");
-                let filter = it.get("filter").cloned().unwrap_or(json!({}));
-                let filter_dbg = filter.clone();
                 if topic.is_empty() {
-                    continue;
+                    return RpcResponse::err(id, "INVALID_PARAMS", "topic required", None);
                 }
+                let filter = it.get("filter").cloned().unwrap_or(json!({}));
+                let parsed = match parse_filter(topic, &filter) {
+                    Ok(p) => p,
+                    Err(err) => {
+                        return RpcResponse::err(
+                            id,
+                            "INVALID_FILTER",
+                            &err,
+                            Some(json!({"topic": topic, "filter": filter})),
+                        );
+                    }
+                };
                 let token = format!("{}:{}", topic, normalize_filter(&filter));
+                let begin_after_val = it.get("after").cloned().unwrap_or(json!(0));
+                let begin_tail_val = it.get("tail").cloned().unwrap_or(json!(0));
+                let after_u64 = it.get("after").and_then(|v| v.as_u64()).unwrap_or(0u64);
+                let tail_usize = it.get("tail").and_then(|v| v.as_u64()).unwrap_or(0u64) as usize;
+                prepared.push(PreparedSub {
+                    token,
+                    topic: topic.to_string(),
+                    filter,
+                    parsed,
+                    begin_after_val,
+                    begin_tail_val,
+                    after_u64,
+                    tail_usize,
+                });
+            }
+
+            let mut results: Vec<Value> = Vec::with_capacity(prepared.len());
+
+            for prep in prepared.into_iter() {
                 let mut is_new = false;
                 {
                     let mut guard = subs.write().await;
-                    if let Some(entry) = guard.get_mut(&token) {
+                    if let Some(entry) = guard.get_mut(&prep.token) {
                         entry.ref_count = entry.ref_count.saturating_add(1);
                     } else {
                         guard.insert(
-                            token.clone(),
+                            prep.token.clone(),
                             SubFilter {
-                                topic: topic.to_string(),
-                                filter: filter.clone(),
+                                topic: prep.topic.clone(),
+                                filter: prep.filter.clone(),
+                                parsed: prep.parsed.clone(),
                                 ref_count: 1,
                                 zero_gen: 0,
                             },
@@ -1155,7 +1366,7 @@ async fn handle_request(
                         is_new = true;
                     }
                 }
-                // 更新连接快照（不持写锁）
+
                 {
                     let guard = subs.read().await;
                     let items_after: Vec<(String, u32)> = guard
@@ -1164,31 +1375,31 @@ async fn handle_request(
                         .collect();
                     inspect::set_conn_subs(conn_id, items_after);
                 }
-                // 订阅即补发：仅 chat & 仅 0->1
-                if topic == "chat" && is_new {
+
+                if prep.topic == "chat" && is_new {
                     let hub = state.ws_hub.clone();
                     let tx = out_priority_tx.clone();
                     let last_sent = last_sent_event_id_shared.clone();
-                    // 预先提取 after/tail 以免借用 items/it
-                    let begin_after_val = it.get("after").cloned().unwrap_or(json!(0));
-                    let begin_tail_val = it.get("tail").cloned().unwrap_or(json!(0));
-                    let after_u64 = it.get("after").and_then(|v| v.as_u64()).unwrap_or(0u64);
-                    let tail_usize =
-                        it.get("tail").and_then(|v| v.as_u64()).unwrap_or(0u64) as usize;
-                    let filter_to_move = filter.clone();
-                    let token_for_log = token.clone();
+                    let filter_value = prep.filter.clone();
+                    let begin_after_val = prep.begin_after_val.clone();
+                    let begin_tail_val = prep.begin_tail_val.clone();
+                    let after_u64 = prep.after_u64;
+                    let tail_usize = prep.tail_usize;
+                    let token_for_log = prep.token.clone();
                     tokio::spawn(async move {
-                        let filter_obj = filter_to_move.as_object().cloned().unwrap_or_default();
+                        let filter_obj = filter_value.as_object().cloned().unwrap_or_default();
                         let filter_conversation_id = filter_obj
                             .get("conversationId")
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string());
+                        if filter_conversation_id.is_none() {
+                            return;
+                        }
                         let filter_provider_id = filter_obj
                             .get("providerId")
                             .or_else(|| filter_obj.get("provider"))
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string());
-                        // begin
                         let begin = RpcNotification {
                             jsonrpc: "2.0".into(),
                             method: "chat.session.sync_begin".into(),
@@ -1248,8 +1459,10 @@ async fn handle_request(
                         }
                     });
                 }
-                results.push(json!({"token": token}));
+
+                results.push(json!({"token": prep.token}));
             }
+
             RpcResponse::ok(id, json!({"tokens": results}))
         }
         "unsubscribe" => {

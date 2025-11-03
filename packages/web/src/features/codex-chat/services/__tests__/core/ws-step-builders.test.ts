@@ -45,6 +45,22 @@ describe('ws-step-builders', () => {
     expect(String(built.body || '')).toContain('+++')
   })
 
+  it('buildPatchToolBeginParts derives counts when missing', () => {
+    const built = buildPatchToolBeginParts(
+      {
+        firstPath: 'c.txt',
+        changes: {
+          'c.txt': { update: { unified_diff: '--- a\n+++ b\n@@\n- old\n+ new\n+ more' } }
+        }
+      },
+      { patchMaxFiles: 16, patchMaxChars: 2000 },
+      'p3'
+    )
+    expect((built.meta as any).patch.adds).toBe(2)
+    expect((built.meta as any).patch.dels).toBe(1)
+    expect((built.meta as any).patch.files).toBe(1)
+  })
+
   it('mcp begin/end parts', () => {
     const b = buildMcpBeginParts({ server: 's', tool: 't', args: { q: 1 } }, 'm1')
     expect(b.title).toBe('s/t')

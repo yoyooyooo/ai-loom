@@ -1,53 +1,44 @@
 import { Observable, from, merge } from 'rxjs'
 import {
+  distinctUntilChanged,
   filter,
   groupBy,
   map,
   mergeMap,
   scan,
+  share,
   startWith,
   toArray,
   windowToggle,
-  withLatestFrom,
-  share,
-  distinctUntilChanged
+  withLatestFrom
 } from 'rxjs/operators'
 
-type WsEvent = { method: string; params: any }
+import type { WsEvent } from './ws-streams'
+import { getConversationId, eventIdFromParams } from '@/lib/ws/chat-utils'
 
-const isChat = (m: string) => typeof m === 'string' && m.startsWith('chat.')
 const isHandshake = (m: string) => m === 'chat.session.sync_begin' || m === 'chat.session.sync_end'
-const cidOf = (p: any) =>
-  typeof p?.conversationId === 'string' ? (p as any).conversationId : undefined
-const eventIdOf = (p: any): number => {
-  try {
-    const raw = p?.eventId
-    if (raw == null) return 0
-    if (typeof raw === 'number') return raw
-    const n = parseInt(String(raw), 10)
-    return Number.isFinite(n) && n > 0 ? n : 0
-  } catch {
-    return 0
-  }
-}
 
 export function buildChatPipeline(
-  events$: Observable<WsEvent>,
+  streams: {
+    chat$: Observable<WsEvent>
+    syncBegin$: Observable<WsEvent>
+    syncEnd$: Observable<WsEvent>
+  },
   opts?: { enableBuffer?: boolean; strictBuffer?: boolean }
 ): { chat$: Observable<WsEvent>; syncEnd$: Observable<WsEvent> } {
-  const source$ = events$.pipe(share())
   const enableBuffer = opts?.enableBuffer ?? true
   const strictBuffer = opts?.strictBuffer ?? false
 
-  const syncBegin$ = source$.pipe(filter((ev) => ev.method === 'chat.session.sync_begin'))
-  const syncEnd$ = source$.pipe(filter((ev) => ev.method === 'chat.session.sync_end'))
-  const chat$ = source$.pipe(filter((ev) => isChat(ev.method) && !isHandshake(ev.method)))
+  const syncBegin$ = streams.syncBegin$.pipe(share())
+  const syncEnd$ = streams.syncEnd$.pipe(share())
+  const chatSource$ = streams.chat$.pipe(share())
+  const chat$ = chatSource$.pipe(filter((ev) => !isHandshake(ev.method)))
 
   if (!enableBuffer) {
     return { chat$: chat$, syncEnd$ }
   }
 
-  const chatGrouped$ = chat$.pipe(groupBy((ev) => cidOf(ev.params) || ''))
+  const chatGrouped$ = chat$.pipe(groupBy((ev) => getConversationId(ev.params) || ''))
   let buffered$: Observable<WsEvent>
 
   if (!strictBuffer) {
@@ -56,8 +47,8 @@ export function buildChatPipeline(
         const cid = group$.key
         if (!cid) return group$
 
-        const beginForCid$ = syncBegin$.pipe(filter((e) => cidOf(e.params) === cid))
-        const endForCid$ = syncEnd$.pipe(filter((e) => cidOf(e.params) === cid))
+        const beginForCid$ = syncBegin$.pipe(filter((e) => getConversationId(e.params) === cid))
+        const endForCid$ = syncEnd$.pipe(filter((e) => getConversationId(e.params) === cid))
 
         // 是否处于握手期的布尔状态（会话级）
         const hydState$ = merge(
@@ -71,7 +62,7 @@ export function buildChatPipeline(
           mergeMap((win$) =>
             win$.pipe(
               toArray(),
-              map((arr) => arr.sort((a, b) => eventIdOf(a.params) - eventIdOf(b.params))),
+              map((arr) => arr.sort((a, b) => eventIdFromParams(a.params) - eventIdFromParams(b.params))),
               mergeMap((arr) => from(arr))
             )
           )
@@ -109,7 +100,7 @@ export function buildChatPipeline(
           mergeMap((win$) =>
             win$.pipe(
               toArray(),
-              map((arr) => arr.sort((a, b) => eventIdOf(a.params) - eventIdOf(b.params))),
+              map((arr) => arr.sort((a, b) => eventIdFromParams(a.params) - eventIdFromParams(b.params))),
               mergeMap((arr) => from(arr))
             )
           )

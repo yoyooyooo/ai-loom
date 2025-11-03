@@ -7,30 +7,61 @@ use tokio::fs;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::state::AppState;
+use ailoom_executors::providers::codex::{
+    current, invalidate_offline_entry, invalidate_rollout_summary, lookup_path_by_conversation_id,
+    resolve_codex_history_log,
+};
 
 use super::utils::resolve_rollout_path;
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeleteConversationRequest {
-    pub path: String,
+    pub conversation_id: String,
+    #[serde(default)]
+    pub provider_id: Option<String>,
 }
 
 pub async fn delete_conversation(
     axum::extract::State(state): axum::extract::State<AppState>,
     Json(body): Json<DeleteConversationRequest>,
 ) -> impl IntoResponse {
-    let trimmed = body.path.trim();
-    if trimmed.is_empty() {
+    let conversation_id = body.conversation_id.trim();
+    if conversation_id.is_empty() {
         return StatusCode::BAD_REQUEST;
     }
 
-    match resolve_rollout_path(trimmed, &state.workspace_root) {
-        Some(path) => delete_rollout_with_history(path).await,
-        None => StatusCode::BAD_REQUEST,
+    let provider = body.provider_id.as_deref().unwrap_or("codex");
+    if provider != "codex" {
+        tracing::warn!(target: "chat", provider=%provider, "删除会话失败：不支持的 provider");
+        return StatusCode::BAD_REQUEST;
     }
+
+    let client = current().await;
+    let app = client.as_ref().map(|c| c.app());
+    let Some(raw_path) = lookup_path_by_conversation_id(app, conversation_id).await else {
+        tracing::warn!(
+            target: "chat",
+            conversationId=%conversation_id,
+            "删除会话失败：未找到对应 rollout"
+        );
+        return StatusCode::NOT_FOUND;
+    };
+
+    let resolved = resolve_rollout_path(&raw_path, &state.workspace_root)
+        .unwrap_or_else(|| PathBuf::from(raw_path));
+
+    let (status, removed_path) = delete_rollout_with_history(resolved.clone()).await;
+    if status == StatusCode::NO_CONTENT {
+        let target_path = removed_path.unwrap_or(resolved);
+        invalidate_offline_entry(&target_path).await;
+        invalidate_rollout_summary(&target_path).await;
+    }
+
+    status
 }
 
-async fn delete_rollout_with_history(path: PathBuf) -> StatusCode {
+async fn delete_rollout_with_history(path: PathBuf) -> (StatusCode, Option<PathBuf>) {
     let canonical_path = match fs::canonicalize(&path).await {
         Ok(p) => p,
         Err(_) => path.clone(),
@@ -51,11 +82,13 @@ async fn delete_rollout_with_history(path: PathBuf) -> StatusCode {
     }
 
     match fs::remove_file(&path).await {
-        Ok(_) => StatusCode::NO_CONTENT,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => StatusCode::NO_CONTENT,
+        Ok(_) => (StatusCode::NO_CONTENT, Some(canonical_path)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            (StatusCode::NO_CONTENT, Some(canonical_path))
+        }
         Err(err) => {
             tracing::warn!(target: "chat", file=%path.display(), error=%err, "删除会话文件失败");
-            StatusCode::INTERNAL_SERVER_ERROR
+            (StatusCode::INTERNAL_SERVER_ERROR, None)
         }
     }
 }
@@ -182,13 +215,7 @@ fn normalize_history_path(raw: &str) -> String {
 }
 
 fn history_jsonl_path() -> Option<PathBuf> {
-    let home = std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|dir| dir.join(".codex")));
-    let Some(home) = home else {
-        return None;
-    };
-    let history = home.join("history.jsonl");
+    let history = resolve_codex_history_log()?;
     if history.exists() {
         Some(history)
     } else {

@@ -1,43 +1,55 @@
 import { describe, test, expect } from 'vitest'
 import { Subject } from 'rxjs'
+import { filter } from 'rxjs/operators'
 import { buildChatPipeline } from '@/features/codex-chat/services/ws-pipeline'
+
+const createStreams = () => {
+  const source$$ = new Subject<{ method: string; params: any }>()
+  const observable = source$$.asObservable()
+  const streams = {
+    chat$: observable,
+    syncBegin$: observable.pipe(filter((ev) => ev.method === 'chat.session.sync_begin')),
+    syncEnd$: observable.pipe(filter((ev) => ev.method === 'chat.session.sync_end'))
+  }
+  return { source$$, streams }
+}
 
 describe('ws-pipeline: buildChatPipeline', () => {
   test('passes through chat.* outside handshake', () => {
-    const src = new Subject<{ method: string; params: any }>()
-    const { chat$ } = buildChatPipeline(src.asObservable(), { enableBuffer: true })
+    const { source$$, streams } = createStreams()
+    const { chat$ } = buildChatPipeline(streams, { enableBuffer: true })
     const seen: Array<{ method: string; params: any }> = []
     const sub = chat$.subscribe((ev) => seen.push(ev))
 
-    src.next({ method: 'chat.message.completed', params: { conversationId: 'A', eventId: 2 } })
+    source$$.next({ method: 'chat.message.completed', params: { conversationId: 'A', eventId: 2 } })
     expect(seen.map((e) => e.method)).toEqual(['chat.message.completed'])
 
     sub.unsubscribe()
   })
 
   test('buffers between begin and end, then flushes sorted by eventId once', () => {
-    const src = new Subject<{ method: string; params: any }>()
-    const { chat$, syncEnd$ } = buildChatPipeline(src.asObservable(), { enableBuffer: true })
+    const { source$$, streams } = createStreams()
+    const { chat$, syncEnd$ } = buildChatPipeline(streams, { enableBuffer: true })
     const seen: Array<{ method: string; params: any }> = []
     const seenEnd: any[] = []
     const sub = chat$.subscribe((ev) => seen.push(ev))
     const endSub = syncEnd$.subscribe((ev) => seenEnd.push(ev))
 
     // begin for A
-    src.next({
+    source$$.next({
       method: 'chat.session.sync_begin',
       params: { conversationId: 'A', after: 0, tail: 2 }
     })
     // in window events (out of order)
-    src.next({ method: 'chat.message.completed', params: { conversationId: 'A', eventId: 5 } })
-    src.next({
+    source$$.next({ method: 'chat.message.completed', params: { conversationId: 'A', eventId: 5 } })
+    source$$.next({
       method: 'chat.message.delta',
       params: { conversationId: 'A', eventId: 3, delta: 'x' }
     })
     // another conversation B should pass through independently
-    src.next({ method: 'chat.message.completed', params: { conversationId: 'B', eventId: 1 } })
+    source$$.next({ method: 'chat.message.completed', params: { conversationId: 'B', eventId: 1 } })
     // end for A
-    src.next({ method: 'chat.session.sync_end', params: { conversationId: 'A', uptoEventId: 5 } })
+    source$$.next({ method: 'chat.session.sync_end', params: { conversationId: 'A', uptoEventId: 5 } })
 
     // expectations：A 的补发按 eventId 升序（3,5）；B:1 也被透传（顺序在不同环境下可能略有差异）
     const aSeq = seen
@@ -54,13 +66,13 @@ describe('ws-pipeline: buildChatPipeline', () => {
   })
 
   test('non-buffer mode just passes chat.*', () => {
-    const src = new Subject<{ method: string; params: any }>()
-    const { chat$ } = buildChatPipeline(src.asObservable(), { enableBuffer: false })
+    const { source$$, streams } = createStreams()
+    const { chat$ } = buildChatPipeline(streams, { enableBuffer: false })
     const seen: string[] = []
     const sub = chat$.subscribe((ev) => seen.push(ev.method))
-    src.next({ method: 'chat.session.sync_begin', params: { conversationId: 'A' } })
-    src.next({ method: 'chat.message.completed', params: { conversationId: 'A', eventId: 1 } })
-    src.next({ method: 'chat.session.sync_end', params: { conversationId: 'A', uptoEventId: 1 } })
+    source$$.next({ method: 'chat.session.sync_begin', params: { conversationId: 'A' } })
+    source$$.next({ method: 'chat.message.completed', params: { conversationId: 'A', eventId: 1 } })
+    source$$.next({ method: 'chat.session.sync_end', params: { conversationId: 'A', uptoEventId: 1 } })
     expect(seen).toEqual(['chat.message.completed'])
     sub.unsubscribe()
   })

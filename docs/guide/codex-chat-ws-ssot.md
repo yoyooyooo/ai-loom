@@ -122,14 +122,14 @@ hydratedChat$.subscribe(({ method, params }) => {
   - 入口：`processors/index.ts`，内部依次分派到：
     - `session.ts`（会话选中、history 填充）
     - `message.ts`（delta/completed/failed/aborted，含 Compact 特例）
-    - `reasoning.ts`（delta/end/section_break 去冗余）
+    - `reasoning.ts`（delta/raw_delta/item_started/item_completed/section_break/end 去冗余与归组）
     - `turn.ts`（turn.started/turn.complete 边界）
     - `tools.ts`（exec/patch/mcp；read/list/search 元信息与 apply_patch 识别）
     - `info.ts`（plan_update/approval/*/background 等）
 
 - 稳定事件清单（入环，支持握手回放）：
   - `chat.message.*`（completed/failed/aborted），`chat.reasoning.end`，`chat.tool.*`，`chat.info.*`，`chat.turn.complete`
-  - 非入环（不参与握手回放）：`chat.turn.started`、`chat.reasoning.delta|section_break`
+  - 非入环（不参与握手回放）：`chat.turn.started`、`chat.reasoning.delta|raw_delta|section_break|item_started|item_completed`
 
 - Hydration 与 UI：
   - “正在加载会话…” 严格等价于握手窗口（`sync_begin → sync_end`）。
@@ -273,8 +273,10 @@ const sub = ws.subscribeTopic$('chat', { conversationId: cid }).subscribe(ev => 
 | 消息 | `chat.message.completed` | 是 | 是 | `text?` | [答案/失败/中止](./chat-ws-mock-examples.md#mock-message) |
 | 消息 | `chat.message.failed` | 是 | 是 | `error.message` | [答案/失败/中止](./chat-ws-mock-examples.md#mock-message) |
 | 消息 | `chat.message.aborted` | 是 | 是 | `reason?` | [答案/失败/中止](./chat-ws-mock-examples.md#mock-message) |
-| 推理 | `chat.reasoning.delta`/`section_break` | 否 | 否 | `delta` | [思考通道](./chat-ws-mock-examples.md#mock-reasoning) |
-| 推理 | `chat.reasoning.end` | 是 | 是 | `text` | [思考通道](./chat-ws-mock-examples.md#mock-reasoning) |
+| 推理 | `chat.reasoning.delta`/`section_break` | 否 | 否 | `delta`、`itemId?` | [思考通道](./chat-ws-mock-examples.md#mock-reasoning) |
+| 推理 | `chat.reasoning.raw_delta` | 否 | 否 | `delta`、`itemId?` | [思考通道](./chat-ws-mock-examples.md#mock-reasoning) |
+| 推理 | `chat.reasoning.item_started`/`item_completed` | 否 | 否 | `itemId`、`text?/rawContent?` | [思考通道](./chat-ws-mock-examples.md#mock-reasoning) |
+| 推理 | `chat.reasoning.end` | 是 | 是 | `text`、`itemId?`、`rawContent?` | [思考通道](./chat-ws-mock-examples.md#mock-reasoning) |
 | 工具 | `chat.tool.exec.begin`/`output`/`end` | 是 | 是 | `cwd?`、`command[]`、`callId?`、`exitCode?` | [Exec 工具](./chat-ws-mock-examples.md#mock-exec) |
 | 工具 | `chat.tool.patch.begin`/`end` | 是 | 是 | `files`、`autoApproved`、`firstPath?`、`adds?/dels?`、`changes?`、`success` | [Patch 工具](./chat-ws-mock-examples.md#mock-patch) |
 | 工具 | `chat.tool.mcp.begin`/`end` | 是 | 是 | `server`、`tool`、`arguments?`、`result?` | [MCP 工具](./chat-ws-mock-examples.md#mock-mcp) |
@@ -317,11 +319,23 @@ const sub = ws.subscribeTopic$('chat', { conversationId: cid }).subscribe(ev => 
 ### 推理事件（Reasoning）
 
 - `chat.reasoning.delta`（不入环）
-  - params：`{ delta: string }`
+  - params：`{ delta: string, itemId?: string }`
+  - 含义：推理摘要增量，带 `itemId` 表示所属推理项（无 `itemId` 为 legacy 单段）。
+- `chat.reasoning.raw_delta`（不入环）
+  - params：`{ delta: string, itemId?: string }`
+  - 含义：在 `show_raw_agent_reasoning=on` 时透传原始推理文本。
 - `chat.reasoning.section_break`（不入环）
-  - params：`{}`
+  - params：`{ itemId?: string }`
+  - 含义：模型划分思路段落时的分隔符。
+- `chat.reasoning.item_started`（不入环）
+  - params：`{ itemId: string }`
+  - 含义：推理 item 生命周期开始（TurnItem::Reasoning），后续 delta/raw_delta 共享该 `itemId`。
+- `chat.reasoning.item_completed`（不入环）
+  - params：`{ itemId: string, text?: string, rawContent?: string }`
+  - 含义：声明推理 item 收束，并附带最终摘要/原文（供 resume 与 UI 更新）。
 - `chat.reasoning.end`（入环）
-  - params：`{ text: string }`
+  - params：`{ text: string, itemId?: string, rawContent?: string }`
+  - 含义：整段推理的最终摘要（兼容旧逻辑，亦会与 `item_completed` 同步）。
 
 ### 工具事件（Tool）
 
@@ -355,8 +369,11 @@ type ChatMessageFailed = { error: { message: string } }
 type ChatMessageAborted = { reason?: string }
 
 // 推理
-type ChatReasoningDelta = { delta: string }
-type ChatReasoningEnd = { text: string }
+type ChatReasoningDelta = { delta: string; itemId?: string }
+type ChatReasoningRawDelta = { delta: string; itemId?: string }
+type ChatReasoningItemStarted = { itemId: string }
+type ChatReasoningItemCompleted = { itemId: string; text?: string; rawContent?: string }
+type ChatReasoningEnd = { text: string; itemId?: string; rawContent?: string }
 
 // 工具
 type ChatToolExecBegin = { cwd?: string; command: string[]; callId?: string }
@@ -426,7 +443,11 @@ type ChatInfoRuntimeChildDown = { provider: string; conversationId: string; pid?
   - params：`{ provider, conversationId, pid?, reason? }`。
 - `chat.info.runtime.generating`
   - 用途：后端判定会话当前是否正在生成（per-conv 子进程仍在线但无任务时会返回 `false`）。
-  - params：`{ provider, conversationId, generating: boolean }`。
+  - params：`{ provider, conversationId, generating: boolean, ts, source? }`。
+  - 额外补偿：当 Codex fallback（history/resume 读取 rollout JSONL）推断会话仍在执行或已静默时，平台层会补发 `chat.info.runtime.generating`，payload 附带 `source: 'rollout_fallback'`，并按需发送 `generating: true/false`。Hub 侧进度映射若已是目标值则跳过重播，避免反复入环。
+  - 订阅方式：
+    - 推荐全局订阅：`subscribeTopic$('chat', { methods: ['chat.info.runtime.generating', 'session.runtime'] })`（无 `conversationId`，仅推送生成态与周期快照）。
+    - 指定会话订阅：`subscribeTopic$('chat', { conversationId, methods: ['chat.info.runtime.generating'] })`。
 
 说明：以上 `chat.info.*` 均通过 `hub.broadcast` 入环；`params` 统一注入 `provider` 与可用的 `conversationId`，可被 `events.resume` 按会话补偿。
 

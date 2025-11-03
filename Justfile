@@ -76,6 +76,15 @@ codex-codegen TS_DIR='packages/web/src/lib/codex-types' JSON_DIR='docs/specs/cod
     echo "skip prettier (packages/web/node_modules missing)"; \
   fi
 
+# 导出 chat.* 事件类型（ts-rs → 前端共享类型）
+export-ts:
+  cargo run -p {{SERVER_BIN}} --bin export_ts
+  if [ -d {{WEB_DIR}}/node_modules ]; then \
+    pnpm -C {{WEB_DIR}} exec prettier "src/lib/codex-types/generated/**/*.ts"; \
+  else \
+    echo "skip prettier (packages/web/node_modules missing)"; \
+  fi
+
 # --- Format ---
 
 # Rust 代码格式化

@@ -1,4 +1,7 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use axum::{extract::Query, http::StatusCode, response::IntoResponse, Json};
 use codex_app_server_protocol::{
@@ -17,12 +20,13 @@ use super::history::convert_history_item;
 use super::rollout_parser::load_rollout_snapshot;
 use super::service::broadcast_resume;
 use super::types::{ResumeBody, ResumeConfigResponse, ResumeQuery};
+use crate::routes::chat::list::broadcast_generating_from_rollout;
 use ailoom_executors::providers::codex::{
-    get_or_start, lookup_path_by_conversation_id, AppServerClient,
+    current, list_offline_conversations, lookup_path_by_conversation_id, AppServerClient,
 };
 
 async fn resume_from_path(
-    app: &AppServerClient,
+    app: Option<Arc<AppServerClient>>,
     state: &AppState,
     path: &str,
 ) -> Result<
@@ -97,11 +101,10 @@ async fn resume_from_path(
         ),
     };
 
-    // per-conv：优先离线恢复（不触发全局 app-server 的 resumeConversation，避免额外 sessionConfigured）
+    // per-conv：优先离线恢复；若存在运行中的 app，则回退到在线 resume 以获取最新会话 id
     let (conversation_id, initial_messages) = if let Some(cid) = cid_from_snapshot.clone() {
         (cid, Vec::new())
-    } else {
-        // 非常态：无法从快照拿到会话 id，只能回退到在线 resume
+    } else if let Some(app) = app.as_ref() {
         let resp = app
             .resume_conversation(ResumeConversationParams {
                 path: Some(PathBuf::from(path)),
@@ -121,6 +124,15 @@ async fn resume_from_path(
             resp.conversation_id.to_string(),
             resp.initial_messages.unwrap_or_default(),
         )
+    } else {
+        let derived = filename_conversation_id(path);
+        let Some(cid) = derived else {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("无法从 {} 推导会话标识，请启动 Codex 后重试", path),
+            ));
+        };
+        (cid, Vec::new())
     };
 
     // 优先采用 rollout.jsonl 解析得到的完整历史（fallback_history）；
@@ -157,10 +169,12 @@ async fn resume_from_path(
         }
     }
 
-    let _ = state
-        .runtime_registry
-        .warm_conversation("codex", &conversation_id)
-        .await;
+    if app.is_some() {
+        let _ = state
+            .runtime_registry
+            .warm_conversation("codex", &conversation_id)
+            .await;
+    }
     Ok((
         conversation_id,
         history_messages,
@@ -178,7 +192,7 @@ pub async fn resume_conversation(
     let body = maybe_body.map(|b| b.0).unwrap_or_default();
     let provider = body.provider.as_deref().unwrap_or("codex");
 
-    if let Some(path) = body.path.as_ref() {
+    if let Some(path) = body.path.as_deref() {
         if provider != "codex" {
             return (
                 StatusCode::BAD_REQUEST,
@@ -187,50 +201,14 @@ pub async fn resume_conversation(
                 .into_response();
         }
         tracing::info!(target:"codex", path=%path, "HTTP resume → resumeConversation(explicit)");
-        // 仅在需要在线 resume 时再懒加载全局 client
-        let client = match get_or_start(Some(state.workspace_root.clone())).await {
-            Ok(c) => c,
-            Err(e) => {
-                return (StatusCode::BAD_GATEWAY, format!("Codex 未就绪：{}", e)).into_response()
-            }
-        };
-        if let Some(hub) = state.ws_hub.clone() {
+        let client_opt = current().await;
+        if let (Some(client), Some(hub)) = (client_opt.as_ref(), state.ws_hub.clone()) {
             client.register_event_hub(Arc::new(hub) as ailoom_executors::SharedEventHub);
         }
-        let app = client.app();
-        return match resume_from_path(&app, &state, path).await {
-            Ok((conversation_id, history, events, config, _base_ts)) => {
-                // 尝试判断该 rollout 是否仍在进行中（CLI 驱动场景提示用）
-                let in_progress = super::rollout_parser::rollout_in_progress(path).or(Some(false));
-                broadcast_resume(&state, &conversation_id, &history);
-                // 组装 turns（快照）
-                let mut turns = super::service::build_turns_from_history_and_events(
-                    &conversation_id,
-                    &history,
-                    &events,
-                );
-                super::service::shrink_turns_and_emit_blobs(&state, &conversation_id, &mut turns);
-                // 计算 uptoEventId 用于前端推进游标（不再通过 events 返回）
-                let upto_event_id = if let Some(hub) = state.ws_hub.clone() {
-                    let tail = hub.tail_chat(Some(&conversation_id), None, 1);
-                    tail.into_iter().map(|e| e.id).max()
-                } else {
-                    None
-                };
-                (
-                    StatusCode::OK,
-                    Json(super::types::ResumeResponsePayload {
-                        conversation_id,
-                        history: Vec::new(),
-                        events: Vec::new(),
-                        turns,
-                        config,
-                        in_progress,
-                        upto_event_id,
-                        turns_schema_version: 1,
-                    }),
-                )
-                    .into_response()
+        let app_opt = client_opt.as_ref().map(|c| c.app());
+        return match resume_from_path(app_opt.clone(), &state, path).await {
+            Ok((conversation_id, history, events, config, _)) => {
+                build_resume_response(&state, conversation_id, history, events, config, Some(path))
             }
             Err((status, msg)) => (status, msg).into_response(),
         };
@@ -243,13 +221,13 @@ pub async fn resume_conversation(
             provider=%provider,
             "HTTP resume → resumeConversation(by id)"
         );
-        let warm_result = state
-            .runtime_registry
-            .warm_conversation(provider, conversation_id)
-            .await;
 
         if provider != "codex" {
-            match warm_result {
+            match state
+                .runtime_registry
+                .warm_conversation(provider, conversation_id)
+                .await
+            {
                 Ok(()) => {
                     let upto_event_id = if let Some(hub) = state.ws_hub.clone() {
                         let tail = hub.tail_chat(Some(conversation_id), None, 1);
@@ -289,65 +267,19 @@ pub async fn resume_conversation(
             }
         }
 
-        if let Err(err) = warm_result {
-            tracing::warn!(
-                target:"codex",
-                conversationId=%conversation_id,
-                error=%err,
-                "runtime_registry.warm_conversation 失败，尝试 codex rollout 恢复"
-            );
-        }
-        // 需要在线能力时再懒加载 client
-        let client = match get_or_start(Some(state.workspace_root.clone())).await {
-            Ok(c) => c,
-            Err(e) => {
-                return (StatusCode::BAD_GATEWAY, format!("Codex 未就绪：{}", e)).into_response()
-            }
-        };
-        if let Some(hub) = state.ws_hub.clone() {
+        let client_opt = current().await;
+        if let (Some(client), Some(hub)) = (client_opt.as_ref(), state.ws_hub.clone()) {
             client.register_event_hub(Arc::new(hub) as ailoom_executors::SharedEventHub);
         }
-        let app = client.app();
-        if let Some(path) = lookup_path_by_conversation_id(&app, conversation_id).await {
-            return match resume_from_path(&app, &state, &path).await {
-                Ok((conversation_id, history, events, config, _base_ts)) => {
-                    let in_progress =
-                        super::rollout_parser::rollout_in_progress(&path).or(Some(false));
-                    broadcast_resume(&state, &conversation_id, &history);
-                    let mut turns = super::service::build_turns_from_history_and_events(
-                        &conversation_id,
-                        &history,
-                        &events,
-                    );
-                    super::service::shrink_turns_and_emit_blobs(
-                        &state,
-                        &conversation_id,
-                        &mut turns,
-                    );
-                    let upto_event_id = if let Some(hub) = state.ws_hub.clone() {
-                        let tail = hub.tail_chat(Some(&conversation_id), None, 1);
-                        tail.into_iter().map(|e| e.id).max()
-                    } else {
-                        None
-                    };
-                    (
-                        StatusCode::OK,
-                        Json(super::types::ResumeResponsePayload {
-                            conversation_id,
-                            history: Vec::new(),
-                            events: Vec::new(),
-                            turns,
-                            config,
-                            in_progress,
-                            upto_event_id,
-                            turns_schema_version: 1,
-                        }),
-                    )
-                        .into_response()
-                }
-                Err((status, msg)) => (status, msg).into_response(),
-            };
-        } else {
+        let app_opt = client_opt.as_ref().map(|c| c.app());
+        if app_opt.is_some() {
+            let _ = state
+                .runtime_registry
+                .warm_conversation(provider, conversation_id)
+                .await;
+        }
+        let path_opt = lookup_path_by_conversation_id(app_opt.clone(), conversation_id).await;
+        let Some(path) = path_opt else {
             return (
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({
@@ -357,7 +289,18 @@ pub async fn resume_conversation(
                 })),
             )
                 .into_response();
-        }
+        };
+        return match resume_from_path(app_opt, &state, &path).await {
+            Ok((conversation_id, history, events, config, _)) => build_resume_response(
+                &state,
+                conversation_id,
+                history,
+                events,
+                config,
+                Some(&path),
+            ),
+            Err((status, msg)) => (status, msg).into_response(),
+        };
     }
 
     if provider != "codex" {
@@ -368,69 +311,115 @@ pub async fn resume_conversation(
             .into_response();
     }
 
-    // 懒加载 client 仅在 codex latest 分支需要
-    let client = match get_or_start(Some(state.workspace_root.clone())).await {
-        Ok(c) => c,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("Codex 未就绪：{}", e)).into_response(),
-    };
-    if let Some(hub) = state.ws_hub.clone() {
+    let client_opt = current().await;
+    if let (Some(client), Some(hub)) = (client_opt.as_ref(), state.ws_hub.clone()) {
         client.register_event_hub(Arc::new(hub) as ailoom_executors::SharedEventHub);
     }
-    let app = client.app();
-    if let Ok(list) = app
-        .list_conversations(ListConversationsParams {
-            page_size: Some(1),
-            cursor: None,
-            ..Default::default()
-        })
-        .await
-    {
-        if let Some(first) = list.items.first() {
-            if let Ok(first_value) = serde_json::to_value(first) {
-                if let Some(path) = conversation_path_of(&first_value) {
-                    tracing::info!(target:"codex", path=%path, "HTTP resume → resumeConversation(latest)");
-                    return match resume_from_path(&app, &state, &path).await {
-                        Ok((conversation_id, history, events, config, _base_ts)) => {
-                            let in_progress =
-                                super::rollout_parser::rollout_in_progress(&path).or(Some(false));
-                            broadcast_resume(&state, &conversation_id, &history);
-                            let mut turns = super::service::build_turns_from_history_and_events(
-                                &conversation_id,
-                                &history,
-                                &events,
-                            );
-                            super::service::shrink_turns_and_emit_blobs(
-                                &state,
-                                &conversation_id,
-                                &mut turns,
-                            );
-                            let upto_event_id = if let Some(hub) = state.ws_hub.clone() {
-                                let tail = hub.tail_chat(Some(&conversation_id), None, 1);
-                                tail.into_iter().map(|e| e.id).max()
-                            } else {
-                                None
-                            };
-                            (
-                                StatusCode::OK,
-                                Json(super::types::ResumeResponsePayload {
+    let app_opt = client_opt.as_ref().map(|c| c.app());
+
+    if let Some(app_arc) = app_opt.clone() {
+        if let Ok(list) = app_arc
+            .list_conversations(ListConversationsParams {
+                page_size: Some(1),
+                cursor: None,
+                ..Default::default()
+            })
+            .await
+        {
+            if let Some(first) = list.items.first() {
+                if let Ok(first_value) = serde_json::to_value(first) {
+                    if let Some(path) = conversation_path_of(&first_value) {
+                        tracing::info!(target:"codex", path=%path, "HTTP resume → resumeConversation(latest)");
+                        return match resume_from_path(Some(app_arc), &state, &path).await {
+                            Ok((conversation_id, history, events, config, _)) => {
+                                build_resume_response(
+                                    &state,
                                     conversation_id,
-                                    history: Vec::new(),
-                                    events: Vec::new(),
-                                    turns,
+                                    history,
+                                    events,
                                     config,
-                                    in_progress,
-                                    upto_event_id,
-                                    turns_schema_version: 1,
-                                }),
-                            )
-                                .into_response()
-                        }
-                        Err((status, msg)) => (status, msg).into_response(),
-                    };
+                                    Some(&path),
+                                )
+                            }
+                            Err((status, msg)) => (status, msg).into_response(),
+                        };
+                    }
                 }
             }
         }
     }
 
-    (StatusCode::NOT_FOUND, "未找到可恢复会话").into_response()
+    if let Ok(page) = list_offline_conversations(1, None).await {
+        if let Some(value) = page.items.first() {
+            if let Some(path) = value.get("path").and_then(|p| p.as_str()) {
+                tracing::info!(target:"codex", path=%path, "HTTP resume → resumeConversation(latest, offline)");
+                return match resume_from_path(None, &state, path).await {
+                    Ok((conversation_id, history, events, config, _)) => build_resume_response(
+                        &state,
+                        conversation_id,
+                        history,
+                        events,
+                        config,
+                        Some(path),
+                    ),
+                    Err((status, msg)) => (status, msg).into_response(),
+                };
+            }
+        }
+    }
+
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({
+            "error": { "message": "未找到任何可恢复的 Codex 会话" }
+        })),
+    )
+        .into_response()
+}
+
+fn build_resume_response(
+    state: &AppState,
+    conversation_id: String,
+    history: Vec<ChatHistoryEntry>,
+    events: Vec<(ChatEvent, Option<usize>)>,
+    config: Option<ResumeConfigResponse>,
+    path: Option<&str>,
+) -> axum::response::Response {
+    let in_progress = path
+        .and_then(|p| super::rollout_parser::rollout_in_progress(p))
+        .or(Some(false));
+    if let Some(flag) = in_progress {
+        if let Some(hub) = state.ws_hub.clone() {
+            broadcast_generating_from_rollout(&hub, &conversation_id, "codex", flag);
+        }
+    }
+    broadcast_resume(state, &conversation_id, &history);
+    let mut turns =
+        super::service::build_turns_from_history_and_events(&conversation_id, &history, &events);
+    super::service::shrink_turns_and_emit_blobs(state, &conversation_id, &mut turns);
+    let upto_event_id = if let Some(hub) = state.ws_hub.clone() {
+        let tail = hub.tail_chat(Some(&conversation_id), None, 1);
+        tail.into_iter().map(|e| e.id).max()
+    } else {
+        None
+    };
+    (
+        StatusCode::OK,
+        Json(super::types::ResumeResponsePayload {
+            conversation_id,
+            history: Vec::new(),
+            events: Vec::new(),
+            turns,
+            config,
+            in_progress,
+            upto_event_id,
+            turns_schema_version: 1,
+        }),
+    )
+        .into_response()
+}
+
+fn filename_conversation_id(path: &str) -> Option<String> {
+    let file = Path::new(path).file_stem()?.to_str()?;
+    file.rsplit('-').next().map(|s| s.to_string())
 }

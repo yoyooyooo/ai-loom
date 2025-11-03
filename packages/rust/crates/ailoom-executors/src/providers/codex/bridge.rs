@@ -9,6 +9,11 @@ use codex_app_server_protocol::{
 use codex_protocol::protocol::RateLimitSnapshot;
 use serde_json::{json, Map, Value};
 
+use crate::providers::codex::{
+    extract_raw_reasoning_content, extract_reasoning_item_id, extract_reasoning_summary,
+    is_reasoning_item,
+};
+
 #[derive(Debug, Clone)]
 pub struct BroadcastEvent {
     pub method: String,
@@ -356,7 +361,50 @@ fn map_runtime_event(
                 attach_conversation_id(Value::Object(payload), cid),
             )]
         }
-        "agent_reasoning_raw_content" => Vec::new(),
+        "reasoning_content_delta" | "reasoning.content.delta" => {
+            let delta = msg
+                .get("delta")
+                .or_else(|| msg.get("content"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if delta.is_empty() {
+                return Vec::new();
+            }
+            let mut payload = Map::new();
+            payload.insert("delta".into(), Value::String(delta));
+            payload.insert("source".into(), Value::String("content".into()));
+            if let Some(item_id) = extract_reasoning_item_id(msg) {
+                payload.insert("itemId".into(), Value::String(item_id));
+            }
+            vec![BroadcastEvent::ephemeral(
+                "chat.reasoning.delta",
+                attach_conversation_id(Value::Object(payload), cid),
+            )]
+        }
+        "reasoning_raw_content_delta"
+        | "reasoning.raw_content.delta"
+        | "agent_reasoning_raw_content" => {
+            let delta = msg
+                .get("delta")
+                .or_else(|| msg.get("content"))
+                .or_else(|| msg.get("text"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if delta.is_empty() {
+                return Vec::new();
+            }
+            let mut payload = Map::new();
+            payload.insert("delta".into(), Value::String(delta));
+            if let Some(item_id) = extract_reasoning_item_id(msg) {
+                payload.insert("itemId".into(), Value::String(item_id));
+            }
+            vec![BroadcastEvent::ephemeral(
+                "chat.reasoning.raw_delta",
+                attach_conversation_id(Value::Object(payload), cid),
+            )]
+        }
         "agent_reasoning_delta" => {
             let delta = msg
                 .get("delta")
@@ -381,10 +429,57 @@ fn map_runtime_event(
                 .to_string();
             let mut payload = Map::new();
             payload.insert("text".into(), Value::String(text));
+            if let Some(item_id) = extract_reasoning_item_id(msg) {
+                payload.insert("itemId".into(), Value::String(item_id));
+            }
             vec![BroadcastEvent::persistent(
                 "chat.reasoning.end",
                 attach_conversation_id(Value::Object(payload), cid),
             )]
+        }
+        "item_started" | "reasoning_item_started" => {
+            if !is_reasoning_item(msg) {
+                return Vec::new();
+            }
+            let Some(item_id) = extract_reasoning_item_id(msg) else {
+                return Vec::new();
+            };
+            let mut payload = Map::new();
+            payload.insert("itemId".into(), Value::String(item_id));
+            vec![BroadcastEvent::ephemeral(
+                "chat.reasoning.item_started",
+                attach_conversation_id(Value::Object(payload), cid),
+            )]
+        }
+        "item_completed" | "reasoning_item_completed" => {
+            if !is_reasoning_item(msg) {
+                return Vec::new();
+            }
+            let Some(item_id) = extract_reasoning_item_id(msg) else {
+                return Vec::new();
+            };
+            let mut events = Vec::new();
+            let mut complete_payload = Map::new();
+            complete_payload.insert("itemId".into(), Value::String(item_id.clone()));
+            events.push(BroadcastEvent::ephemeral(
+                "chat.reasoning.item_completed",
+                attach_conversation_id(Value::Object(complete_payload), cid),
+            ));
+
+            let summary = extract_reasoning_summary(msg).unwrap_or_default();
+            let raw_content = extract_raw_reasoning_content(msg);
+            let mut end_payload = Map::new();
+            end_payload.insert("text".into(), Value::String(summary));
+            if let Some(raw) = raw_content {
+                end_payload.insert("rawContent".into(), Value::String(raw));
+            }
+            end_payload.insert("itemId".into(), Value::String(item_id));
+            events.push(BroadcastEvent::persistent(
+                "chat.reasoning.end",
+                attach_conversation_id(Value::Object(end_payload), cid),
+            ));
+
+            events
         }
         "agent_reasoning_section_break" => vec![BroadcastEvent::ephemeral(
             "chat.reasoning.section_break",
@@ -1022,6 +1117,138 @@ mod tests {
         );
 
         super::remove_conversation_id("cid-3");
+    }
+
+    #[test]
+    fn map_notification_to_chat_events_maps_reasoning_content_delta() {
+        let notification = JSONRPCNotification {
+            method: "codex/event/runtime".into(),
+            params: Some(json!({
+                "conversationId": "cid-r1",
+                "msg": {
+                    "type": "reasoning_content_delta",
+                    "delta": "thinking",
+                    "item_id": "itm-1"
+                }
+            })),
+        };
+
+        let events = map_notification_to_chat_events(&notification);
+        assert_eq!(events.len(), 1);
+        let ev = &events[0];
+        assert!(!ev.persistent);
+        assert_eq!(ev.method, "chat.reasoning.delta");
+        assert_eq!(
+            ev.params.get("conversationId").and_then(|v| v.as_str()),
+            Some("cid-r1")
+        );
+        assert_eq!(
+            ev.params.get("itemId").and_then(|v| v.as_str()),
+            Some("itm-1")
+        );
+        assert_eq!(
+            ev.params.get("source").and_then(|v| v.as_str()),
+            Some("content")
+        );
+
+        super::remove_conversation_id("cid-r1");
+    }
+
+    #[test]
+    fn map_notification_to_chat_events_maps_reasoning_raw_delta() {
+        let notification = JSONRPCNotification {
+            method: "codex/event/runtime".into(),
+            params: Some(json!({
+                "conversationId": "cid-r2",
+                "msg": {
+                    "type": "reasoning_raw_content_delta",
+                    "delta": "raw-think",
+                    "item_id": "itm-raw"
+                }
+            })),
+        };
+
+        let events = map_notification_to_chat_events(&notification);
+        assert_eq!(events.len(), 1);
+        let ev = &events[0];
+        assert!(!ev.persistent);
+        assert_eq!(ev.method, "chat.reasoning.raw_delta");
+        assert_eq!(
+            ev.params.get("itemId").and_then(|v| v.as_str()),
+            Some("itm-raw")
+        );
+
+        super::remove_conversation_id("cid-r2");
+    }
+
+    #[test]
+    fn map_notification_to_chat_events_maps_reasoning_item_lifecycle() {
+        let notification_started = JSONRPCNotification {
+            method: "codex/event/runtime".into(),
+            params: Some(json!({
+                "conversationId": "cid-r3",
+                "msg": {
+                    "type": "item_started",
+                    "item": {
+                        "id": "itm-life",
+                        "typ": "reasoning"
+                    }
+                }
+            })),
+        };
+
+        let events_started = map_notification_to_chat_events(&notification_started);
+        assert_eq!(events_started.len(), 1);
+        let started = &events_started[0];
+        assert_eq!(started.method, "chat.reasoning.item_started");
+        assert_eq!(
+            started.params.get("itemId").and_then(|v| v.as_str()),
+            Some("itm-life")
+        );
+
+        let notification_completed = JSONRPCNotification {
+            method: "codex/event/runtime".into(),
+            params: Some(json!({
+                "conversationId": "cid-r3",
+                "msg": {
+                    "type": "item_completed",
+                    "item": {
+                        "id": "itm-life",
+                        "typ": "reasoning"
+                    },
+                    "summary_text": "final summary",
+                    "raw_content": "full raw"
+                }
+            })),
+        };
+
+        let events_completed = map_notification_to_chat_events(&notification_completed);
+        assert_eq!(events_completed.len(), 2);
+        assert_eq!(events_completed[0].method, "chat.reasoning.item_completed");
+        assert_eq!(
+            events_completed[0]
+                .params
+                .get("itemId")
+                .and_then(|v| v.as_str()),
+            Some("itm-life")
+        );
+        assert_eq!(events_completed[1].method, "chat.reasoning.end");
+        assert_eq!(
+            events_completed[1]
+                .params
+                .get("text")
+                .and_then(|v| v.as_str()),
+            Some("final summary")
+        );
+        assert_eq!(
+            events_completed[1]
+                .params
+                .get("rawContent")
+                .and_then(|v| v.as_str()),
+            Some("full raw")
+        );
+
+        super::remove_conversation_id("cid-r3");
     }
 
     #[test]

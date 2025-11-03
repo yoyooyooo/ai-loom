@@ -5,7 +5,7 @@ use super::rollout_parser::parse_rollout;
 use super::rollout_parser::rollout_in_progress;
 use crate::ws::chat_events::{event, ChatEvent};
 use codex_protocol::config_types::SandboxMode;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::path::Path;
 
 fn load_fixture(name: &str) -> &'static str {
@@ -119,6 +119,7 @@ fn http_resume_filters_out_deltas() {
     assert!(methods.contains(&"chat.turn.complete".to_string()));
     assert!(methods.iter().all(|m| m != "chat.message.delta"));
     assert!(methods.iter().all(|m| m != "chat.reasoning.delta"));
+    assert!(methods.iter().all(|m| m != "chat.reasoning.raw_delta"));
 }
 
 #[test]
@@ -134,6 +135,44 @@ fn map_consecutive_agent_messages_as_separate_turns() {
         })
         .collect();
     assert_eq!(seqs, vec![1, 2]);
+}
+
+#[test]
+fn map_structured_reasoning_item_events() {
+    let content = r#"
+{"type":"event_msg","payload":{"type":"task_started"}}
+{"type":"event_msg","payload":{"type":"item_started","item":{"id":"itm-1","typ":"reasoning"}}}
+{"type":"event_msg","payload":{"type":"reasoning_content_delta","delta":"plan","item_id":"itm-1"}}
+{"type":"event_msg","payload":{"type":"reasoning_raw_content_delta","delta":"raw-plan","item_id":"itm-1"}}
+{"type":"event_msg","payload":{"type":"item_completed","item":{"id":"itm-1","typ":"reasoning"},"summary_text":"final summary","raw_content":"raw full"}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"done"}}
+{"type":"event_msg","payload":{"type":"task_complete"}}
+"#;
+    let parsed = parse_rollout(content);
+    let methods: Vec<String> = parsed
+        .events
+        .iter()
+        .map(|(ev, _)| event(ev.clone()).0)
+        .collect();
+    assert!(methods.contains(&"chat.reasoning.item_started".to_string()));
+    assert!(methods.contains(&"chat.reasoning.delta".to_string()));
+    assert!(methods.contains(&"chat.reasoning.raw_delta".to_string()));
+    assert!(methods.contains(&"chat.reasoning.item_completed".to_string()));
+    let reasoning_end = parsed
+        .events
+        .iter()
+        .find_map(|(ev, _)| match ev {
+            ChatEvent::ReasoningEnd {
+                text,
+                item_id,
+                raw_content,
+            } => Some((text.clone(), item_id.clone(), raw_content.clone())),
+            _ => None,
+        })
+        .expect("reasoning end");
+    assert_eq!(reasoning_end.0, "final summary");
+    assert_eq!(reasoning_end.1.as_deref(), Some("itm-1"));
+    assert_eq!(reasoning_end.2.as_deref(), Some("raw full"));
 }
 
 #[test]
@@ -239,9 +278,10 @@ fn map_patch_events_basic() {
 {"type":"event_msg","payload":{"type":"patch_apply_end","call_id":"c1","success":true}}
 "#;
     let parsed = parse_rollout(content);
+    let events = parsed.events;
     let mut begin_seq: Option<usize> = None;
     let mut end_seq: Option<usize> = None;
-    for (ev, seq) in parsed.events {
+    for (ev, seq) in events {
         match ev {
             ChatEvent::ToolPatchBegin { .. } => begin_seq = seq,
             ChatEvent::ToolPatchEnd { .. } => end_seq = seq,
@@ -250,6 +290,65 @@ fn map_patch_events_basic() {
     }
     assert_eq!(begin_seq, Some(1));
     assert_eq!(end_seq, Some(1));
+}
+
+#[test]
+fn map_custom_tool_apply_patch_into_patch_events() {
+    let content = r#"
+{"type":"response_item","payload":{"type":"custom_tool_call","status":"completed","call_id":"patch-call-1","name":"apply_patch","input":{"patch":"*** Begin Patch\n*** Update File: src/main.rs\n@@\n-old line\n+new line\n*** End Patch"}}}
+"#;
+    let parsed = parse_rollout(content);
+    let mut begin: Option<(ChatEvent, Option<usize>)> = None;
+    let mut end: Option<(ChatEvent, Option<usize>)> = None;
+    for (ev, seq) in parsed.events {
+        match ev {
+            ChatEvent::ToolPatchBegin { .. } => begin = Some((ev, seq)),
+            ChatEvent::ToolPatchEnd { .. } => end = Some((ev, seq)),
+            _ => {}
+        }
+    }
+
+    let (begin_event, begin_seq) = begin.expect("expected ToolPatchBegin emitted");
+    let (end_event, end_seq) = end.expect("expected ToolPatchEnd emitted");
+
+    assert_eq!(begin_seq, Some(1));
+    assert_eq!(end_seq, Some(1));
+
+    if let ChatEvent::ToolPatchBegin {
+        call_id,
+        files,
+        changes,
+        ..
+    } = begin_event
+    {
+        assert_eq!(call_id.as_deref(), Some("patch-call-1"));
+        assert!(files >= 1, "expected at least one patched file");
+        let diff_body = match changes {
+            Some(Value::Object(map)) => map.values().find_map(|entry| {
+                entry
+                    .as_object()
+                    .and_then(|obj| obj.get("update"))
+                    .and_then(|upd| upd.get("unified_diff"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            }),
+            _ => None,
+        }
+        .unwrap_or_default();
+        assert!(diff_body.contains("+new line"));
+    } else {
+        panic!("unexpected event variant");
+    }
+
+    if let ChatEvent::ToolPatchEnd {
+        call_id, success, ..
+    } = end_event
+    {
+        assert_eq!(call_id.as_deref(), Some("patch-call-1"));
+        assert!(success);
+    } else {
+        panic!("unexpected event variant");
+    }
 }
 
 #[test]

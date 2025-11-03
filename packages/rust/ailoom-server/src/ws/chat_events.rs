@@ -1,7 +1,15 @@
 use serde::Serialize;
 use serde_json::{json, Value};
+use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(
+    export,
+    export_to = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../web/src/lib/codex-types/generated/chat-history-entry.ts"
+    )
+)]
 pub struct ChatHistoryEntry {
     pub role: String,
     pub text: String,
@@ -9,7 +17,14 @@ pub struct ChatHistoryEntry {
     pub reasoning: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(
+    export,
+    export_to = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../web/src/lib/codex-types/generated/chat-event.ts"
+    )
+)]
 #[serde(tag = "type")]
 pub enum ChatEvent {
     TurnStarted,
@@ -38,9 +53,28 @@ pub enum ChatEvent {
 
     ReasoningDelta {
         delta: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        item_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+    },
+    ReasoningRawDelta {
+        delta: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        item_id: Option<String>,
     },
     ReasoningEnd {
         text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        item_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        raw_content: Option<String>,
+    },
+    ReasoningItemStarted {
+        item_id: String,
+    },
+    ReasoningItemCompleted {
+        item_id: String,
     },
 
     ToolExecBegin {
@@ -82,6 +116,7 @@ pub enum ChatEvent {
         dels: Option<usize>,
         /// 可选：每文件变更（受开关与限流）
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(type = "Record<string, unknown> | null")]
         changes: Option<Value>,
     },
     ToolPatchEnd {
@@ -99,6 +134,7 @@ pub enum ChatEvent {
         server: String,
         tool: String,
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(type = "Record<string, unknown> | null")]
         arguments: Option<Value>,
     },
     ToolMcpEnd {
@@ -106,13 +142,16 @@ pub enum ChatEvent {
         server: String,
         tool: String,
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(type = "Record<string, unknown> | null")]
         arguments: Option<Value>,
+        #[ts(type = "Record<string, unknown>")]
         result: Value,
     },
 
     InfoUserMessage {
         text: String,
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(type = "Record<string, unknown> | null")]
         kind: Option<Value>,
     },
     /// 来自 provider 的计划更新（如 codex plan_update）
@@ -120,6 +159,7 @@ pub enum ChatEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         explanation: Option<String>,
         /// 按上游原样携带（数组或对象）
+        #[ts(type = "Record<string, unknown>")]
         plan: Value,
     },
     /// 来自 provider 的当前回合差异（如 codex turn_diff）
@@ -129,7 +169,14 @@ pub enum ChatEvent {
     TurnComplete,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, TS)]
+#[ts(
+    export,
+    export_to = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../web/src/lib/codex-types/generated/chat-error.ts"
+    )
+)]
 pub struct ChatError {
     pub message: String,
 }
@@ -172,12 +219,52 @@ impl ChatEvent {
                 json!({"conversationId": conversation_id, "messages": messages}),
             ),
 
-            ChatEvent::ReasoningDelta { delta } => {
-                ("chat.reasoning.delta".into(), json!({"delta": delta}))
+            ChatEvent::ReasoningDelta {
+                delta,
+                item_id,
+                source,
+            } => {
+                let mut payload = serde_json::Map::new();
+                payload.insert("delta".into(), Value::String(delta));
+                if let Some(item_id) = item_id {
+                    payload.insert("itemId".into(), Value::String(item_id));
+                }
+                if let Some(source) = source {
+                    payload.insert("source".into(), Value::String(source));
+                }
+                ("chat.reasoning.delta".into(), Value::Object(payload))
             }
-            ChatEvent::ReasoningEnd { text } => {
-                ("chat.reasoning.end".into(), json!({"text": text}))
+            ChatEvent::ReasoningRawDelta { delta, item_id } => {
+                let mut payload = serde_json::Map::new();
+                payload.insert("delta".into(), Value::String(delta));
+                if let Some(item_id) = item_id {
+                    payload.insert("itemId".into(), Value::String(item_id));
+                }
+                ("chat.reasoning.raw_delta".into(), Value::Object(payload))
             }
+            ChatEvent::ReasoningEnd {
+                text,
+                item_id,
+                raw_content,
+            } => {
+                let mut payload = serde_json::Map::new();
+                payload.insert("text".into(), Value::String(text));
+                if let Some(item_id) = item_id {
+                    payload.insert("itemId".into(), Value::String(item_id));
+                }
+                if let Some(raw) = raw_content {
+                    payload.insert("rawContent".into(), Value::String(raw));
+                }
+                ("chat.reasoning.end".into(), Value::Object(payload))
+            }
+            ChatEvent::ReasoningItemStarted { item_id } => (
+                "chat.reasoning.item_started".into(),
+                json!({"itemId": item_id}),
+            ),
+            ChatEvent::ReasoningItemCompleted { item_id } => (
+                "chat.reasoning.item_completed".into(),
+                json!({"itemId": item_id}),
+            ),
 
             ChatEvent::ToolExecBegin {
                 cwd,

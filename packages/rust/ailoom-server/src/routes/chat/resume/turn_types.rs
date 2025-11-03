@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use serde_json::Value;
 use ts_rs::TS;
 
@@ -74,6 +75,32 @@ pub struct TurnReasoning {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(type = "Record<string, TurnReasoningItem> | null | undefined")]
+    pub items: Option<HashMap<String, TurnReasoningItem>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_item_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(
+    export,
+    export_to = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../web/src/features/codex-chat/types/generated/turns.ts"
+    )
+)]
+pub struct TurnReasoningItem {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

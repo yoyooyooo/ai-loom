@@ -163,7 +163,15 @@ impl Hub {
             "chat.tool.patch.end",
             "chat.tool.mcp.end",
         ];
-        if start_methods.iter().any(|m| *m == method) {
+        if method == "chat.info.runtime.generating" {
+            let generating = params
+                .get("generating")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if let Ok(mut map) = self.progress.lock() {
+                map.insert(conversation_id, generating);
+            }
+        } else if start_methods.iter().any(|m| *m == method) {
             if let Ok(mut map) = self.progress.lock() {
                 map.insert(conversation_id, true);
             }

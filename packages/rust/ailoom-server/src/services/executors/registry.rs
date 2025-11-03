@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ailoom_executors::{
-    ProviderError, RuntimeSnapshot, SharedProvider, SpawnConfig, StandardProvider,
+    ConversationTurn, ProviderError, RuntimeSnapshot, SharedProvider, SpawnConfig, StandardProvider,
 };
 use tokio::sync::RwLock;
 
@@ -93,6 +93,16 @@ impl RuntimeRegistry {
     ) -> Result<(), ProviderError> {
         let provider = self.provider(provider).await?;
         provider.send_user_message(conversation_id, text).await
+    }
+
+    pub async fn send_user_turn(
+        &self,
+        provider: &str,
+        conversation_id: &str,
+        turn: ConversationTurn,
+    ) -> Result<(), ProviderError> {
+        let provider = self.provider(provider).await?;
+        provider.send_user_turn(conversation_id, turn).await
     }
 
     pub async fn interrupt_conversation(

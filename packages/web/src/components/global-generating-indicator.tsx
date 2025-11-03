@@ -1,6 +1,6 @@
-import { useMemo } from 'react'
 import { Loader2 } from 'lucide-react'
 import { generatingState$ } from '@/features/codex-chat/services/generating-aggregator'
+import { useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import { useObservableState } from 'observable-hooks'
 import { map } from 'rxjs/operators'
@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
 import { useNavigate } from 'react-router-dom'
+import { useChatTurnStore } from '@/features/codex-chat/stores/chat-turns'
 
 export type GlobalGeneratingIndicatorProps = {
   className?: string
@@ -37,35 +38,64 @@ export function GlobalGeneratingIndicator({ className, showLabel }: GlobalGenera
   const count = state.count
   const items = state.items
 
+  const storeVersion = useChatTurnStore((s) => s.version)
+  const parsedItems = useMemo(() => {
+    if (!items || items.length === 0) return []
+    const getPreview = useChatTurnStore.getState().getLastAssistantPreview
+    return items.map((key: string) => {
+      const [maybeProvider, maybeCid] = key.includes('|') ? key.split('|') : ['', key]
+      const cid = maybeCid || key
+      const provider = maybeProvider || ''
+      const short = cid.length > 8 ? `${cid.slice(0, 4)}…${cid.slice(-3)}` : cid
+      const fallback = provider ? `${provider}:${short}` : short
+      const preview = getPreview ? getPreview(cid, 80) : null
+      const trimmedPreview = preview?.trim()
+      const display = trimmedPreview
+        ? provider
+          ? `${provider} · ${trimmedPreview}`
+          : trimmedPreview
+        : fallback
+      return {
+        key,
+        cid,
+        provider,
+        preview: trimmedPreview,
+        fallback,
+        display
+      }
+    })
+  }, [items, storeVersion])
+
   const label = `进行中：${count}`
   const active = count > 0
   if (!active) return null
 
   const renderList = () => {
-    if (!items || items.length === 0) return <span className="text-xs">暂无</span>
+    if (!parsedItems || parsedItems.length === 0) {
+      return (
+        <DropdownMenuItem disabled className="text-xs text-muted-foreground">
+          暂无
+        </DropdownMenuItem>
+      )
+    }
+
     return (
-      <div className="max-w-64 max-h-72 overflow-auto">
-        <div className="mb-1 text-[10px] opacity-70">进行中的会话（点击跳转）</div>
-        <ul className="space-y-1">
-          {items.map((key: string) => {
-            const [maybeProvider, maybeCid] = key.includes('|') ? key.split('|') : ['', key]
-            const cid = maybeCid || key
-            const provider = maybeProvider || ''
-            const short = cid.length > 8 ? `${cid.slice(0, 4)}…${cid.slice(-3)}` : cid
-            const text = provider ? `${provider}:${short}` : short
-            return (
-              <li key={key}>
-                <button
-                  type="button"
-                  className="w-full truncate rounded px-2 py-1 text-left text-xs hover:bg-background/20"
-                  onClick={() => navigate(`/chat/${encodeURIComponent(cid)}`)}
-                >
-                  {text}
-                </button>
-              </li>
-            )
-          })}
-        </ul>
+      <div className="max-h-72 overflow-auto">
+        {parsedItems.map((item) => {
+          return (
+            <DropdownMenuItem
+              key={item.key}
+              onSelect={(event) => {
+                event.preventDefault()
+                navigate(`/chat/${encodeURIComponent(item.cid)}`)
+              }}
+              className="cursor-pointer text-xs"
+              title={item.preview || item.fallback}
+            >
+              {item.display}
+            </DropdownMenuItem>
+          )
+        })}
       </div>
     )
   }
@@ -94,33 +124,7 @@ export function GlobalGeneratingIndicator({ className, showLabel }: GlobalGenera
       <DropdownMenuContent align="end" sideOffset={8} className="w-64">
         <DropdownMenuLabel>进行中的会话</DropdownMenuLabel>
         <DropdownMenuSeparator />
-        {items.length === 0 ? (
-          <DropdownMenuItem disabled className="text-xs text-muted-foreground">
-            暂无
-          </DropdownMenuItem>
-        ) : (
-          <div className="max-h-72 overflow-auto">
-            {items.map((key: string) => {
-              const [maybeProvider, maybeCid] = key.includes('|') ? key.split('|') : ['', key]
-              const cid = maybeCid || key
-              const provider = maybeProvider || ''
-              const short = cid.length > 8 ? `${cid.slice(0, 4)}…${cid.slice(-3)}` : cid
-              const text = provider ? `${provider}:${short}` : short
-              return (
-                <DropdownMenuItem
-                  key={key}
-                  onSelect={(event) => {
-                    event.preventDefault()
-                    navigate(`/chat/${encodeURIComponent(cid)}`)
-                  }}
-                  className="cursor-pointer text-xs"
-                >
-                  {text}
-                </DropdownMenuItem>
-              )
-            })}
-          </div>
-        )}
+        {renderList()}
       </DropdownMenuContent>
     </DropdownMenu>
   )

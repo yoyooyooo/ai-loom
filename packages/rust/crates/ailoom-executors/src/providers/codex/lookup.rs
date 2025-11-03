@@ -5,25 +5,12 @@ use std::path::{Path, PathBuf};
 use codex_app_server_protocol::ListConversationsParams;
 use serde_json::{Map, Value};
 
-use super::client::AppServerClient;
+use std::sync::Arc;
 
-fn codex_home() -> Option<PathBuf> {
-    let path = std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|home| home.join(".codex")));
-    path.filter(|p| p.exists())
-}
-
-fn history_log_path(home: &Path) -> PathBuf {
-    home.join("history.jsonl")
-}
-
-fn sessions_root(home: &Path) -> PathBuf {
-    home.join("sessions")
-}
+use super::{client::AppServerClient, paths::resolve_codex_data_dir};
 
 fn parse_history_jsonl(home: &Path) -> Vec<(String, PathBuf)> {
-    let path = history_log_path(home);
+    let path = home.join("history.jsonl");
     let file = match std::fs::File::open(&path) {
         Ok(f) => f,
         Err(_) => return Vec::new(),
@@ -49,7 +36,7 @@ fn parse_history_jsonl(home: &Path) -> Vec<(String, PathBuf)> {
 
 fn find_in_sessions(home: &Path, conversation_id: &str) -> Option<PathBuf> {
     let mut queue = VecDeque::new();
-    queue.push_back(sessions_root(home));
+    queue.push_back(home.join("sessions"));
 
     while let Some(dir) = queue.pop_front() {
         if !dir.exists() {
@@ -78,10 +65,10 @@ fn find_in_sessions(home: &Path, conversation_id: &str) -> Option<PathBuf> {
 }
 
 pub async fn lookup_path_by_conversation_id(
-    app: &AppServerClient,
+    app: Option<Arc<AppServerClient>>,
     conversation_id: &str,
 ) -> Option<String> {
-    if let Some(home) = codex_home() {
+    if let Some(home) = resolve_codex_data_dir() {
         if let Some((_, path)) = parse_history_jsonl(&home)
             .into_iter()
             .find(|(id, _)| id == conversation_id)
@@ -93,6 +80,10 @@ pub async fn lookup_path_by_conversation_id(
             return Some(path.to_string_lossy().to_string());
         }
     }
+
+    let Some(app) = app else {
+        return None;
+    };
 
     let mut cursor: Option<String> = None;
     loop {

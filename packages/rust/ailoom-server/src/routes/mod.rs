@@ -1,7 +1,9 @@
 pub mod annotations;
 pub mod chat;
+pub mod codex;
 pub mod debug;
 pub mod files;
+pub mod settings;
 pub mod stitch;
 pub mod tree;
 pub mod verify;

@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import ChatPage from '@/pages/chat-page'
+import SettingsPage from '@/pages/settings-page'
 import Explorer from '@/routes/explorer'
 import { Toaster } from '@/components/ui/sonner'
 import { useAppStore } from '@/stores/app'
@@ -36,10 +37,16 @@ function AppShell() {
     })()
   }, [theme])
 
-  const activeModuleId = useMemo(() => {
+  const isSettingsRoute = useMemo(
+    () => location.pathname.startsWith('/settings'),
+    [location.pathname]
+  )
+
+  const activeModuleId = useMemo<'chat' | 'explore' | undefined>(() => {
+    if (isSettingsRoute) return undefined
     if (location.pathname.startsWith('/explore')) return 'explore'
     return 'chat'
-  }, [location.pathname])
+  }, [isSettingsRoute, location.pathname])
 
   return (
     <AppSidebar
@@ -48,6 +55,10 @@ function AppShell() {
       onNavigate={(path) => {
         if (path !== location.pathname) navigate(path)
       }}
+      onOpenSettings={() => {
+        if (!location.pathname.startsWith('/settings')) navigate('/settings')
+      }}
+      settingsActive={isSettingsRoute}
       className="h-full"
     >
       <AppSidebarMobileTrigger />
@@ -56,6 +67,7 @@ function AppShell() {
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/chat/:conversationId" element={<ChatPage />} />
           <Route path="/explore" element={<Explorer />} />
+          <Route path="/settings" element={<SettingsPage />} />
           <Route path="/" element={<Navigate to="/chat" replace />} />
         </Routes>
       </div>

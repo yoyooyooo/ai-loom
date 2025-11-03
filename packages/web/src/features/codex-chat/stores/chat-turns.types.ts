@@ -3,6 +3,7 @@ import type {
   Turn as GeneratedTurn,
   TurnAssistant as GeneratedTurnAssistant,
   TurnReasoning as GeneratedTurnReasoning,
+  TurnReasoningItem as GeneratedTurnReasoningItem,
   TurnStatus as GeneratedTurnStatus,
   TurnStep as GeneratedTurnStep,
   TurnStepKind as GeneratedTurnStepKind,
@@ -15,6 +16,7 @@ export type TurnStepStatus = GeneratedTurnStepStatus
 export type TurnStatus = GeneratedTurnStatus
 export type TurnStep = GeneratedTurnStep
 export type TurnReasoning = GeneratedTurnReasoning
+export type TurnReasoningItem = GeneratedTurnReasoningItem
 export type TurnAssistant = GeneratedTurnAssistant
 export type TurnUser = GeneratedTurnUser
 export type Turn = GeneratedTurn
@@ -22,6 +24,7 @@ export type Turn = GeneratedTurn
 export type ConvSlice = {
   turns: Turn[]
   activeTurnId?: string
+  pendingCompletionTurnId?: string
   nextSeq: number
   toolIndex: Record<string, { turnId: string; stepId: string }>
   toolHistory: Record<string, { turnId: string; stepId: string }>
@@ -29,6 +32,7 @@ export type ConvSlice = {
   lastAccess?: number
   turnIndex: Record<string, number>
   streamingIndex?: Record<string, boolean>
+  reasoningIndex?: Record<string, { turnId: string }>
 }
 
 export type TurnStoreState = {
@@ -49,13 +53,18 @@ export type TurnStoreActions = {
   __endEvent: () => void
   addUserTurn: (text: string) => string
   setUserText: (text: string) => void
-  markTurnStarted: (opts?: { startedAt?: string }) => string
+  markTurnStarted: (opts?: { startedAt?: string; turnSeq?: number }) => string
   appendAssistantDelta: (delta: string) => void
   completeAssistant: (text?: string, ts?: string, eventId?: number) => void
   failAssistant: (message?: string) => void
   abortAssistant: () => void
-  appendReasoning: (delta: string) => void
-  endReasoning: (summary: string) => void
+  appendReasoning: (delta: string, opts?: { itemId?: string; source?: 'content' | 'raw'; eventId?: number }) => void
+  endReasoning: (summary: string, opts?: { itemId?: string; rawContent?: string | null }) => void
+  markReasoningItemStarted: (itemId: string) => void
+  markReasoningItemCompleted: (
+    itemId: string,
+    opts?: { summary?: string | null; rawContent?: string | null }
+  ) => void
   markFinalMessageStarted: () => void
   unmarkFinalMessageStarted: () => void
   addStep: (
@@ -67,7 +76,7 @@ export type TurnStoreActions = {
   appendStep: (callId: string, text: string) => void
   endStep: (callId: string, patch?: Partial<TurnStep>) => void
   addInfo: (title: string, body?: string) => void
-  completeTurn: (opts?: { completedAt?: string }) => void
+  completeTurn: (opts?: { completedAt?: string; finalizeGenerating?: boolean }) => void
   loadServerTurns: (turns: Turn[]) => void
   deriveWorkingState: (turnId: string) => {
     working: boolean

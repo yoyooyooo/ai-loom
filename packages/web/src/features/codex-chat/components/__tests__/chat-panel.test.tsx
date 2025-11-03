@@ -23,6 +23,7 @@ vi.mock('@/features/codex-chat/services/ws', () => ({
 }))
 
 const sendMessageMock = vi.fn()
+const sendUserTurnMock = vi.fn()
 const getConfigMock = vi.fn()
 
 vi.mock('@/features/codex-chat/services/api', () => ({
@@ -30,6 +31,7 @@ vi.mock('@/features/codex-chat/services/api', () => ({
     newConversation: vi.fn(),
     getConfig: (...args: any[]) => getConfigMock(...args),
     sendMessage: (...args: any[]) => sendMessageMock(...args),
+    sendUserTurn: (...args: any[]) => sendUserTurnMock(...args),
     interrupt: vi.fn()
   }
 }))
@@ -60,7 +62,7 @@ describe('CodexChatPanel onSend', () => {
     codexChatProviderActions.resetAll()
     chatTurnActions.setConversationId('conv-err')
     getConfigMock.mockResolvedValue({ models: [], defaults: {} })
-    sendMessageMock.mockRejectedValue(new Error('网络异常'))
+    sendUserTurnMock.mockRejectedValue(new Error('网络异常'))
     ;(toastMock.error as any).mockClear()
   })
 
@@ -68,6 +70,7 @@ describe('CodexChatPanel onSend', () => {
     chatTurnActions.reset()
     codexChatProviderActions.resetAll()
     sendMessageMock.mockReset()
+    sendUserTurnMock.mockReset()
     getConfigMock.mockReset()
   })
 
@@ -81,7 +84,12 @@ describe('CodexChatPanel onSend', () => {
     expect(form).not.toBeNull()
     fireEvent.submit(form!)
 
-    await waitFor(() => expect(sendMessageMock).toHaveBeenCalledWith('conv-err', 'hello world'))
+    await waitFor(() =>
+      expect(sendUserTurnMock).toHaveBeenCalledWith(
+        'conv-err',
+        expect.objectContaining({ text: 'hello world' })
+      )
+    )
     await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('网络异常'))
 
     const state = useChatTurnStore.getState()

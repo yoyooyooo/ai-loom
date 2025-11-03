@@ -190,12 +190,17 @@ export function HistoryList({
                       className={cn(
                         'relative flex w-full flex-col gap-1 py-3 pr-4 md:pr-6 text-left text-sm',
                         'transition-[color] duration-200 ease-in-out',
-                        'hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                        'hover:bg-muted focus-visible:outline-none',
                         isActive ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground'
                       )}
+                      tabIndex={-1}
                       style={{ paddingLeft }}
                       disabled={isPending || isDeleting}
-                      onClick={() => onSelect?.(item)}
+                      onClick={(event) => {
+                        event.currentTarget.blur()
+                        onSelect?.(item)
+                      }}
+                      onMouseDown={(event) => event.preventDefault()}
                       title={lineageTip}
                     >
                       {/* 右侧渐变遮罩：仅在 hover/focus 时出现，避免文字干扰删除按钮视觉 */}
@@ -217,12 +222,11 @@ export function HistoryList({
                       ) : null}
                       <div className="flex items-center gap-2 text-xs text-muted-foreground/70">
                         {depth > 0 ? <span className="text-muted-foreground">↳</span> : null}
-                        {item.model ? <span>{item.model}</span> : null}
                         {item.parentId && depth > 0 ? (
                           <span className="text-[10px] uppercase">branch</span>
                         ) : null}
                       </div>
-                      <div className="line-clamp-3 text-sm text-foreground">
+                      <div className="line-clamp-2 text-sm text-foreground">
                         {item.preview?.trim() ? item.preview : '（无预览）'}
                       </div>
                       <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground/70">

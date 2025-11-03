@@ -15,9 +15,13 @@ function buildExecTitle(step: TurnStep): string {
   const shellScript =
     isShellWrapper && command && command.length >= 3 ? command.slice(2).join('\n').trim() : ''
   const detectionSource = shellScript || (command ? command.join('\n') : String(step.title || ''))
+  const isInternalApplyPatch = Array.isArray(command)
+    ? command.some((part) => typeof part === 'string' && part.includes('--codex-run-as-apply-patch'))
+    : false
   const isPatch =
-    /apply_patch|applypatch|git\s+apply/i.test(detectionSource) ||
-    /\*\*\*\s+Begin Patch/.test(detectionSource)
+    !isInternalApplyPatch &&
+    (/apply_patch|applypatch|git\s+apply/i.test(detectionSource) ||
+      /\*\*\*\s+Begin Patch/.test(detectionSource))
   if (isPatch) {
     try {
       const m = detectionSource.match(/\*\*\*\s+(?:Add|Update|Delete) File:\s+(.+)/)
@@ -114,7 +118,7 @@ export function ExecStepCard({ step }: StepCardProps) {
   return (
     <details className="border-b border-border pb-1">
       <summary className="flex items-center gap-2 truncate text-sm">
-        <StepIcon kind={step.kind} />
+        <StepIcon kind={step.kind} step={step} />
         <span className="truncate">{buildExecTitle(step)}</span>
         {stepStatusBadge(step.status)}
       </summary>

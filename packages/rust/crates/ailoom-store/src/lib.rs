@@ -1,4 +1,5 @@
 use ailoom_core as core;
+use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
 use sqlx::Row;
 use std::path::Path;
@@ -8,6 +9,8 @@ use thiserror::Error;
 pub enum StoreError {
     #[error("sqlx error: {0}")]
     Sqlx(#[from] sqlx::Error),
+    #[error("json error: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 #[derive(Clone)]
@@ -158,6 +161,60 @@ impl Store {
         )
         .execute(&self.pool)
         .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS app_settings (
+                workspace_id TEXT NOT NULL,
+                namespace TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value_json TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'ui',
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+                updated_by TEXT,
+                PRIMARY KEY (workspace_id, namespace, key),
+                FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
+                    ON DELETE CASCADE
+                    ON UPDATE CASCADE,
+                CHECK (json_valid(value_json))
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_app_settings_ws_ns ON app_settings(workspace_id, namespace);",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS agent_profiles (
+                workspace_id TEXT NOT NULL,
+                agent TEXT NOT NULL,
+                profile TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                version INTEGER NOT NULL DEFAULT 1,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+                updated_by TEXT,
+                PRIMARY KEY (workspace_id, agent, profile),
+                FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
+                    ON DELETE CASCADE
+                    ON UPDATE CASCADE,
+                CHECK (json_valid(payload_json)),
+                CHECK (is_active IN (0, 1))
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_agent_profiles_ws_agent ON agent_profiles(workspace_id, agent);",
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -196,6 +253,170 @@ impl Store {
         .execute(&self.pool)
         .await?;
         Ok(id)
+    }
+
+    pub async fn get_setting(
+        &self,
+        namespace: &str,
+        key: &str,
+    ) -> Result<Option<Value>, StoreError> {
+        let row = sqlx::query(
+            "SELECT value_json FROM app_settings WHERE workspace_id = ?1 AND namespace = ?2 AND key = ?3",
+        )
+        .bind(&self.workspace_id)
+        .bind(namespace)
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = row {
+            let raw: String = row.get("value_json");
+            let value = serde_json::from_str(&raw)?;
+            Ok(Some(value))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn set_setting(
+        &self,
+        namespace: &str,
+        key: &str,
+        value: &Value,
+        source: Option<&str>,
+        updated_by: Option<&str>,
+    ) -> Result<(), StoreError> {
+        let value_json = serde_json::to_string(value)?;
+        let source = source.unwrap_or("ui");
+        sqlx::query(
+            r#"
+            INSERT INTO app_settings (workspace_id, namespace, key, value_json, source, updated_at, updated_by)
+            VALUES (?1, ?2, ?3, ?4, ?5, strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?6)
+            ON CONFLICT(workspace_id, namespace, key)
+            DO UPDATE SET
+                value_json = excluded.value_json,
+                source = excluded.source,
+                updated_at = excluded.updated_at,
+                updated_by = excluded.updated_by;
+            "#,
+        )
+        .bind(&self.workspace_id)
+        .bind(namespace)
+        .bind(key)
+        .bind(value_json)
+        .bind(source)
+        .bind(updated_by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_settings(&self, namespace: &str) -> Result<Vec<(String, Value)>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT key, value_json FROM app_settings WHERE workspace_id = ?1 AND namespace = ?2",
+        )
+        .bind(&self.workspace_id)
+        .bind(namespace)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut output = Vec::with_capacity(rows.len());
+        for row in rows {
+            let key: String = row.get("key");
+            let raw: String = row.get("value_json");
+            let value = serde_json::from_str(&raw)?;
+            output.push((key, value));
+        }
+        Ok(output)
+    }
+
+    pub async fn upsert_agent_profile(
+        &self,
+        agent: &str,
+        profile: &str,
+        payload: &Value,
+        version: i64,
+        is_active: bool,
+        updated_by: Option<&str>,
+    ) -> Result<(), StoreError> {
+        let payload_json = serde_json::to_string(payload)?;
+        let is_active_int = if is_active { 1 } else { 0 };
+        sqlx::query(
+            r#"
+            INSERT INTO agent_profiles (
+                workspace_id, agent, profile, payload_json, version, is_active, updated_at, updated_by
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?7
+            )
+            ON CONFLICT(workspace_id, agent, profile)
+            DO UPDATE SET
+                payload_json = excluded.payload_json,
+                version = excluded.version,
+                is_active = excluded.is_active,
+                updated_at = excluded.updated_at,
+                updated_by = excluded.updated_by;
+            "#,
+        )
+        .bind(&self.workspace_id)
+        .bind(agent)
+        .bind(profile)
+        .bind(payload_json)
+        .bind(version)
+        .bind(is_active_int)
+        .bind(updated_by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_agent_profiles(
+        &self,
+        agent_filter: Option<&str>,
+    ) -> Result<Vec<AgentProfileRecord>, StoreError> {
+        let mut sql = String::from(
+            "SELECT agent, profile, payload_json, version, is_active, updated_at, updated_by
+             FROM agent_profiles WHERE workspace_id = ?1",
+        );
+        if agent_filter.is_some() {
+            sql.push_str(" AND agent = ?2");
+        }
+        sql.push_str(" ORDER BY agent, profile;");
+
+        let rows = if let Some(agent) = agent_filter {
+            sqlx::query(&sql)
+                .bind(&self.workspace_id)
+                .bind(agent)
+                .fetch_all(&self.pool)
+                .await?
+        } else {
+            sqlx::query(&sql)
+                .bind(&self.workspace_id)
+                .fetch_all(&self.pool)
+                .await?
+        };
+
+        let mut profiles = Vec::with_capacity(rows.len());
+        for row in rows {
+            let agent: String = row.get("agent");
+            let profile: String = row.get("profile");
+            let payload_raw: String = row.get("payload_json");
+            let payload = serde_json::from_str(&payload_raw)?;
+            let version: i64 = row.get("version");
+            let is_active: i64 = row.get("is_active");
+            let updated_at: String = row.get("updated_at");
+            let updated_by: Option<String> = row.get("updated_by");
+
+            profiles.push(AgentProfileRecord {
+                agent,
+                profile,
+                payload,
+                version,
+                is_active: is_active != 0,
+                updated_at,
+                updated_by,
+            });
+        }
+        Ok(profiles)
     }
 
     pub async fn list_annotations(&self) -> Result<Vec<core::Annotation>, StoreError> {
@@ -384,4 +605,15 @@ impl AnnotationRow {
             updated_at: self.updated_at,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentProfileRecord {
+    pub agent: String,
+    pub profile: String,
+    pub payload: Value,
+    pub version: i64,
+    pub is_active: bool,
+    pub updated_at: String,
+    pub updated_by: Option<String>,
 }

@@ -2,7 +2,10 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use ailoom_executors::{providers::codex::CodexProvider, SpawnConfig};
+use ailoom_executors::{
+    providers::codex::{resolve_codex_data_dir, CodexProvider},
+    SpawnConfig,
+};
 use ailoom_server::services::executors::registry::RuntimeRegistry;
 use anyhow::Result;
 use tokio::time::timeout;
@@ -102,15 +105,7 @@ fn find_session_file(cid: &str) -> Option<PathBuf> {
 }
 
 fn codex_home() -> Option<PathBuf> {
-    if let Some(home) = std::env::var_os("CODEX_HOME") {
-        let path = PathBuf::from(home);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    dirs::home_dir()
-        .map(|d| d.join(".codex"))
-        .filter(|p| p.exists())
+    resolve_codex_data_dir().filter(|p| p.exists())
 }
 
 fn session_has_answer(path: &PathBuf, expected: &str) -> Result<bool> {

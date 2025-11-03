@@ -2,6 +2,7 @@ import React, { useMemo } from 'react'
 import { match } from 'ts-pattern'
 import type { Turn } from '../stores/chat-turns'
 import { useChatTurnStore } from '../stores/chat-turns'
+import { STAGING_CID } from '../stores/chat-turns-core'
 import { Copy, RotateCcw, Check } from 'lucide-react'
 // step 图标与状态徽标移动至 cards/common
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -20,6 +21,15 @@ import { ChatMessage } from '@/components/ui/chat-message'
 import { TypingIndicator } from '@/components/ui/typing-indicator'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { cn } from '@/lib/utils'
+
+function hasRenderableAssistantText(input: string): boolean {
+  if (typeof input !== 'string') return false
+  const trimmed = input.trim()
+  if (!trimmed) return false
+  // 去掉常见 Markdown 标记后再确认是否仍有可见字符
+  const stripped = trimmed.replace(/[\s`*_~>#\-]/g, '')
+  return stripped.length > 0
+}
 
 function summarizeFirstLine(input: string, max = 80): string {
   try {
@@ -129,6 +139,14 @@ export function TurnAssistantView({
   const { working, workingTitle, detailsCount } = useChatTurnStore((s) =>
     s.deriveWorkingState(turn.id)
   )
+  const generatingSelector = useMemo(() => {
+    return (state: any) => {
+      const key = typeof turn.conversationId === 'string' ? turn.conversationId : STAGING_CID
+      const slice = state.byConv?.[key] ?? state.byConv?.[STAGING_CID]
+      return !!slice?.generating
+    }
+  }, [turn.conversationId])
+  const isConversationGenerating = useChatTurnStore(generatingSelector)
   // resume 构建的 turn（history/events）保持原来的“thinking 折叠块”行为；
   // 实时 turn 在仅有 reasoning 时也显示 Working 折叠区以统一体验。
   const isResumeLike = useMemo(() => {
@@ -159,6 +177,10 @@ export function TurnAssistantView({
   const steps = turn.steps || []
   const assistantText = turn.assistant?.text ?? ''
   const userText = turn.user?.text ?? ''
+  const assistantHasRenderableText = useMemo(
+    () => hasRenderableAssistantText(assistantText),
+    [assistantText]
+  )
 
   const { isCopied, handleCopy } = useCopyToClipboard({
     text: assistantText,
@@ -288,6 +310,14 @@ export function TurnAssistantView({
 
         {/* 当仅 Loading 且不显示 Working 抬头时，在正文位置显示三点占位 */}
         {!showWorkingHeader && showLoadingOnly ? <TypingIndicator /> : null}
+
+        {!showWorkingHeader &&
+        !showLoadingOnly &&
+        turn.status === 'streaming' &&
+        isConversationGenerating &&
+        !assistantHasRenderableText ? (
+          <TypingIndicator />
+        ) : null}
 
         {typeof turn.assistant?.text === 'string' && turn.assistant.text.trim().length > 0 ? (
           <ChatMessage

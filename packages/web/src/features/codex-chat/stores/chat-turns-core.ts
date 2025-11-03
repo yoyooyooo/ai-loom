@@ -15,13 +15,15 @@ type CoreCreator = ChatTurnStoreCreator<ChatTurnStoreCreator.Core>
 const EMPTY_SLICE_READONLY: ConvSlice = Object.freeze({
   turns: [],
   activeTurnId: undefined,
+  pendingCompletionTurnId: undefined,
   nextSeq: 0,
   toolIndex: {},
   toolHistory: {},
   generating: false,
   lastAccess: undefined,
   turnIndex: {},
-  streamingIndex: {}
+  streamingIndex: {},
+  reasoningIndex: {}
 })
 
 function summarizeFirstLine(input: string, max = 80): string {
@@ -54,9 +56,13 @@ function calcGenerating(turns: Turn[]): boolean {
 function createStreamingTurn(
   conversationId: string | undefined,
   nextSeq: number | undefined,
-  userText?: string
+  userText?: string,
+  forcedSeq?: number
 ): Turn {
-  const seq = (nextSeq ?? 0) + 1
+  const seqCandidate = typeof forcedSeq === 'number' && Number.isFinite(forcedSeq)
+    ? Math.max(1, Math.floor(forcedSeq))
+    : undefined
+  const seq = seqCandidate ?? (nextSeq ?? 0) + 1
   const ts = nowISO()
   return {
     id: createId('turn'),
@@ -74,10 +80,35 @@ function createStreamingTurn(
 }
 
 function ensureTurnReasoning(turn: Turn) {
-  if (turn.reasoning) return turn.reasoning
-  const empty: any = { title: null, content: '' }
+  if (turn.reasoning) {
+    const existing: any = turn.reasoning
+    if (!existing.items) existing.items = {}
+    return existing
+  }
+  const empty: any = { title: null, content: '', raw: null, items: {}, activeItemId: null }
   ;(turn as any).reasoning = empty
   return empty
+}
+
+function ensureReasoningItems(reasoning: any) {
+  if (!reasoning.items) reasoning.items = {}
+  return reasoning.items as Record<string, any>
+}
+
+function ensureReasoningItem(reasoning: any, itemId: string) {
+  const items = ensureReasoningItems(reasoning)
+  if (!items[itemId]) {
+    items[itemId] = { id: itemId, content: '', raw: null, summary: null }
+  }
+  return items[itemId]
+}
+
+function updateGeneratingFlag(conv: ConvSlice) {
+  const streamingTurns = Array.isArray(conv.turns) ? calcGenerating(conv.turns as Turn[]) : false
+  const hasActive = !!(conv.activeTurnId || conv.pendingCompletionTurnId)
+  const streamingIndexActive = Object.keys((conv as any).streamingIndex || {}).length > 0
+  const reasoningActive = Object.keys((conv as any).reasoningIndex || {}).length > 0
+  conv.generating = streamingTurns || hasActive || streamingIndexActive || reasoningActive
 }
 
 function mergeStepBody(prev: string | null | undefined, next: string): string {
@@ -126,19 +157,53 @@ function hideNonPatchOutputsEnabled(): boolean {
   }
 }
 
+function normalizePlainText(text?: string | null): string {
+  return typeof text === 'string' ? text.trim() : ''
+}
+
+function isTrivialReasoning(content?: string | null): boolean {
+  const trimmed = normalizePlainText(content)
+  if (!trimmed) return true
+  const normalized = trimmed.replace(/\*/g, '').trim().toLowerCase()
+  if (!normalized) return true
+  return normalized === 'preparing simple response'
+}
+
+function shouldPruneCompletedTurn(turn: Turn): boolean {
+  if (turn.status !== 'completed') return false
+  const userText = normalizePlainText(turn.user?.text)
+  const assistantText = normalizePlainText(turn.assistant?.text)
+  const hasSteps =
+    Array.isArray(turn.steps) &&
+    turn.steps.some((step: any) => {
+      if (!step) return false
+      const body = normalizePlainText(step.body)
+      const title = normalizePlainText(step.title)
+      return body.length > 0 || title.length > 0
+    })
+  const reasoningContent = normalizePlainText((turn as any)?.reasoning?.content)
+  const reasoningMeaningful = reasoningContent.length > 0 && !isTrivialReasoning(reasoningContent)
+  const hasMeta =
+    turn.meta != null &&
+    (typeof turn.meta !== 'object' || Object.keys(turn.meta as Record<string, unknown>).length > 0)
+  return !userText && !assistantText && !hasSteps && !reasoningMeaningful && !hasMeta
+}
+
 function createEmptySlice(): ConvSlice {
   return {
     turns: [],
     activeTurnId: undefined,
+    pendingCompletionTurnId: undefined,
     nextSeq: 0,
     toolIndex: {},
-    toolHistory: {},
-    generating: false,
-    lastAccess: Date.now(),
-    turnIndex: {},
-    // 运行时索引：处于 streaming 状态的 turnId 集合（Object 代替 Set，便于序列化）
-    streamingIndex: {}
-  }
+  toolHistory: {},
+  generating: false,
+  lastAccess: Date.now(),
+  turnIndex: {},
+  // 运行时索引：处于 streaming 状态的 turnId 集合（Object 代替 Set，便于序列化）
+  streamingIndex: {},
+  reasoningIndex: {}
+}
 }
 
 function bumpVersion(state: ChatTurnStore) {
@@ -158,6 +223,7 @@ function registerTurns(state: ChatTurnStore, cid: string, conv: ConvSlice) {
   if (!conv.turnIndex) conv.turnIndex = {}
   if (!(conv as any).toolHistory) (conv as any).toolHistory = {}
   const history = conv.toolHistory
+  conv.pendingCompletionTurnId = undefined
   for (const key of Object.keys(history)) delete history[key]
   for (let i = 0; i < conv.turns.length; i += 1) {
     const turn = conv.turns[i]
@@ -169,6 +235,17 @@ function registerTurns(state: ChatTurnStore, cid: string, conv: ConvSlice) {
         const callId = step?.meta?.callId
         if (!callId) continue
         history[callId] = { turnId: turn.id, stepId: step.id }
+      }
+    }
+  }
+  const reasoningRegistry = (conv as any).reasoningIndex as
+    | Record<string, { turnId: string }>
+    | undefined
+  if (reasoningRegistry) {
+    for (const key of Object.keys(reasoningRegistry)) {
+      const turnId = reasoningRegistry[key]?.turnId
+      if (!turnId || !(turnId in conv.turnIndex)) {
+        delete reasoningRegistry[key]
       }
     }
   }
@@ -184,6 +261,7 @@ function unregisterTurns(state: ChatTurnStore, cid: string, conv: ConvSlice | un
   conv.turnIndex = {}
   if (conv.toolIndex) conv.toolIndex = {}
   if ((conv as any).toolHistory) (conv as any).toolHistory = {}
+  if ((conv as any).reasoningIndex) (conv as any).reasoningIndex = {}
 }
 
 function getMaxSlices() {
@@ -243,6 +321,7 @@ function ensureConv(state: ChatTurnStore, cid: string): ConvSlice {
   if (!conv.turnIndex) conv.turnIndex = {}
   if (!(conv as any).streamingIndex) (conv as any).streamingIndex = {}
   if (!(conv as any).toolHistory) (conv as any).toolHistory = {}
+  if (!(conv as any).reasoningIndex) (conv as any).reasoningIndex = {}
   if (Array.isArray(conv.turns) && conv.turns.length > 0) {
     const indexSize = Object.keys(conv.turnIndex).length
     if (indexSize !== conv.turns.length) {
@@ -388,9 +467,10 @@ export function createCoreSlice(
           conv.turns.push(turn)
           registerTurn(state, key, conv, turn)
           conv.activeTurnId = turn.id
+          conv.pendingCompletionTurnId = undefined
           conv.nextSeq = turn.seq
           ;(conv as any).streamingIndex[turn.id] = true
-          conv.generating = true
+          updateGeneratingFlag(conv)
           conv.lastAccess = Date.now()
           bumpVersion(state)
           turnId = turn.id
@@ -416,7 +496,9 @@ export function createCoreSlice(
           let target = typeof targetIdx === 'number' ? conv.turns[targetIdx] : undefined
           if (target && target.status !== 'streaming') target = undefined
           if (!target) {
-            const existing = [...conv.turns].reverse().find((t) => t.status === 'streaming')
+            const existing = Array.isArray(conv.turns)
+              ? [...conv.turns].reverse().find((t) => t.status === 'streaming')
+              : undefined
             if (existing) {
               target = existing
               targetId = existing.id
@@ -435,11 +517,12 @@ export function createCoreSlice(
           const ts = nowISO()
           target.user = { text: trimmed, ts }
           conv.activeTurnId = targetId
+          conv.pendingCompletionTurnId = undefined
           if (targetId) (conv as any).streamingIndex[targetId] = true
           if (typeof target.seq === 'number' && (conv.nextSeq ?? 0) < target.seq) {
             conv.nextSeq = target.seq
           }
-          conv.generating = true
+          updateGeneratingFlag(conv)
           conv.lastAccess = Date.now()
           bumpVersion(state)
           return
@@ -449,8 +532,11 @@ export function createCoreSlice(
       )
     },
 
-    markTurnStarted(opts?: { startedAt?: string }) {
+    markTurnStarted(opts?: { startedAt?: string; turnSeq?: number }) {
       const ts = opts?.startedAt ?? nowISO()
+      const seqInput = typeof opts?.turnSeq === 'number' && Number.isFinite(opts.turnSeq)
+        ? Math.max(1, Math.floor(opts.turnSeq))
+        : undefined
       let ensuredId = ''
       set(
         (state: ChatTurnStore) => {
@@ -462,6 +548,23 @@ export function createCoreSlice(
           let targetIdx = targetId != null ? conv.turnIndex[targetId] : undefined
           let target = typeof targetIdx === 'number' ? conv.turns[targetIdx] : undefined
           if (target && target.status !== 'streaming') target = undefined
+          if (!target && seqInput != null) {
+            const idx = Array.isArray(conv.turns)
+              ? conv.turns.findIndex((t: any) => Number(t?.seq) === seqInput)
+              : -1
+            if (idx >= 0) {
+              const existing = conv.turns[idx]
+              const status = String(existing?.status || '')
+              const isClosed = status === 'completed' || status === 'failed' || status === 'aborted'
+              if (isClosed) {
+                // 已完成的同序号 turn：忽略迟到的 started
+                return
+              }
+              target = existing
+              targetId = existing.id
+              targetIdx = idx
+            }
+          }
           if (!target) {
             const existing = [...conv.turns].reverse().find((t) => t.status === 'streaming')
             if (existing) {
@@ -471,7 +574,7 @@ export function createCoreSlice(
             }
           }
           if (!target) {
-            const turn = createStreamingTurn(effectiveCid, conv.nextSeq)
+            const turn = createStreamingTurn(effectiveCid, conv.nextSeq, undefined, seqInput)
             conv.turns.push(turn)
             registerTurn(state, key, conv, turn)
             target = turn
@@ -486,8 +589,9 @@ export function createCoreSlice(
             conv.nextSeq = target.seq
           }
           conv.activeTurnId = targetId
+          conv.pendingCompletionTurnId = undefined
           if (targetId) (conv as any).streamingIndex[targetId] = true
-          conv.generating = true
+          updateGeneratingFlag(conv)
           conv.lastAccess = Date.now()
           bumpVersion(state)
           return
@@ -526,11 +630,12 @@ export function createCoreSlice(
           target.assistant = assistant
           target.status = 'streaming'
           conv.activeTurnId = targetId
+          conv.pendingCompletionTurnId = undefined
           if (targetId) (conv as any).streamingIndex[targetId] = true
           if (typeof target.seq === 'number' && (conv.nextSeq ?? 0) < target.seq) {
             conv.nextSeq = target.seq
           }
-          conv.generating = true
+          updateGeneratingFlag(conv)
           if (!isVitest) {
             conv.lastAccess = Date.now()
             bumpVersion(state)
@@ -575,7 +680,7 @@ export function createCoreSlice(
           const still =
             wasStreaming || (target.steps || []).some((s: any) => s.status === 'streaming')
           if (!still) delete (conv as any).streamingIndex[targetId]
-          conv.generating = Object.keys((conv as any).streamingIndex || {}).length > 0
+          updateGeneratingFlag(conv)
           conv.lastAccess = Date.now()
           bumpVersion(state)
           return
@@ -602,7 +707,7 @@ export function createCoreSlice(
           }
           target.status = 'failed'
           delete (conv as any).streamingIndex[targetId]
-          conv.generating = Object.keys((conv as any).streamingIndex || {}).length > 0
+          updateGeneratingFlag(conv)
           conv.lastAccess = Date.now()
           bumpVersion(state)
           return
@@ -626,7 +731,7 @@ export function createCoreSlice(
           target.status = 'aborted'
           target.assistant = { text: target.assistant?.text ?? '', ts: nowISO() }
           delete (conv as any).streamingIndex[targetId]
-          conv.generating = Object.keys((conv as any).streamingIndex || {}).length > 0
+          updateGeneratingFlag(conv)
           conv.lastAccess = Date.now()
           bumpVersion(state)
           return
@@ -636,8 +741,9 @@ export function createCoreSlice(
       )
     },
 
-    appendReasoning(delta?: string) {
+    appendReasoning(delta?: string, opts?: { itemId?: string; source?: 'content' | 'raw'; eventId?: number }) {
       if (!delta) return
+      const source = opts?.source === 'raw' ? 'raw' : 'content'
       set(
         (state: ChatTurnStore) => {
           ensureStaging(state)
@@ -648,32 +754,64 @@ export function createCoreSlice(
           const targetIndex = conv.turnIndex[targetId]
           const target = typeof targetIndex === 'number' ? conv.turns[targetIndex] : undefined
           if (!target) return
-          if (hideNonPatchOutputsEnabled()) {
-            // 隐藏正文：不累积 reasoning 文本，仅更新 streaming 状态
+          const reasoning = ensureTurnReasoning(target)
+          let effectiveItemId = opts?.itemId
+          if (!effectiveItemId && reasoning.activeItemId) {
+            effectiveItemId = reasoning.activeItemId || undefined
+          }
+
+          if (source === 'content' && hideNonPatchOutputsEnabled()) {
             target.status = 'streaming'
             ;(conv as any).streamingIndex[targetId] = true
-            conv.generating = true
-            conv.lastAccess = Date.now()
-            bumpVersion(state)
-            return
-          } else {
-            const reasoning = ensureTurnReasoning(target)
-            reasoning.content = (reasoning.content || '') + delta
-            target.reasoning = reasoning
-            target.status = 'streaming'
-            ;(conv as any).streamingIndex[targetId] = true
-            conv.generating = true
+            const index = (conv as any).reasoningIndex || ((conv as any).reasoningIndex = {})
+            if (effectiveItemId && !index[effectiveItemId]) {
+              index[effectiveItemId] = { turnId: targetId }
+            }
+            updateGeneratingFlag(conv)
             conv.lastAccess = Date.now()
             bumpVersion(state)
             return
           }
+
+          if (source === 'raw') {
+            const prevRaw = typeof reasoning.raw === 'string' ? reasoning.raw : ''
+            reasoning.raw = prevRaw + delta
+          } else {
+            reasoning.content = (reasoning.content || '') + delta
+            reasoning.title = summarizeFirstLine(reasoning.content)
+          }
+
+          if (effectiveItemId) {
+            const entry = ensureReasoningItem(reasoning, effectiveItemId)
+            if (source === 'raw') {
+              const prev = typeof entry.raw === 'string' ? entry.raw : ''
+              entry.raw = prev + delta
+            } else {
+              const prev = typeof entry.content === 'string' ? entry.content : ''
+              entry.content = prev + delta
+            }
+            reasoning.activeItemId = effectiveItemId
+            reasoning.items![effectiveItemId] = entry
+            const index = (conv as any).reasoningIndex || ((conv as any).reasoningIndex = {})
+            if (!index[effectiveItemId]) {
+              index[effectiveItemId] = { turnId: targetId }
+            }
+          }
+
+          target.reasoning = reasoning
+          target.status = 'streaming'
+          ;(conv as any).streamingIndex[targetId] = true
+          updateGeneratingFlag(conv)
+          conv.lastAccess = Date.now()
+          bumpVersion(state)
+          return
         },
         false,
         'turns/appendReasoning'
       )
     },
 
-    endReasoning(summary?: string) {
+    endReasoning(summary?: string, opts?: { itemId?: string; rawContent?: string | null }) {
       set(
         (state: ChatTurnStore) => {
           ensureStaging(state)
@@ -685,35 +823,126 @@ export function createCoreSlice(
           const target = typeof targetIndex === 'number' ? conv.turns[targetIndex] : undefined
           if (!target) return
           const content = String(summary ?? '')
+          const reasoning = ensureTurnReasoning(target)
+          const itemId = opts?.itemId
+          const rawContent = opts?.rawContent
+
           if (hideNonPatchOutputsEnabled()) {
-            // 隐藏正文：仅保存标题摘要，正文不保留
             const title = summarizeFirstLine(content)
-            target.reasoning = { content: '', title }
+            reasoning.title = title
+            if (!reasoning.content) reasoning.content = ''
+          } else if (!content.trim()) {
+            reasoning.title = summarizeFirstLine(reasoning.content)
           } else {
-            if (!content.trim()) {
-              if (target.reasoning) {
-                const reasoning = target.reasoning
-                reasoning.title = summarizeFirstLine(reasoning.content)
-                target.reasoning = reasoning
-              }
-            } else {
-              target.reasoning = {
-                content,
-                title: summarizeFirstLine(content)
-              }
-            }
+            reasoning.content = content
+            reasoning.title = summarizeFirstLine(content)
           }
+
+          if (rawContent != null) {
+            reasoning.raw = rawContent
+          }
+
+          if (itemId) {
+            const entry = ensureReasoningItem(reasoning, itemId)
+            if (!hideNonPatchOutputsEnabled()) {
+              entry.content = content
+              entry.summary = content
+            } else if (entry.summary == null) {
+              entry.summary = content
+            }
+            if (rawContent != null) {
+              entry.raw = rawContent
+            }
+            reasoning.items![itemId] = entry
+            if (reasoning.activeItemId === itemId) reasoning.activeItemId = null
+          }
+
+          target.reasoning = reasoning
           const still =
             target.status === 'streaming' ||
             (target.steps || []).some((s: any) => s.status === 'streaming')
           if (!still) delete (conv as any).streamingIndex[targetId]
-          conv.generating = Object.keys((conv as any).streamingIndex || {}).length > 0
+          updateGeneratingFlag(conv)
           conv.lastAccess = Date.now()
           bumpVersion(state)
           return
         },
         false,
         'turns/endReasoning'
+      )
+    },
+
+    markReasoningItemStarted(itemId: string) {
+      if (!itemId) return
+      set(
+        (state: ChatTurnStore) => {
+          ensureStaging(state)
+          const key = targetCid(state)
+          const conv = ensureConv(state, key)
+          const targetId = conv.activeTurnId
+          if (!targetId) return
+          const targetIndex = conv.turnIndex[targetId]
+          const target = typeof targetIndex === 'number' ? conv.turns[targetIndex] : undefined
+          if (!target) return
+          const reasoning = ensureTurnReasoning(target)
+          reasoning.activeItemId = itemId
+          ensureReasoningItem(reasoning, itemId)
+          target.reasoning = reasoning
+          if (!(conv as any).reasoningIndex) (conv as any).reasoningIndex = {}
+          ;(conv as any).reasoningIndex[itemId] = { turnId: targetId }
+          target.status = 'streaming'
+          ;(conv as any).streamingIndex[targetId] = true
+          updateGeneratingFlag(conv)
+          conv.lastAccess = Date.now()
+          bumpVersion(state)
+          return
+        },
+        false,
+        'turns/markReasoningItemStarted'
+      )
+    },
+
+    markReasoningItemCompleted(
+      itemId: string,
+      opts?: { summary?: string | null; rawContent?: string | null }
+    ) {
+      if (!itemId) return
+      set(
+        (state: ChatTurnStore) => {
+          ensureStaging(state)
+          const key = targetCid(state)
+          const conv = ensureConv(state, key)
+          const index = (conv as any).reasoningIndex as Record<string, { turnId: string }> | undefined
+          const entry = index?.[itemId]
+          if (!entry) {
+            updateGeneratingFlag(conv)
+            return
+          }
+          const targetId = entry.turnId
+          const targetIndex = conv.turnIndex[targetId]
+          const target = typeof targetIndex === 'number' ? conv.turns[targetIndex] : undefined
+          if (target) {
+            const reasoning = ensureTurnReasoning(target)
+            const item = ensureReasoningItem(reasoning, itemId)
+            if (opts?.summary != null) {
+              item.summary = opts.summary ?? ''
+              item.content = opts.summary ?? ''
+            }
+            if (opts?.rawContent != null) {
+              item.raw = opts.rawContent
+            }
+            reasoning.items![itemId] = item
+            if (reasoning.activeItemId === itemId) reasoning.activeItemId = null
+            target.reasoning = reasoning
+          }
+          delete index![itemId]
+          updateGeneratingFlag(conv)
+          conv.lastAccess = Date.now()
+          bumpVersion(state)
+          return
+        },
+        false,
+        'turns/markReasoningItemCompleted'
       )
     },
 
@@ -822,7 +1051,7 @@ export function createCoreSlice(
                 delete (conv as any).streamingIndex[turnId]
               }
             }
-            conv.generating = Object.keys((conv as any).streamingIndex || {}).length > 0
+            updateGeneratingFlag(conv)
             conv.lastAccess = Date.now()
             bumpVersion(state)
             reusedId = step.id
@@ -896,6 +1125,7 @@ export function createCoreSlice(
           if (!Array.isArray(target.steps)) target.steps = []
           target.steps.push(step)
           conv.activeTurnId = targetId
+          conv.pendingCompletionTurnId = undefined
 
           if (callId) {
             const pointer = { turnId: targetId, stepId: detailId }
@@ -924,7 +1154,7 @@ export function createCoreSlice(
           } else {
             delete (conv as any).streamingIndex[targetId]
           }
-          conv.generating = Object.keys((conv as any).streamingIndex || {}).length > 0
+          updateGeneratingFlag(conv)
           conv.lastAccess = Date.now()
           bumpVersion(state)
           return
@@ -964,7 +1194,7 @@ export function createCoreSlice(
             truncateIfNeeded(step)
           }
           ;(conv as any).streamingIndex[entry.turnId] = true
-          conv.generating = true
+          updateGeneratingFlag(conv)
           conv.lastAccess = Date.now()
           bumpVersion(state)
           return
@@ -1008,7 +1238,7 @@ export function createCoreSlice(
             turn.status === 'streaming' ||
             (turn.steps || []).some((s: any) => s.status === 'streaming')
           if (!still) delete (conv as any).streamingIndex[entry.turnId]
-          conv.generating = Object.keys((conv as any).streamingIndex || {}).length > 0
+          updateGeneratingFlag(conv)
           conv.lastAccess = Date.now()
           bumpVersion(state)
           return
@@ -1053,10 +1283,11 @@ export function createCoreSlice(
           target.steps.push(step)
           if (target.status === 'streaming') {
             conv.activeTurnId = targetId
+            conv.pendingCompletionTurnId = undefined
           } else {
             conv.activeTurnId = previousActive
           }
-          conv.generating = Object.keys((conv as any).streamingIndex || {}).length > 0
+          updateGeneratingFlag(conv)
           conv.lastAccess = Date.now()
           bumpVersion(state)
           return
@@ -1066,17 +1297,24 @@ export function createCoreSlice(
       )
     },
 
-    completeTurn(opts?: { completedAt?: string }) {
+    completeTurn(opts?: { completedAt?: string; finalizeGenerating?: boolean }) {
       const completedAt = opts?.completedAt ?? nowISO()
+      const finalizeGenerating = opts?.finalizeGenerating ?? true
       set(
         (state: ChatTurnStore) => {
           ensureStaging(state)
           const key = targetCid(state)
           const conv = ensureConv(state, key)
-          const targetId = conv.activeTurnId
+          let targetId = conv.activeTurnId ?? conv.pendingCompletionTurnId
           if (!targetId) return
-          const targetIndex = conv.turnIndex[targetId]
-          const target = typeof targetIndex === 'number' ? conv.turns[targetIndex] : undefined
+          let targetIndex = conv.turnIndex[targetId]
+          let target = typeof targetIndex === 'number' ? conv.turns[targetIndex] : undefined
+          if (!target) {
+            targetIndex = Array.isArray(conv.turns)
+              ? conv.turns.findIndex((t) => t?.id === targetId)
+              : -1
+            target = targetIndex >= 0 ? conv.turns[targetIndex] : undefined
+          }
           if (!target) return
           const status =
             target.status === 'failed' || target.status === 'aborted' ? target.status : 'completed'
@@ -1101,8 +1339,50 @@ export function createCoreSlice(
             }
           }
           conv.activeTurnId = undefined
+          conv.pendingCompletionTurnId = finalizeGenerating ? undefined : targetId
           delete (conv as any).streamingIndex[targetId]
-          conv.generating = Object.keys((conv as any).streamingIndex || {}).length > 0
+          const reasoningRegistry = (conv as any).reasoningIndex as
+            | Record<string, { turnId: string }>
+            | undefined
+          if (reasoningRegistry) {
+            for (const key of Object.keys(reasoningRegistry)) {
+              if (reasoningRegistry[key]?.turnId === targetId) {
+                delete reasoningRegistry[key]
+              }
+            }
+          }
+          updateGeneratingFlag(conv)
+          if (!finalizeGenerating) {
+            conv.generating = true
+          }
+          if (finalizeGenerating && shouldPruneCompletedTurn(target)) {
+            if (Array.isArray(conv.turns)) {
+              conv.turns.splice(targetIndex, 1)
+            }
+            if (state.turnLocator && target.id) {
+              delete state.turnLocator[target.id]
+            }
+            if (conv.turnIndex && target.id) {
+              delete conv.turnIndex[target.id]
+            }
+            if ((conv as any).toolHistory) {
+              const history = conv.toolHistory
+              for (const key of Object.keys(history)) {
+                if (history[key]?.turnId === target.id) delete history[key]
+              }
+            }
+            registerTurns(state, key, conv)
+            const remaining = Array.isArray(conv.turns) ? conv.turns : []
+            const maxSeq = remaining.reduce((acc, item) => {
+              const seq = typeof item?.seq === 'number' ? item.seq : 0
+              return seq > acc ? seq : acc
+            }, 0)
+            conv.nextSeq = maxSeq
+            updateGeneratingFlag(conv)
+            conv.lastAccess = Date.now()
+            bumpVersion(state)
+            return
+          }
           conv.lastAccess = Date.now()
           bumpVersion(state)
           return

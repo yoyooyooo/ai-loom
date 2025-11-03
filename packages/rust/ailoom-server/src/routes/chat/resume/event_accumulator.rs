@@ -1,5 +1,6 @@
 use crate::ws::chat_events::ChatEvent;
-use serde_json::Value;
+use ailoom_executors::providers::codex::{ReasoningOutput, ReasoningTracker};
+use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 
 use super::types::FunctionCallOutputEnvelope;
@@ -9,14 +10,173 @@ pub struct EventAccumulator {
     pub events: Vec<(ChatEvent, Option<usize>)>,
     pub exec_calls: HashSet<String>,
     pub mcp_calls: HashMap<String, (String, String, Option<Value>)>,
+    pub patch_calls: HashSet<String>,
     pub current_turn_seq: usize,
     pub turn_open: bool,
-    // reasoning 聚合：优先 summary，其次合并过程
-    pub pending_reasoning_summary: Option<String>,
-    pub pending_reasoning_process: Vec<String>,
+    pub reasoning_tracker: ReasoningTracker,
+    pub last_reasoning_seq: Option<usize>,
+}
+
+#[derive(Default, Clone)]
+struct ApplyPatchInvocationMeta {
+    files: Option<usize>,
+    first_path: Option<String>,
+    adds: Option<usize>,
+    dels: Option<usize>,
+    changes: Option<Value>,
+    patch_text: Option<String>,
+}
+
+impl ApplyPatchInvocationMeta {
+    fn ensure_from_patch_text(&mut self, patch: &str) {
+        if patch.trim().is_empty() {
+            return;
+        }
+        match self.patch_text {
+            Some(ref mut existing) => {
+                if !existing.contains(patch) {
+                    existing.push_str("\n");
+                    existing.push_str(patch);
+                }
+            }
+            None => {
+                self.patch_text = Some(patch.to_string());
+            }
+        }
+        if let Some(summary) = summarize_patch_text(patch) {
+            if self.first_path.is_none() {
+                self.first_path = summary.first_path.clone();
+            }
+            if self.files.is_none() && summary.files > 0 {
+                self.files = Some(summary.files);
+            }
+            if self.adds.is_none() && summary.adds > 0 {
+                self.adds = Some(summary.adds);
+            }
+            if self.dels.is_none() && summary.dels > 0 {
+                self.dels = Some(summary.dels);
+            }
+        }
+    }
+
+    fn files(&self) -> usize {
+        if let Some(f) = self.files {
+            return f;
+        }
+        if let Some(ref changes) = self.changes {
+            if let Some(obj) = changes.as_object() {
+                if !obj.is_empty() {
+                    return obj.len();
+                }
+            }
+        }
+        if self
+            .patch_text
+            .as_ref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+        {
+            return 1;
+        }
+        0
+    }
+
+    fn changes(&mut self) -> Option<Value> {
+        if self.changes.is_some() {
+            return self.changes.clone();
+        }
+        if let Some(ref patch) = self.patch_text {
+            let key = self
+                .first_path
+                .clone()
+                .unwrap_or_else(|| "apply_patch.diff".into());
+            self.changes = build_changes_from_patch(&key, patch);
+        }
+        self.changes.clone()
+    }
 }
 
 impl EventAccumulator {
+    fn emit_reasoning_outputs(&mut self, outputs: Vec<ReasoningOutput>) {
+        if outputs.is_empty() {
+            return;
+        }
+        let seq = self.resolve_reasoning_seq();
+        self.last_reasoning_seq = Some(seq);
+        for output in outputs {
+            match output {
+                ReasoningOutput::ContentDelta {
+                    delta,
+                    item_id,
+                    source,
+                } => {
+                    let ev = ChatEvent::ReasoningDelta {
+                        delta,
+                        item_id,
+                        source,
+                    };
+                    self.events.push((ev, Some(seq)));
+                }
+                ReasoningOutput::RawDelta { delta, item_id } => {
+                    let ev = ChatEvent::ReasoningRawDelta { delta, item_id };
+                    self.events.push((ev, Some(seq)));
+                }
+                ReasoningOutput::ItemStarted { item_id } => {
+                    let ev = ChatEvent::ReasoningItemStarted { item_id };
+                    self.events.push((ev, Some(seq)));
+                }
+                ReasoningOutput::ItemCompleted { item_id } => {
+                    let ev = ChatEvent::ReasoningItemCompleted { item_id };
+                    self.events.push((ev, Some(seq)));
+                }
+                ReasoningOutput::FinalSummary {
+                    item_id,
+                    text,
+                    raw_content,
+                } => {
+                    let ev = ChatEvent::ReasoningEnd {
+                        text,
+                        item_id,
+                        raw_content,
+                    };
+                    self.events.push((ev, Some(seq)));
+                }
+                ReasoningOutput::SectionBreak { .. } => {
+                    // resume 渲染不回放 section_break，忽略
+                }
+            }
+        }
+    }
+
+    fn flush_reasoning(&mut self) {
+        let outputs = self.reasoning_tracker.flush();
+        self.emit_reasoning_outputs(outputs);
+    }
+
+    fn handle_reasoning_event(&mut self, kind: &str, msg: &Map<String, Value>) {
+        let outputs = self.reasoning_tracker.handle_event(kind, msg);
+        self.emit_reasoning_outputs(outputs);
+    }
+
+    fn resolve_reasoning_seq(&mut self) -> usize {
+        if self.turn_open {
+            if self.current_turn_seq == 0 {
+                self.current_turn_seq = 1;
+                self.events
+                    .push((ChatEvent::TurnStarted, Some(self.current_turn_seq)));
+            }
+            return self.current_turn_seq;
+        }
+        if self.current_turn_seq > 0 {
+            return self.current_turn_seq;
+        }
+        self.current_turn_seq = 1;
+        self.turn_open = true;
+        self.events
+            .push((ChatEvent::TurnStarted, Some(self.current_turn_seq)));
+        self.current_turn_seq
+    }
+
     pub fn handle_value(&mut self, value: &Value) {
         let Some(kind) = value.get("type").and_then(|v| v.as_str()) else {
             return;
@@ -274,11 +434,19 @@ impl EventAccumulator {
                     self.mcp_calls.remove(call_id);
                 }
             }
+            "custom_tool_call" => {
+                if let Some(name) = payload.get("name").and_then(|v| v.as_str()) {
+                    if name.eq_ignore_ascii_case("apply_patch") {
+                        self.handle_apply_patch_custom_tool(payload);
+                    }
+                }
+            }
             _ => {}
         }
     }
 
     pub fn finish(mut self) -> Vec<(ChatEvent, Option<usize>)> {
+        self.flush_reasoning();
         for call_id in self.exec_calls.drain() {
             let ev = ChatEvent::ToolExecEnd {
                 call_id: Some(call_id),
@@ -346,46 +514,20 @@ impl EventAccumulator {
                     self.events.push((ev, Some(self.current_turn_seq)));
                 }
             }
-            "agent_reasoning_delta" => {
-                if let Some(delta) = payload.get("delta").and_then(|v| v.as_str()) {
-                    if !self.turn_open {
-                        self.current_turn_seq += 1;
-                        self.turn_open = true;
-                        self.events
-                            .push((ChatEvent::TurnStarted, Some(self.current_turn_seq)));
-                    }
-                    let ev = ChatEvent::ReasoningDelta {
-                        delta: delta.to_string(),
-                    };
-                    self.events.push((
-                        ev,
-                        if self.current_turn_seq > 0 {
-                            Some(self.current_turn_seq)
-                        } else {
-                            None
-                        },
-                    ));
-                }
-            }
-            "agent_reasoning" => {
-                if let Some(text) = payload.get("text").and_then(|v| v.as_str()) {
-                    if !self.turn_open {
-                        self.current_turn_seq += 1;
-                        self.turn_open = true;
-                        self.events
-                            .push((ChatEvent::TurnStarted, Some(self.current_turn_seq)));
-                    }
-                    let ev = ChatEvent::ReasoningEnd {
-                        text: text.to_string(),
-                    };
-                    self.events.push((
-                        ev,
-                        if self.current_turn_seq > 0 {
-                            Some(self.current_turn_seq)
-                        } else {
-                            None
-                        },
-                    ));
+            "reasoning_content_delta"
+            | "reasoning.content.delta"
+            | "reasoning_raw_content_delta"
+            | "reasoning.raw_content.delta"
+            | "item_started"
+            | "reasoning_item_started"
+            | "item_completed"
+            | "reasoning_item_completed"
+            | "agent_reasoning_delta"
+            | "agent_reasoning_raw_content"
+            | "agent_reasoning"
+            | "agent_reasoning_section_break" => {
+                if let Some(obj) = payload.as_object() {
+                    self.handle_reasoning_event(kind, obj);
                 }
             }
             "agent_message_delta" => {
@@ -572,6 +714,29 @@ impl EventAccumulator {
                     .get("call_id")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
+                if let Some(ref cid) = call_id {
+                    if self.patch_calls.contains(cid) {
+                        self.update_existing_patch_begin(
+                            cid,
+                            payload.get("changes").cloned(),
+                            payload
+                                .get("adds")
+                                .and_then(|v| v.as_u64())
+                                .map(|n| n as usize),
+                            payload
+                                .get("dels")
+                                .and_then(|v| v.as_u64())
+                                .map(|n| n as usize),
+                            payload
+                                .get("auto_approved")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false),
+                        );
+                        return;
+                    } else {
+                        self.patch_calls.insert(cid.clone());
+                    }
+                }
                 let changes = payload.get("changes").cloned();
                 let files = changes
                     .as_ref()
@@ -635,6 +800,20 @@ impl EventAccumulator {
                     .get("stderr")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
+                if let Some(ref cid) = call_id {
+                    if self.patch_calls.contains(cid) {
+                        if self.update_existing_patch_end(
+                            cid,
+                            success,
+                            stdout.clone(),
+                            stderr.clone(),
+                        ) {
+                            return;
+                        }
+                    } else {
+                        self.patch_calls.insert(cid.clone());
+                    }
+                }
                 if !self.turn_open {
                     self.current_turn_seq += 1;
                     self.turn_open = true;
@@ -824,5 +1003,387 @@ impl EventAccumulator {
             }
             _ => {}
         }
+    }
+
+    fn handle_apply_patch_custom_tool(&mut self, payload: &Value) {
+        let call_id = payload
+            .get("call_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        if let Some(ref cid) = call_id {
+            self.patch_calls.insert(cid.clone());
+        }
+
+        if !self.turn_open {
+            self.current_turn_seq += 1;
+            self.turn_open = true;
+            let seq = if self.current_turn_seq == 0 {
+                1
+            } else {
+                self.current_turn_seq
+            };
+            self.events.push((ChatEvent::TurnStarted, Some(seq)));
+        }
+
+        let mut meta = parse_apply_patch_invocation(payload.get("input"));
+
+        // 顶层兜底：若 input 未提供 adds/dels/files 等字段，再尝试从 payload 读取
+        if meta.files.is_none() {
+            if let Some(files) = payload
+                .get("input")
+                .and_then(|v| v.get("files"))
+                .and_then(|v| v.as_u64())
+            {
+                if files > 0 {
+                    meta.files = Some(files as usize);
+                }
+            }
+        }
+        if meta.adds.is_none() {
+            if let Some(adds) = payload
+                .get("input")
+                .and_then(|v| v.get("adds"))
+                .and_then(|v| v.as_u64())
+            {
+                if adds > 0 {
+                    meta.adds = Some(adds as usize);
+                }
+            }
+        }
+        if meta.dels.is_none() {
+            if let Some(dels) = payload
+                .get("input")
+                .and_then(|v| v.get("dels"))
+                .and_then(|v| v.as_u64())
+            {
+                if dels > 0 {
+                    meta.dels = Some(dels as usize);
+                }
+            }
+        }
+        if meta.first_path.is_none() {
+            if let Some(path) = payload
+                .get("input")
+                .and_then(|v| v.get("firstPath").or_else(|| v.get("first_path")))
+                .and_then(|v| v.as_str())
+            {
+                meta.first_path = Some(path.to_string());
+            }
+        }
+
+        let files = meta.files();
+        let adds = meta.adds;
+        let dels = meta.dels;
+        let first_path = meta.first_path.clone();
+        let changes = meta.changes();
+        let auto_approved = payload
+            .get("auto_approved")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let turn_seq = if self.current_turn_seq > 0 {
+            Some(self.current_turn_seq)
+        } else {
+            None
+        };
+
+        let begin_event = ChatEvent::ToolPatchBegin {
+            call_id: call_id.clone(),
+            files,
+            auto_approved,
+            first_path,
+            adds,
+            dels,
+            changes,
+        };
+        self.events.push((begin_event, turn_seq));
+
+        let status = payload
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("completed")
+            .to_ascii_lowercase();
+        let mut success = matches!(
+            status.as_str(),
+            "completed" | "succeeded" | "success" | "ok" | "finished"
+        );
+        if matches!(
+            status.as_str(),
+            "failed" | "error" | "cancelled" | "canceled" | "aborted"
+        ) {
+            success = false;
+        }
+        if payload.get("error").is_some() {
+            success = false;
+        }
+
+        let stdout = payload.get("output").map(|v| stringify_json_value(v));
+        let stderr = payload
+            .get("error")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                if !success {
+                    payload
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                } else {
+                    None
+                }
+            });
+
+        let end_event = ChatEvent::ToolPatchEnd {
+            call_id,
+            success,
+            stdout,
+            stderr,
+        };
+        self.events.push((end_event, turn_seq));
+    }
+
+    fn update_existing_patch_begin(
+        &mut self,
+        call_id: &str,
+        changes: Option<Value>,
+        adds: Option<usize>,
+        dels: Option<usize>,
+        auto_approved: bool,
+    ) {
+        for (event, _) in self.events.iter_mut().rev() {
+            if let ChatEvent::ToolPatchBegin {
+                call_id: existing_call,
+                files,
+                auto_approved: existing_auto,
+                first_path,
+                adds: existing_adds,
+                dels: existing_dels,
+                changes: existing_changes,
+            } = event
+            {
+                if let Some(existing) = existing_call {
+                    if existing == call_id {
+                        if let Some(ref ch) = changes {
+                            if let Some(obj) = ch.as_object() {
+                                if let Some(new_first) = obj.keys().next().cloned() {
+                                    if first_path.is_none() {
+                                        *first_path = Some(new_first);
+                                    }
+                                }
+                                let count = obj.len();
+                                if count > 0 {
+                                    *files = count;
+                                }
+                            }
+                            *existing_changes = Some(ch.clone());
+                        }
+                        if let Some(a) = adds {
+                            *existing_adds = Some(a);
+                        }
+                        if let Some(d) = dels {
+                            *existing_dels = Some(d);
+                        }
+                        *existing_auto = auto_approved;
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    fn update_existing_patch_end(
+        &mut self,
+        call_id: &str,
+        success: bool,
+        stdout: Option<String>,
+        stderr: Option<String>,
+    ) -> bool {
+        for (event, _) in self.events.iter_mut().rev() {
+            if let ChatEvent::ToolPatchEnd {
+                call_id: existing_call,
+                success: existing_success,
+                stdout: existing_stdout,
+                stderr: existing_stderr,
+            } = event
+            {
+                if let Some(existing) = existing_call {
+                    if existing == call_id {
+                        *existing_success = success;
+                        if let Some(s) = stdout.clone() {
+                            *existing_stdout = Some(s);
+                        }
+                        if let Some(e) = stderr.clone() {
+                            *existing_stderr = Some(e);
+                        }
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+}
+
+#[derive(Default, Clone)]
+struct PatchSummary {
+    files: usize,
+    first_path: Option<String>,
+    adds: usize,
+    dels: usize,
+}
+
+fn parse_apply_patch_invocation(input: Option<&Value>) -> ApplyPatchInvocationMeta {
+    fn absorb(meta: &mut ApplyPatchInvocationMeta, value: &Value) {
+        match value {
+            Value::Null => {}
+            Value::String(s) => meta.ensure_from_patch_text(s),
+            Value::Array(arr) => {
+                for item in arr {
+                    absorb(meta, item);
+                }
+            }
+            Value::Object(map) => {
+                if let Some(changes) = map.get("changes") {
+                    if changes.as_object().map(|m| !m.is_empty()).unwrap_or(false) {
+                        meta.changes = Some(changes.clone());
+                        if meta.first_path.is_none() {
+                            meta.first_path =
+                                changes.as_object().and_then(|m| m.keys().next().cloned());
+                        }
+                    }
+                }
+                if let Some(files) = map.get("files").and_then(|v| v.as_u64()) {
+                    if files > 0 {
+                        meta.files = Some(files as usize);
+                    }
+                }
+                if let Some(adds) = map.get("adds").and_then(|v| v.as_u64()) {
+                    if adds > 0 {
+                        meta.adds = Some(adds as usize);
+                    }
+                }
+                if let Some(dels) = map.get("dels").and_then(|v| v.as_u64()) {
+                    if dels > 0 {
+                        meta.dels = Some(dels as usize);
+                    }
+                }
+                if let Some(first) = map
+                    .get("firstPath")
+                    .or_else(|| map.get("first_path"))
+                    .and_then(|v| v.as_str())
+                {
+                    if meta.first_path.is_none() {
+                        meta.first_path = Some(first.to_string());
+                    }
+                }
+                if let Some(patch) = map.get("patch").and_then(|v| v.as_str()) {
+                    meta.ensure_from_patch_text(patch);
+                }
+                if let Some(diff) = map.get("diff").and_then(|v| v.as_str()) {
+                    meta.ensure_from_patch_text(diff);
+                }
+                if let Some(patches) = map.get("patches") {
+                    absorb(meta, patches);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut meta = ApplyPatchInvocationMeta::default();
+    if let Some(value) = input {
+        absorb(&mut meta, value);
+    }
+    if meta.changes.is_none() {
+        if let Some(ref patch) = meta.patch_text {
+            let key = meta
+                .first_path
+                .clone()
+                .unwrap_or_else(|| "apply_patch.diff".into());
+            meta.changes = build_changes_from_patch(&key, patch);
+        }
+    }
+    meta
+}
+
+fn build_changes_from_patch(path: &str, patch: &str) -> Option<Value> {
+    if patch.trim().is_empty() {
+        return None;
+    }
+    let mut update = Map::new();
+    update.insert("unified_diff".into(), Value::String(patch.to_string()));
+    let mut change = Map::new();
+    change.insert("update".into(), Value::Object(update));
+    let mut root = Map::new();
+    root.insert(path.to_string(), Value::Object(change));
+    Some(Value::Object(root))
+}
+
+fn summarize_patch_text(patch: &str) -> Option<PatchSummary> {
+    let trimmed = patch.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut summary = PatchSummary::default();
+    let mut paths = HashSet::new();
+    for line in patch.lines() {
+        let trimmed_line = line.trim();
+        for prefix in ["*** Add File:", "*** Update File:", "*** Delete File:"] {
+            if let Some(rest) = trimmed_line.strip_prefix(prefix) {
+                let norm = normalize_diff_path(rest.trim());
+                if !norm.is_empty() {
+                    if summary.first_path.is_none() {
+                        summary.first_path = Some(norm.clone());
+                    }
+                    paths.insert(norm);
+                }
+            }
+        }
+        if trimmed_line.starts_with("+++ ") {
+            let norm = normalize_diff_path(trimmed_line.trim_start_matches("+++ "));
+            if !norm.is_empty() {
+                if summary.first_path.is_none() {
+                    summary.first_path = Some(norm.clone());
+                }
+                paths.insert(norm);
+            }
+        } else if trimmed_line.starts_with("--- ") {
+            let norm = normalize_diff_path(trimmed_line.trim_start_matches("--- "));
+            if !norm.is_empty() {
+                if summary.first_path.is_none() {
+                    summary.first_path = Some(norm.clone());
+                }
+                paths.insert(norm);
+            }
+        }
+        if line.starts_with('+') && !line.starts_with("+++") {
+            summary.adds += 1;
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            summary.dels += 1;
+        }
+    }
+    if !paths.is_empty() {
+        summary.files = paths.len();
+    } else if !trimmed.is_empty() {
+        summary.files = 1;
+    }
+    Some(summary)
+}
+
+fn normalize_diff_path(raw: &str) -> String {
+    let mut trimmed = raw.trim().trim_matches('"').to_string();
+    for prefix in ["a/", "b/", "c/"] {
+        if trimmed.starts_with(prefix) {
+            trimmed = trimmed[prefix.len()..].to_string();
+            break;
+        }
+    }
+    trimmed.trim_matches('/').to_string()
+}
+
+fn stringify_json_value(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.to_string(),
+        _ => serde_json::to_string(value).unwrap_or_else(|_| String::new()),
     }
 }

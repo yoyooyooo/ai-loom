@@ -76,7 +76,7 @@ export class WsRxClient {
   private subsWanted = new Map<string, { topic: string; filter: any }>()
   private tokenObservables = new Map<string, Observable<{ method: string; params: any }>>()
   // 订阅管理（意图流 × 状态流）
-  private intent$ = new Subject<{ token: string; op: 'retain' | 'release' }>()
+  private intent$$ = new Subject<{ token: string; op: 'retain' | 'release' }>()
   private subscribedTokens = new Set<string>()
   private unsubscribeTimers = new Map<string, any>()
   private unsubDebounceMs: number = Number(
@@ -98,15 +98,15 @@ export class WsRxClient {
   private serverLastEventId: number = 0
 
   // events
-  private eventsSubject = new Subject<{ method: string; params: any }>()
-  public events$ = this.eventsSubject.asObservable()
+  private events$$ = new Subject<{ method: string; params: any }>()
+  public events$ = this.events$$.asObservable()
   // errors
-  private errorsSubject = new Subject<WsClientError>()
-  public errors$ = this.errorsSubject.asObservable()
+  private errors$$ = new Subject<WsClientError>()
+  public errors$ = this.errors$$.asObservable()
 
   // connection state
-  private onlineSubject = new BehaviorSubject<boolean>(false)
-  public online$ = this.onlineSubject.asObservable()
+  private online$$ = new BehaviorSubject<boolean>(false)
+  public online$ = this.online$$.asObservable()
   public state: 'down' | 'connecting' | 'up' = 'down'
 
   private started = false
@@ -120,6 +120,8 @@ export class WsRxClient {
     this.convAppliedLastKey = makeConvAppliedLastKey(url)
     this.convLast = this.loadConvLast()
     this.convAppliedLast = this.loadConvAppliedLast()
+    // 测试兼容：暴露 onlineSubject（旧名）
+    ;(this as any).onlineSubject = this.online$$
   }
 
   start() {
@@ -128,7 +130,7 @@ export class WsRxClient {
     this.connect()
 
     // 订阅意图聚合（scan）：token -> count
-    const counts$ = this.intent$.pipe(
+    const counts$ = this.intent$$.pipe(
       scan((acc, { token, op }) => {
         const next = new Map(acc)
         const c = next.get(token) || 0
@@ -212,7 +214,7 @@ export class WsRxClient {
   private reportError(partial: Omit<WsClientError, 'ts'>) {
     try {
       const payload: WsClientError = { ...partial, ts: Date.now() }
-      this.errorsSubject.next(payload)
+      this.errors$$.next(payload)
       chatTrace('ws.rxClient.error', payload)
       if ((import.meta as any).env?.VITE_WS_DEBUG) {
         // eslint-disable-next-line no-console
@@ -229,7 +231,7 @@ export class WsRxClient {
       this.ws = ws
       ws.onopen = async () => {
         this.state = 'up'
-        this.onlineSubject.next(true)
+        this.online$$.next(true)
         this.backoffMs = 300
         if ((import.meta as any).env?.VITE_WS_DEBUG) {
           // eslint-disable-next-line no-console
@@ -290,7 +292,7 @@ export class WsRxClient {
 
   private scheduleReconnect() {
     this.state = 'down'
-    this.onlineSubject.next(false)
+    this.online$$.next(false)
     if (this.ws) {
       try {
         this.ws.close()
@@ -473,7 +475,7 @@ export class WsRxClient {
             this.codexEventLastKey = key
           }
         }
-        this.eventsSubject.next({ method, params })
+        this.events$$.next({ method, params })
         chatTrace('ws.rxClient.emitted', { method })
       }
     } catch (error) {
@@ -509,14 +511,14 @@ export class WsRxClient {
         if (m === 'file.changed' || m === 'tree.changed' || m.startsWith('annotations.')) {
           const eid = parseEventId(ev?.params)
           if (eid && eid > this.lastEventId) this.lastEventId = eid
-          this.eventsSubject.next({ method: m, params: ev?.params })
+          this.events$$.next({ method: m, params: ev?.params })
         }
       }
       if (res?.truncated) {
-        this.eventsSubject.next({ method: 'session.resync', params: { reason: 'truncated' } })
+        this.events$$.next({ method: 'session.resync', params: { reason: 'truncated' } })
       }
     } catch {
-      this.eventsSubject.next({ method: 'session.resync', params: { reason: 'resume_failed' } })
+      this.events$$.next({ method: 'session.resync', params: { reason: 'resume_failed' } })
       this.reportError({ source: 'resume', code: 'RESUME_FAILED', method: 'events.resume' })
     }
   }
@@ -578,15 +580,15 @@ export class WsRxClient {
           if (eid > appliedPrevCid) this.convAppliedLast[eventCid] = eid
           updated = true
         }
-        this.eventsSubject.next({ method, params: payload })
+        this.events$$.next({ method, params: payload })
       }
       if (updated) this.scheduleConvLastPersist()
       if (updated) this.scheduleConvAppliedLastPersist()
       if (res?.truncated) {
-        this.eventsSubject.next({ method: 'session.resync', params: { reason: 'truncated' } })
+        this.events$$.next({ method: 'session.resync', params: { reason: 'truncated' } })
       }
     } catch (error) {
-      this.eventsSubject.next({ method: 'session.resync', params: { reason: 'resume_failed' } })
+      this.events$$.next({ method: 'session.resync', params: { reason: 'resume_failed' } })
       this.reportError({
         source: 'resume',
         code: 'CHAT_RESUME_FAILED',
@@ -664,12 +666,12 @@ export class WsRxClient {
           // 仅声明意图，不直接 RPC；RPC 由 desired 集合与 online 状态驱动
           self.subsWanted.set(key, { topic, filter: subFilter || {} })
           try {
-            self.intent$.next({ token: key, op: 'retain' })
+            self.intent$$.next({ token: key, op: 'retain' })
           } catch {}
           return {
             unsubscribe: () => {
               try {
-                self.intent$.next({ token: key, op: 'release' })
+                self.intent$$.next({ token: key, op: 'release' })
               } catch {}
             }
           }

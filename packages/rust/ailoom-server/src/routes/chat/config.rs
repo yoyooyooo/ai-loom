@@ -6,7 +6,7 @@ use serde_json::to_value;
 use std::sync::Arc;
 
 use crate::{routes::chat::utils::codex_not_reachable_hint, state::AppState};
-use ailoom_executors::providers::codex::get_or_start;
+use ailoom_executors::providers::codex::current;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,17 +33,27 @@ struct ChatDefaults {
 struct ChatConfigResponse {
     models: Vec<ChatModelSummary>,
     defaults: ChatDefaults,
+    #[serde(default)]
+    codex_unavailable: bool,
 }
 
 pub async fn get_chat_config(
     axum::extract::State(state): axum::extract::State<AppState>,
 ) -> impl IntoResponse {
-    let client = match get_or_start(Some(state.workspace_root.clone())).await {
-        Ok(c) => c,
-        Err(e) => {
-            let msg = format!("Codex 未就绪：{}。{}", e, codex_not_reachable_hint());
-            return (StatusCode::BAD_GATEWAY, msg).into_response();
-        }
+    let Some(client) = current().await else {
+        let defaults = ChatDefaults {
+            model: None,
+            approval_policy: Some("on-request".into()),
+            sandbox_mode: Some("workspace-write".into()),
+        };
+        let response = ChatConfigResponse {
+            models: vec![],
+            defaults,
+            codex_unavailable: true,
+        };
+        let hint = codex_not_reachable_hint();
+        tracing::info!(target:"codex", "Codex 未初始化，返回兜底配置: {}", hint);
+        return (StatusCode::OK, Json(response)).into_response();
     };
     if let Some(hub) = state.ws_hub.clone() {
         client.register_event_hub(Arc::new(hub) as ailoom_executors::SharedEventHub);
@@ -91,7 +101,11 @@ pub async fn get_chat_config(
 
     (
         StatusCode::OK,
-        Json(ChatConfigResponse { models, defaults }),
+        Json(ChatConfigResponse {
+            models,
+            defaults,
+            codex_unavailable: false,
+        }),
     )
         .into_response()
 }

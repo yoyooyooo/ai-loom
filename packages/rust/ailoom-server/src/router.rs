@@ -30,6 +30,15 @@ pub fn build_router(state: AppState, web_dist: std::path::PathBuf, no_static: bo
             "/api/file/full",
             get(move |q| api_file_full(q, fs_cfg_full.clone())),
         )
+        .route(
+            "/api/codex/default-credentials",
+            get(crate::routes::codex::verify_default_codex_files),
+        )
+        .route(
+            "/api/settings/runtime",
+            get(crate::routes::settings::get_runtime_settings)
+                .put(crate::routes::settings::update_runtime_settings),
+        )
         .route("/api/file", axum::routing::put(api_file_put))
         .route(
             "/api/annotations",
@@ -59,6 +68,10 @@ pub fn build_router(state: AppState, web_dist: std::path::PathBuf, no_static: bo
         .route(
             "/api/chat/conversations/:conversationId/messages",
             axum::routing::post(crate::routes::chat::send_message),
+        )
+        .route(
+            "/api/chat/conversations/:conversationId/turns",
+            axum::routing::post(crate::routes::chat::send_turn),
         )
         .route(
             "/api/chat/conversations/:conversationId/interrupt",

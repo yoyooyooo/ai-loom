@@ -8,6 +8,7 @@ pub mod output;
 pub mod resume;
 pub mod runtime;
 pub mod send;
+pub mod turn;
 pub mod utils;
 pub mod vibe;
 
@@ -21,4 +22,5 @@ pub use output::get_turn_output;
 pub use resume::resume_conversation;
 pub use runtime::{delete_runtime_process, get_runtime_snapshot, warm_runtime};
 pub use send::send_message;
+pub use turn::send_turn;
 pub use vibe::check_vibe_link;

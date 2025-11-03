@@ -11,7 +11,8 @@ use codex_app_server_protocol::{
     ListConversationsResponse, ListModelsParams, ListModelsResponse, NewConversationParams,
     NewConversationResponse, RemoveConversationListenerParams,
     RemoveConversationSubscriptionResponse, RequestId, ResumeConversationParams,
-    ResumeConversationResponse, SendUserMessageParams, SendUserMessageResponse, ServerRequest,
+    ResumeConversationResponse, SendUserMessageParams, SendUserMessageResponse, SendUserTurnParams,
+    SendUserTurnResponse, ServerRequest,
 };
 use codex_app_server_protocol::{ExecCommandApprovalResponse, InputItem};
 use codex_protocol::protocol::ReviewDecision;
@@ -412,6 +413,27 @@ impl AppServerClient {
         let resp: SendUserMessageResponse = self.rpc().request(request, "sendUserMessage").await?;
         let dur = start_ts.elapsed().as_millis();
         tracing::info!(target:"codex", conversationId=%conversation_id, ms=%dur, "sendUserMessage ok");
+        Ok(resp)
+    }
+
+    #[instrument(level = "info", target = "codex.rpc", skip(self, params))]
+    pub async fn send_user_turn(&self, params: SendUserTurnParams) -> Result<SendUserTurnResponse> {
+        let start_ts = std::time::Instant::now();
+        let conversation_id = params.conversation_id.clone();
+        let id = self.rpc().next_request_id();
+        let request = JSONRPCRequest {
+            id,
+            method: "sendUserTurn".into(),
+            params: Some(serde_json::to_value(&params)?),
+        };
+        let resp: SendUserTurnResponse = self.rpc().request(request, "sendUserTurn").await?;
+        let dur = start_ts.elapsed().as_millis();
+        tracing::info!(
+            target:"codex",
+            conversationId=%conversation_id,
+            ms=%dur,
+            "sendUserTurn ok"
+        );
         Ok(resp)
     }
 

@@ -37,7 +37,7 @@ async function applyBaseline(conversationId: string) {
   if (baselineApplied.has(conversationId)) return
   // 新建会话：跳过 HTTP baseline，完全依赖 WS 流首帧与 resumeChat 补偿
   if (newlyCreated.has(conversationId)) {
-    baselineApplied.add(conversationId)
+    newlyCreated.delete(conversationId)
     return
   }
   try {

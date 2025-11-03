@@ -191,7 +191,7 @@ sequenceDiagram
 - 事件约束与 SSoT（统一）
   - Provider 原生事件 → Provider 自带 bridge（现阶段：`packages/rust/crates/ailoom-executors/src/providers/codex/bridge.rs`）→ 平台层 `chat.*`；
   - 入环：`chat.message.*`、`chat.reasoning.end`、`chat.tool.*`、`chat.info.*`、`chat.turn.complete`；
-  - 不入环：`chat.turn.started`、`chat.reasoning.delta|section_break`、`session.runtime`、能力/认证 `codex/*`；
+  - 不入环：`chat.turn.started`、`chat.reasoning.delta|raw_delta|section_break|item_started|item_completed`、`session.runtime`、能力/认证 `codex/*`；
   - Resume：`events.resume({ topic:'chat', filter:{ conversationId } })`。
 
 - 环境变量（统一执行器前缀）

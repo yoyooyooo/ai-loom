@@ -11,17 +11,22 @@ import { __emit, __resetWsMock } from '@/lib/ws/singleton'
 vi.mock('@/lib/ws/singleton')
 
 describe('delta-streams 隐式开启（Rx 批处理场景）', () => {
+  let deltaSub: ReturnType<typeof ensureDeltaPipelines> | null = null
   beforeEach(() => {
     chatTurnActions.reset()
     __resetWsMock()
+    deltaSub?.unsubscribe?.()
+    deltaSub = null
   })
   afterEach(() => {
     chatTurnActions.reset()
     __resetWsMock()
+    deltaSub?.unsubscribe?.()
+    deltaSub = null
   })
 
   it('agent_message_delta 首次抵达时自动 beginTurn 并追加 delta', async () => {
-    ensureDeltaPipelines()
+    deltaSub = ensureDeltaPipelines()
     chatTurnActions.setConversationId('conv-rx')
     __emit('chat.message.delta', { conversationId: 'conv-rx', delta: 'Hello' })
     await waitFor(
@@ -37,7 +42,7 @@ describe('delta-streams 隐式开启（Rx 批处理场景）', () => {
   })
 
   it('agent_reasoning_delta 首次抵达时自动 beginTurn 并追加 reasoning', async () => {
-    ensureDeltaPipelines()
+    deltaSub = ensureDeltaPipelines()
     chatTurnActions.setConversationId('conv-rx2')
     __emit('chat.reasoning.delta', { conversationId: 'conv-rx2', delta: 'Thinking' })
     await waitFor(
@@ -52,8 +57,33 @@ describe('delta-streams 隐式开启（Rx 批处理场景）', () => {
     expect(t.reasoning?.content || '').toContain('Thinking')
   })
 
+  it('reasoning item + raw_delta 追加到 raw 字段并保持 item 上下文', async () => {
+    deltaSub = ensureDeltaPipelines()
+    chatTurnActions.setConversationId('conv-rx-raw')
+    __emit('chat.reasoning.item_started', {
+      conversationId: 'conv-rx-raw',
+      itemId: 'itm-1'
+    })
+    __emit('chat.reasoning.raw_delta', {
+      conversationId: 'conv-rx-raw',
+      itemId: 'itm-1',
+      delta: 'raw-think'
+    })
+    await waitFor(
+      () => expect(chatTurnSelectors.currentTurns(useChatTurnStore.getState()).length).toBe(1),
+      {
+        timeout: 800
+      }
+    )
+    const slice = chatTurnSelectors.currentSlice(useChatTurnStore.getState())
+    const turn = slice.turns[0]
+    expect(turn.reasoning?.raw || '').toContain('raw-think')
+    const items = (turn.reasoning as any)?.items || {}
+    expect(items['itm-1']?.raw || '').toContain('raw-think')
+  })
+
   it('exec.output 被微批合并并追加到步骤', async () => {
-    ensureDeltaPipelines()
+    deltaSub = ensureDeltaPipelines()
     chatTurnActions.setConversationId('conv-rx3')
     // 先创建一个 exec 步骤，模拟 begin 事件已到达
     chatTurnActions.markTurnStarted({})
@@ -80,7 +110,7 @@ describe('delta-streams 隐式开启（Rx 批处理场景）', () => {
   })
 
   it('迟到的 chat.message.delta（eventId <= completed）会被丢弃而不会新开 turn', async () => {
-    ensureDeltaPipelines()
+    deltaSub = ensureDeltaPipelines()
     const cid = 'conv-rx4'
     chatTurnActions.setConversationId(cid)
 

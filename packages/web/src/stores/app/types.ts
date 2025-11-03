@@ -9,6 +9,7 @@ export type AppStore = {
   wrap: boolean
   mdPreview: boolean
   theme: 'light' | 'dark'
+  codexHome: string
   setCurrentDir: (dir: string) => void
   setCurrentRoot: (r: string) => void
   setSelectedPath: (p: string | null) => void
@@ -18,6 +19,7 @@ export type AppStore = {
   toggleMdPreview: () => void
   setTheme: (t: 'light' | 'dark') => void
   toggleTheme: () => void
+  setCodexHome: (path: string) => void
 }
 
 export type AppStoreCreator<TSlice> = StateCreator<

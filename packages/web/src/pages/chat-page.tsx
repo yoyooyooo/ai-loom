@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useInfiniteQuery, type InfiniteData } from '@tanstack/react-query'
 import { HistoryList } from '@/features/codex-chat/components/history-list'
-import { CodexChatPanel } from '@/features/codex-chat/components/chat-panel'
+import {
+  CodexChatPanel,
+  type ConversationCreatedPayload
+} from '@/features/codex-chat/components/chat-panel'
 import type { ConversationListItem } from '@/features/codex-chat/services/api'
 import { chatApi } from '@/features/codex-chat/services/api'
 import {
@@ -22,10 +25,83 @@ import { ChatTopToolbar } from '@/features/codex-chat/components/chat-top-toolba
 import { useObservableState } from 'observable-hooks'
 import {
   generatingState$,
-  getGeneratingSnapshot
+  getGeneratingSnapshot,
+  seedGenerating
 } from '@/features/codex-chat/services/generating-aggregator'
 
-type ConversationListPage = { items: ConversationListItem[]; nextCursor?: string | null }
+type ConversationListPage = {
+  items: ConversationListItem[]
+  nextCursor?: string | null
+  codexUnavailable?: boolean
+}
+type OptimisticConversationListItem = ConversationListItem & {
+  __optimistic?: boolean
+  inProgress?: boolean | null
+}
+
+const HISTORY_PAGE_SIZE = 20
+const HISTORY_QUERY_KEY = ['chat', 'history', { pageSize: HISTORY_PAGE_SIZE }] as const
+
+const compareHistoryTimestampDesc = (a: ConversationListItem, b: ConversationListItem) => {
+  const at = (a.timestamp ?? a.createdAt ?? '') as string
+  const bt = (b.timestamp ?? b.createdAt ?? '') as string
+  if (at === bt) return 0
+  return at > bt ? -1 : 1
+}
+
+const upsertHistoryOptimistic = (
+  prev: InfiniteData<ConversationListPage, string | null> | undefined,
+  entry: OptimisticConversationListItem
+): InfiniteData<ConversationListPage, string | null> => {
+  if (!entry.conversationId) {
+    if (prev) return prev
+    return {
+      pages: [{ items: [entry], nextCursor: null }],
+      pageParams: [null]
+    }
+  }
+
+  if (!prev || !Array.isArray(prev.pages) || prev.pages.length === 0) {
+    return {
+      pages: [{ items: [entry], nextCursor: null }],
+      pageParams: prev?.pageParams?.length ? [...prev.pageParams] : [null]
+    }
+  }
+
+  const pages = prev.pages.map((page) => ({
+    ...page,
+    items: Array.isArray(page.items) ? [...page.items] : []
+  }))
+
+  let handled = false
+  for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
+    const page = pages[pageIndex]
+    const items = page.items as OptimisticConversationListItem[]
+    const idx = items.findIndex((it) => it.conversationId === entry.conversationId)
+    if (idx !== -1) {
+      const existing = items[idx]
+      const merged: OptimisticConversationListItem = {
+        ...existing,
+        ...entry,
+        __optimistic: entry.__optimistic ?? existing.__optimistic
+      }
+      const nextItems = items.slice()
+      nextItems[idx] = merged
+      pages[pageIndex] = { ...page, items: nextItems }
+      handled = true
+      break
+    }
+  }
+
+  if (!handled) {
+    const first = pages[0]
+    const nextItems = [entry, ...first.items]
+    const limited = HISTORY_PAGE_SIZE > 0 ? nextItems.slice(0, HISTORY_PAGE_SIZE) : nextItems
+    pages[0] = { ...first, items: limited }
+  }
+
+  return { ...prev, pages }
+}
 const encodeParam = (segment: string) => encodeURIComponent(segment)
 const decodeParam = (segment?: string) => {
   if (!segment) return undefined
@@ -40,8 +116,8 @@ export default function ChatPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const params = useParams<{ conversationId?: string }>()
-  const conversationId = useChatTurnStore((state) => state.conversationId)
   const generating = useChatTurnStore((state) => chatTurnSelectors.currentSlice(state).generating)
+  const [optimisticHistory, setOptimisticHistory] = useState<Record<string, OptimisticConversationListItem>>({})
   const routeConversationKey = useMemo(
     () => decodeParam(params.conversationId),
     [params.conversationId]
@@ -59,20 +135,79 @@ export default function ChatPage() {
     ConversationListPage,
     Error,
     InfiniteData<ConversationListPage, string | null>,
-    ['chat', 'history', { pageSize: number }],
+    typeof HISTORY_QUERY_KEY,
     string | null
   >({
-    queryKey: ['chat', 'history', { pageSize: 20 }] as const,
+    queryKey: HISTORY_QUERY_KEY,
     initialPageParam: null,
     queryFn: ({ pageParam }) =>
-      chatApi.listConversations({ pageSize: 20, cursor: pageParam ?? undefined }),
+      chatApi.listConversations({ pageSize: HISTORY_PAGE_SIZE, cursor: pageParam ?? undefined }),
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? null
   })
 
-  const historyItems = useMemo(() => data?.pages.flatMap((page) => page.items ?? []) ?? [], [data])
+  const historyItemsFromQuery = useMemo(
+    () => data?.pages.flatMap((page) => page.items ?? []) ?? [],
+    [data]
+  )
+
+  useEffect(() => {
+    if (historyItemsFromQuery.length === 0) return
+    setOptimisticHistory((prev) => {
+      let patched = false
+      const next = { ...prev }
+      for (const item of historyItemsFromQuery) {
+        const cid = item.conversationId
+        if (cid && next[cid]) {
+          delete next[cid]
+          patched = true
+        }
+      }
+      return patched ? next : prev
+    })
+  }, [historyItemsFromQuery])
+
+  const historyItems = useMemo(() => {
+    if (historyItemsFromQuery.length === 0 && Object.keys(optimisticHistory).length === 0) {
+      return []
+    }
+    const merged: ConversationListItem[] = [...historyItemsFromQuery]
+    const existing = new Set(
+      historyItemsFromQuery
+        .map((item) => item.conversationId)
+        .filter((cid): cid is string => typeof cid === 'string' && cid.length > 0)
+    )
+    for (const value of Object.values(optimisticHistory)) {
+      const cid = value.conversationId
+      if (!cid || existing.has(cid)) continue
+      merged.push(value)
+    }
+    merged.sort(compareHistoryTimestampDesc)
+    return merged
+  }, [historyItemsFromQuery, optimisticHistory])
+
   const historyNodes = useMemo(() => buildHistoryTree(historyItems), [historyItems])
 
-  const computedActiveConversationId = routeConversationKey ?? conversationId
+  const fallbackSeededKeysRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const nextKeys = new Set<string>()
+    for (const item of historyItems) {
+      const cid = (item.conversationId || '').trim()
+      if (!cid || !item.inProgress) continue
+      const providerId = (item.providerId || 'codex').trim()
+      const key = providerId ? `${providerId}|${cid}` : cid
+      nextKeys.add(key)
+      seedGenerating(key, true)
+    }
+    const prevKeys = fallbackSeededKeysRef.current
+    for (const key of prevKeys) {
+      if (!nextKeys.has(key)) {
+        seedGenerating(key, false)
+      }
+    }
+    fallbackSeededKeysRef.current = new Set(nextKeys)
+  }, [historyItems])
+
+  const computedActiveConversationId = routeConversationKey
 
   const resumeCommand = computedActiveConversationId
     ? `codex resume ${computedActiveConversationId}`
@@ -113,7 +248,7 @@ export default function ChatPage() {
     chatTurnActions.setWsAutoSelectGuard(false)
     selectConversation(cid, { reason: 'route' })
 
-    hydrateConversation(cid, { tail: 128 })
+    hydrateConversation(cid, { tail: 128, forceBaseline: true })
       .then((sub) => {
         wsSubRef.current = sub ?? null
       })
@@ -132,8 +267,18 @@ export default function ChatPage() {
     }
   }, [routeConversationKey])
 
+  const handleOptimisticFailure = useCallback((cid: string) => {
+    if (!cid) return
+    setOptimisticHistory((prev) => {
+      if (!prev[cid]) return prev
+      const next = { ...prev }
+      delete next[cid]
+      return next
+    })
+  }, [])
+
   // 安装聊天历史的 WS 失效器：新会话/收束后自动刷新历史列表
-  useChatHistoryInvalidator(qc)
+  useChatHistoryInvalidator(qc, { onOptimisticFailure: handleOptimisticFailure })
 
   const [generatingState] = useObservableState(() => generatingState$(), getGeneratingSnapshot())
   const generatingKeys = useMemo(() => {
@@ -145,70 +290,52 @@ export default function ChatPage() {
   }, [generatingState])
 
   const handleConversationCreated = useCallback(
-    async (newId: string) => {
-      // 1) 立即导航到新会话
+    async ({
+      conversationId: newId,
+      preview,
+      model,
+      providerId,
+      timestamp,
+      createdAt
+    }: ConversationCreatedPayload) => {
+      if (!newId) return
+
       navigate(`/chat/${encodeParam(newId)}`)
 
-      // 2) 乐观地把“占位会话”插入到历史第一页，避免列表短暂缺失
-      try {
-        const qk = ['chat', 'history', { pageSize: 20 }] as const
-        qc.setQueryData<InfiniteData<ConversationListPage, string | null> | undefined>(
-          qk,
-          (prev) => {
-            const placeholder = {
-              path: '',
-              preview: '（新会话）',
-              timestamp: new Date().toISOString(),
-              model: undefined,
-              conversationId: newId,
-              parentId: null,
-              rootId: null,
-              depth: 0,
-              createdAt: new Date().toISOString(),
-              turns: null,
-              __optimistic: true
-            } as unknown as ConversationListItem
-
-            if (!prev || !Array.isArray(prev.pages) || prev.pages.length === 0) {
-              return {
-                pages: [{ items: [placeholder], nextCursor: null }],
-                pageParams: [null]
-              }
-            }
-            const exists = prev.pages.some((p) =>
-              (p.items || []).some((it) => it.conversationId === newId)
-            )
-            if (exists) return prev
-            const first = prev.pages[0]
-            const updatedFirst = { ...first, items: [placeholder, ...(first.items || [])] }
-            return { ...prev, pages: [updatedFirst, ...prev.pages.slice(1)] }
-          }
-        )
-        // 纯事件范式：不再使用时间 TTL 清理占位，由事件侧负责（见 useChatHistoryInvalidator）
-      } catch (e) {
-        // 忽略缓存更新失败，不影响后续 refetch
+      const issuedAt = timestamp ?? createdAt ?? new Date().toISOString()
+      const optimisticItem: OptimisticConversationListItem = {
+        path: '',
+        preview: preview && preview.trim().length > 0 ? preview : '（生成中）',
+        timestamp: issuedAt,
+        model: model ?? undefined,
+        providerId: providerId ?? undefined,
+        conversationId: newId,
+        parentId: null,
+        rootId: null,
+        depth: 0,
+        createdAt: createdAt ?? issuedAt,
+        turns: null,
+        inProgress: true,
+        __optimistic: true
       }
 
-      // 3) 立刻拉取一次；后续刷新改由 WS 事件驱动（invalidator 已监听 chat.*）
+      setOptimisticHistory((prev) => ({ ...prev, [newId]: optimisticItem }))
+      qc.setQueryData<InfiniteData<ConversationListPage, string | null> | undefined>(
+        HISTORY_QUERY_KEY,
+        (prev) => upsertHistoryOptimistic(prev, optimisticItem)
+      )
+
       try {
-        const res = await refetch()
-        void res
+        await refetch()
       } catch (error) {
         console.warn('[chat] history refetch failed', error)
       }
 
-      // 3.1) 100ms 兜底：Codex 列表索引偶发略滞后，轻量再拉一次
       setTimeout(() => {
-        try {
-          refetch()
-        } catch {}
+        void refetch().catch(() => {})
       }, 100)
-      // 4) 导航到新会话（确保路由键存在，从而触发 hydrate + WS 订阅）
-      try {
-        navigate(`/chat/${encodeParam(newId)}`)
-      } catch {}
     },
-    [navigate, refetch, qc]
+    [navigate, refetch, qc, setOptimisticHistory]
   )
 
   const handleSelectHistory = useCallback(
@@ -231,8 +358,8 @@ export default function ChatPage() {
   const handleDeleteHistory = useCallback(
     async (item: ConversationListItem) => {
       const key = item.conversationId ?? item.path
-      if (!item.path || !key) return
-      await chatApi.deleteConversation(item.path)
+      if (!item.conversationId || !key) return
+      await chatApi.deleteConversation(item.conversationId, item.providerId)
       if (computedActiveConversationId === key) {
         chatTurnActions.reset()
         navigate('/chat', { replace: true })

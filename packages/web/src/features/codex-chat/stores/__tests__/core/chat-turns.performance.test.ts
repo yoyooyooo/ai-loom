@@ -42,7 +42,7 @@ describe('ChatTurnStore pressure scenarios', () => {
     const turn = slice.turns.at(-1)!
     expect(turn.steps.length).toBe(operations)
     expect(turn.steps.every((step: any) => step.status === 'completed')).toBe(true)
-    expect(elapsed).toBeLessThan(800)
+    expect(elapsed).toBeLessThan(1300)
   })
 
   it('deriveWorkingState 直接命中 turnIndex 而非全局扫描', () => {

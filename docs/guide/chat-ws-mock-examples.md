@@ -57,45 +57,60 @@
 <a id="mock-reasoning"></a>
 ## 思考通道（合并到本轮助手消息内、默认折叠展示）
 
-7) chat.reasoning.delta
+7) chat.reasoning.item_started
 ```
-{"jsonrpc":"2.0","method":"chat.reasoning.delta","params":{"delta":"先分析…","eventId":"7","ts":"2025-10-23T12:00:06Z"}}
+{"jsonrpc":"2.0","method":"chat.reasoning.item_started","params":{"itemId":"itm-1","eventId":"7","ts":"2025-10-23T12:00:06Z"}}
 ```
 
-8) chat.reasoning.end
+8) chat.reasoning.delta
 ```
-{"jsonrpc":"2.0","method":"chat.reasoning.end","params":{"text":"结论：…","eventId":"8","ts":"2025-10-23T12:00:07Z"}}
+{"jsonrpc":"2.0","method":"chat.reasoning.delta","params":{"delta":"先分析…","itemId":"itm-1","eventId":"8","ts":"2025-10-23T12:00:06Z"}}
+```
+
+9) chat.reasoning.raw_delta（`show_raw_agent_reasoning=on` 场景）
+```
+{"jsonrpc":"2.0","method":"chat.reasoning.raw_delta","params":{"delta":"<step>look at repo</step>","itemId":"itm-1","eventId":"9","ts":"2025-10-23T12:00:06Z"}}
+```
+
+10) chat.reasoning.item_completed
+```
+{"jsonrpc":"2.0","method":"chat.reasoning.item_completed","params":{"itemId":"itm-1","text":"总结：…","rawContent":"<full reasoning />","eventId":"10","ts":"2025-10-23T12:00:07Z"}}
+```
+
+11) chat.reasoning.end
+```
+{"jsonrpc":"2.0","method":"chat.reasoning.end","params":{"text":"总结：…","itemId":"itm-1","rawContent":"<full reasoning />","eventId":"11","ts":"2025-10-23T12:00:07Z"}}
 ```
 
 <a id="mock-exec"></a>
 ## Exec 工具
 
-9) chat.tool.exec.begin
+12) chat.tool.exec.begin
 ```
-{"jsonrpc":"2.0","method":"chat.tool.exec.begin","params":{"callId":"call_exec_1","cwd":"/Users/yoyo/Documents/code/personal/ai-loom","command":["bash","-lc","ls -la"],"eventId":"9","ts":"2025-10-23T12:00:08Z"}}
-```
-
-10) chat.tool.exec.output
-```
-{"jsonrpc":"2.0","method":"chat.tool.exec.output","params":{"callId":"call_exec_1","stream":"stdout","text":"total 8\n-rw-r--r--  1 …","eventId":"10","ts":"2025-10-23T12:00:08Z"}}
+{"jsonrpc":"2.0","method":"chat.tool.exec.begin","params":{"callId":"call_exec_1","cwd":"/Users/yoyo/Documents/code/personal/ai-loom","command":["bash","-lc","ls -la"],"eventId":"12","ts":"2025-10-23T12:00:08Z"}}
 ```
 
-11) chat.tool.exec.end
+13) chat.tool.exec.output
 ```
-{"jsonrpc":"2.0","method":"chat.tool.exec.end","params":{"callId":"call_exec_1","exitCode":0,"durationMs":1200,"stdout":"…（截断）","stderr":"","eventId":"11","ts":"2025-10-23T12:00:09Z"}}
+{"jsonrpc":"2.0","method":"chat.tool.exec.output","params":{"callId":"call_exec_1","stream":"stdout","text":"total 8\n-rw-r--r--  1 …","eventId":"13","ts":"2025-10-23T12:00:08Z"}}
+```
+
+14) chat.tool.exec.end
+```
+{"jsonrpc":"2.0","method":"chat.tool.exec.end","params":{"callId":"call_exec_1","exitCode":0,"durationMs":1200,"stdout":"…（截断）","stderr":"","eventId":"14","ts":"2025-10-23T12:00:09Z"}}
 ```
 
 <a id="mock-mcp"></a>
 ## MCP 工具
 
-12) chat.tool.mcp.begin
+15) chat.tool.mcp.begin
 ```
-{"jsonrpc":"2.0","method":"chat.tool.mcp.begin","params":{"callId":"call_mcp_1","server":"mcphub","tool":"fetcher-fetch_url","arguments":{"url":"https://example.com","timeout":120000},"eventId":"12","ts":"2025-10-23T12:00:10Z"}}
+{"jsonrpc":"2.0","method":"chat.tool.mcp.begin","params":{"callId":"call_mcp_1","server":"mcphub","tool":"fetcher-fetch_url","arguments":{"url":"https://example.com","timeout":120000},"eventId":"15","ts":"2025-10-23T12:00:10Z"}}
 ```
 
-13) chat.tool.mcp.end
+16) chat.tool.mcp.end
 ```
-{"jsonrpc":"2.0","method":"chat.tool.mcp.end","params":{"callId":"call_mcp_1","server":"mcphub","tool":"fetcher-fetch_url","arguments":{"url":"https://example.com"},"result":{"status":200,"content":"…"},"eventId":"13","ts":"2025-10-23T12:00:11Z"}}
+{"jsonrpc":"2.0","method":"chat.tool.mcp.end","params":{"callId":"call_mcp_1","server":"mcphub","tool":"fetcher-fetch_url","arguments":{"url":"https://example.com"},"result":{"status":200,"content":"…"},"eventId":"16","ts":"2025-10-23T12:00:11Z"}}
 ```
 
 <a id="mock-patch"></a>

@@ -2,9 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { firstValueFrom, from } from 'rxjs'
 import { switchMap } from 'rxjs/operators'
 import { useParams } from 'react-router-dom'
+import { useObservableState } from 'observable-hooks'
 import { cn } from '@/lib/utils'
 import { chatApi } from '../services/api'
-import type { ChatConfigResponse } from '../services/api'
+import type { ChatConfigResponse, SendUserTurnRequest } from '../services/api'
 import { subscribeChatEvents } from '../services/ws'
 import {
   useChatTurnStore,
@@ -34,6 +35,10 @@ import type { SandboxMode } from '@/lib/codex-types/SandboxMode'
 import { chatTrace } from '@/lib/logger'
 import { useChatHydrationStore } from '../stores/chat-hydration'
 import { ws } from '@/lib/ws/singleton'
+import {
+  generatingState$,
+  getGeneratingSnapshot
+} from '@/features/codex-chat/services/generating-aggregator'
 
 const APPROVAL_OPTIONS: Array<{ value: AskForApproval; label: string }> = [
   { value: 'on-request', label: '按需请求 (on-request)' },
@@ -48,9 +53,27 @@ const SANDBOX_OPTIONS: Array<{ value: SandboxMode; label: string }> = [
   { value: 'danger-full-access', label: '完全开放 (danger-full-access)' }
 ]
 
+export type ConversationCreatedPayload = {
+  conversationId: string
+  preview?: string
+  model?: string | null
+  providerId?: string | null
+  timestamp?: string
+  createdAt?: string
+}
+
 type CodexChatPanelProps = {
   className?: string
-  onConversationCreated?: (conversationId: string) => void
+  onConversationCreated?: (payload: ConversationCreatedPayload) => void
+}
+
+const HISTORY_PREVIEW_LIMIT = 140
+
+const buildHistoryPreview = (text: string) => {
+  const normalized = text.trim()
+  if (!normalized) return ''
+  if (normalized.length <= HISTORY_PREVIEW_LIMIT) return normalized
+  return `${normalized.slice(0, HISTORY_PREVIEW_LIMIT)}…`
 }
 
 export function CodexChatPanel({ className, onConversationCreated }: CodexChatPanelProps = {}) {
@@ -74,9 +97,10 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
   )
   const conversationId = useChatTurnStore((state) => state.conversationId)
   const currentSlice = useChatTurnStore(chatTurnSelectors.currentSlice)
-  const generating = currentSlice.generating
-  const turns = currentSlice.turns
-  const [stopping, setStopping] = useState(false)
+  const [globalGeneratingState] = useObservableState(
+    () => generatingState$(),
+    getGeneratingSnapshot()
+  )
   const sessionState = useCodexSessionState(conversationId)
   const providerState = useMemo(
     () => ({
@@ -87,6 +111,22 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
     }),
     [sessionState]
   )
+  const providerId = sessionState.capabilities.providerId || 'codex'
+  const generatingKey = useMemo(() => {
+    if (!conversationId) return null
+    const keyWithProvider = providerId ? `${providerId}|${conversationId}` : conversationId
+    return keyWithProvider
+  }, [providerId, conversationId])
+  const aggregatedGenerating = useMemo(() => {
+    if (!conversationId) return false
+    const key = generatingKey
+    const byKey = globalGeneratingState.byKey || {}
+    if (key && byKey[key]?.generating) return true
+    return !!byKey[conversationId]?.generating
+  }, [conversationId, generatingKey, globalGeneratingState])
+  const generating = aggregatedGenerating || currentSlice.generating
+  const turns = currentSlice.turns
+  const [stopping, setStopping] = useState(false)
   const configCache = useRef<ChatConfigResponse | null>(null)
 
   useEffect(() => {
@@ -125,7 +165,14 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
         if (!res) {
           res = await chatApi.getConfig()
           if (cancelled) return
+          if (res?.codexUnavailable) {
+            chatTrace('chatPanel.fetchConfig.unavailable', {})
+            return
+          }
           configCache.current = res
+        } else if (res.codexUnavailable) {
+          chatTrace('chatPanel.fetchConfig.unavailable.cached', {})
+          return
         }
         const mappedModels =
           res?.models?.map((item) => ({
@@ -228,9 +275,9 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
     return base
   }, [providerState.models, selectedModel])
 
-  async function ensureConversation() {
+  async function ensureConversation(): Promise<{ id: string; isNew: boolean }> {
     chatTrace('chatPanel.ensureConversation', { conversationId })
-    if (conversationId) return conversationId
+    if (conversationId) return { id: conversationId, isNew: false }
     const storeSnapshot = useCodexChatProviderStore.getState()
     const defaultSession = getCodexSessionState(storeSnapshot)
     const overrides = defaultSession.overrides
@@ -258,12 +305,11 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
       ;(await import('@/features/codex-chat/services/conversation-session')).markConversationNew(
         newId
       )
-      onConversationCreated?.(newId)
     } catch (error) {
-      console.warn('[chat] onConversationCreated error', error)
+      console.warn('[chat] markConversationNew error', error)
     }
 
-    return newId
+    return { id: newId, isNew: true }
   }
 
   async function onSend() {
@@ -281,8 +327,13 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
         typeof err?.message === 'string' && err.message.trim().length > 0 ? err.message.trim() : ''
       const fallback = context === 'ensure' ? '创建会话失败' : '消息发送失败'
       const finalMessage = (() => {
-        if (context === 'send' && status === 503) {
-          return 'Codex 实例正在恢复，请稍后重试'
+        if (context === 'send') {
+          if (status === 503) {
+            return 'Codex 实例正在恢复，请稍后重试'
+          }
+          if (status === 501) {
+            return '当前运行时不支持会话内配置切换，请新建会话后重试'
+          }
         }
         if (payloadMessage && payloadMessage.trim().length > 0) return payloadMessage.trim()
         if (rawMessage) return rawMessage
@@ -295,11 +346,11 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
       if (context === 'ensure') {
         chatTrace('chatPanel.ensureConversation.fail', { error: rawMessage || fallback })
       } else {
-        chatTrace('chatPanel.sendMessage.fail', {
-          conversationId: cid,
-          error: rawMessage || payloadMessage || fallback,
-          status
-        })
+        chatTrace('chatPanel.sendTurn.fail', {
+            conversationId: cid,
+            error: rawMessage || payloadMessage || fallback,
+            status
+          })
       }
     }
 
@@ -307,28 +358,87 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
     setText('')
     chatTurnActions.addUserTurn(trimmed)
 
-    let cid: string
+    let ensured: { id: string; isNew: boolean }
     try {
-      cid = await ensureConversation()
+      ensured = await ensureConversation()
     } catch (error) {
       handleFailure(error, 'ensure')
       return
     }
 
-    try {
-      // 发送前确保 WS 订阅已就绪，并在持有期间完成发送，避免空窗
+    const cid = ensured.id
+
+    if (ensured.isNew) {
+      const issuedAt = new Date().toISOString()
+      onConversationCreated?.({
+        conversationId: cid,
+        preview: buildHistoryPreview(trimmed),
+        model: selectedModel || null,
+        providerId: sessionState.capabilities.providerId ?? null,
+        timestamp: issuedAt,
+        createdAt: issuedAt
+      })
+    }
+
+    const normalizeOptionalString = (value: string | undefined | null) => {
+      if (!value) return undefined
+      const trimmed = value.trim()
+      return trimmed.length > 0 ? trimmed : undefined
+    }
+    const modelForSend = normalizeOptionalString(selectedModel) || undefined
+    const approvalForSend = normalizeOptionalString(selectedApproval) as
+      | AskForApproval
+      | undefined
+    const sandboxForSend = normalizeOptionalString(selectedSandbox) as SandboxMode | undefined
+
+    const turnPayload: SendUserTurnRequest = {
+      text: trimmed
+    }
+    if (modelForSend) turnPayload.model = modelForSend
+    if (approvalForSend) turnPayload.approvalPolicy = approvalForSend
+    if (sandboxForSend) turnPayload.sandboxMode = sandboxForSend
+
+    let downgradedToMessage = false
+
+    const sendWithFallback = async () => {
       try {
         const { ws } = await import('@/lib/ws/singleton')
         await firstValueFrom(
           (ws as any)
             .ensureChatReady$(cid, { tail: 128, timeoutMs: 5000 })
-            .pipe(switchMap(() => from(chatApi.sendMessage(cid, trimmed))))
+            .pipe(switchMap(() => from(chatApi.sendUserTurn(cid, turnPayload))))
         )
-      } catch (e) {
-        // ensure 阶段失败时，回退为直接发送（后端 resume + 泵兜底）
-        await chatApi.sendMessage(cid, trimmed)
+      } catch (error) {
+        try {
+          await chatApi.sendUserTurn(cid, turnPayload)
+        } catch (inner) {
+          const status =
+            typeof (inner as any)?.status === 'number'
+              ? (inner as any).status
+              : (inner as any)?.raw?.response?.status
+          if (status === 501) {
+            downgradedToMessage = true
+            toast.warning('当前版本暂不支持会话内切换，已按原配置发送')
+            await chatApi.sendMessage(cid, trimmed)
+          } else {
+            throw inner
+          }
+        }
       }
-      chatTrace('chatPanel.sendMessage.success', { conversationId: cid })
+    }
+
+    try {
+      await sendWithFallback()
+      chatTrace('chatPanel.sendTurn.success', {
+        conversationId: cid,
+        downgraded: downgradedToMessage
+      })
+      if (!downgradedToMessage && modelForSend) {
+        codexChatProviderActions.setCapabilities(cid, { model: modelForSend })
+      }
+      if (downgradedToMessage) {
+        chatTrace('chatPanel.sendTurn.degraded', { conversationId: cid })
+      }
       // 主动补偿一次会话级 resume，避免偶发实时丢帧造成界面停滞
       try {
         // 使用 convLast 作为游标；after>0 时服务端忽略 tail
@@ -475,9 +585,9 @@ export function CodexChatPanel({ className, onConversationCreated }: CodexChatPa
   }
 
   return (
-    <div className={cn('flex h-full min-h-0 flex-1 flex-col gap-3', className)}>
+    <div className={cn('relative flex h-full min-h-0 flex-1 flex-col gap-3', className)}>
       {routeConversationKey && hydrating ? (
-        <div className="px-4 pt-2 text-xs text-muted-foreground flex items-center gap-2">
+        <div className="pointer-events-none absolute left-4 top-2 z-10 flex items-center gap-2 rounded-md bg-background/90 px-2 py-1 text-xs text-muted-foreground shadow-sm">
           <Loader2 className="size-3 animate-spin" /> 正在同步会话…
         </div>
       ) : null}

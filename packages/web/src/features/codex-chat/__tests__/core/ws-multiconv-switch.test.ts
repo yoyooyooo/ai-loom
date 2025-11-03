@@ -10,6 +10,16 @@ vi.mock('@/lib/ws/singleton')
 import { __emit, __resetWsMock, __getFilters } from '@/lib/ws/singleton'
 
 describe('WS 多会话快速切换串扰防护（按会话过滤 + 守卫）', () => {
+  const RUNTIME_METHODS = [
+    'chat.info.runtime.generating',
+    'session.runtime',
+    'chat.turn.started',
+    'chat.turn.complete',
+    'chat.message.delta',
+    'chat.message.completed',
+    'chat.message.failed',
+    'chat.message.aborted'
+  ]
   let stop: (() => void) | undefined
   beforeEach(() => {
     chatTurnActions.reset()
@@ -24,8 +34,13 @@ describe('WS 多会话快速切换串扰防护（按会话过滤 + 守卫）', (
   it('多会话并行：迟到帧写入各自分片，当前视图不被串扰', async () => {
     stop = subscribeChatEvents()
 
-    // 不再存在全量订阅
-    expect(__getFilters()).toEqual([])
+    // 仅保留 runtime 专用订阅
+    expect(__getFilters()).toEqual([
+      {
+        topic: 'chat',
+        filter: { methods: RUNTIME_METHODS }
+      }
+    ])
 
     chatTurnActions.setConversationId('A')
 
@@ -64,7 +79,12 @@ describe('WS 多会话快速切换串扰防护（按会话过滤 + 守卫）', (
     // A 的迟到帧不会污染当前视图，原 turn 保持稳定
     expect(sliceAAfter.turns.length).toBe(turnsABeforeLate)
     expect(sliceAAfter.turns.at(-1)?.assistant.text).toBe('A-OK')
-    // 不存在全量订阅（按会话由会话层负责）
-    expect(__getFilters()).toEqual([])
+    // 依旧只保留 runtime 专用订阅
+    expect(__getFilters()).toEqual([
+      {
+        topic: 'chat',
+        filter: { methods: RUNTIME_METHODS }
+      }
+    ])
   })
 })

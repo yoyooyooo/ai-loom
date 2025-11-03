@@ -1,14 +1,23 @@
-import { BehaviorSubject, Observable, Subject, Subscription } from 'rxjs'
-import { filter, map, scan, share, distinctUntilChanged, mergeMap } from 'rxjs/operators'
+import { Observable, Subscription } from 'rxjs'
+import { filter, scan, share, distinctUntilChanged, mergeMap } from 'rxjs/operators'
 import { ws } from '@/lib/ws/singleton'
 import { chatTrace } from '@/lib/logger'
+import {
+  generatingSeed$$,
+  generatingState$$,
+  type GenEntry,
+  type GenState,
+  type GenSeedPayload
+} from '@/lib/ws/runtime-subjects'
+import { parseEventId } from '@/lib/ws/chat-utils'
 
 type WsEvent = { method: string; params: any }
 
-type GenEntry = { generating: boolean; updatedAt: number; lastEventId: number }
-type GenState = { byKey: Record<string, GenEntry>; version: number }
-type RuntimeUpdate = { key: string; eid: number; generating: boolean }
-type SeedUpdate = { seed: true; key: string; generating: boolean; lastEventId?: number }
+type RuntimeUpdate = { kind: 'runtime'; key: string; eid: number; generating: boolean }
+type PendingUpdate = { kind: 'pending'; key: string; eid: number; pending: boolean }
+type SeedUpdate = GenSeedPayload & { kind: 'seed' }
+
+type UpdateEvent = RuntimeUpdate | PendingUpdate | SeedUpdate
 
 function now() {
   return Date.now()
@@ -30,29 +39,17 @@ function convKey(p: any): string | null {
   }
 }
 
-function parseEventId(params: any): number {
-  try {
-    const raw = params?.eventId
-    if (raw == null) return 0
-    if (typeof raw === 'number') return raw
-    const n = parseInt(String(raw), 10)
-    return Number.isFinite(n) && n > 0 ? n : 0
-  } catch {
-    return 0
-  }
-}
-
-function buildUpdates$(events$: Observable<WsEvent>): Observable<RuntimeUpdate> {
+function buildUpdates$(events$: Observable<WsEvent>): Observable<UpdateEvent> {
   return events$.pipe(
     filter((ev) => typeof ev?.method === 'string'),
-    mergeMap<WsEvent, RuntimeUpdate[]>((ev) => {
+    mergeMap<WsEvent, UpdateEvent[]>((ev) => {
       const method = ev.method
       if (method === 'chat.info.runtime.generating') {
         const key = convKey(ev.params)
-        if (!key) return [] as RuntimeUpdate[]
+        if (!key) return [] as UpdateEvent[]
         const eid = parseEventId(ev.params)
         const generating = !!ev.params?.generating
-        return [{ key, eid, generating }] as RuntimeUpdate[]
+        return [{ kind: 'runtime', key, eid, generating }] as UpdateEvent[]
       }
       if (method === 'session.runtime') {
         const items = Array.isArray((ev.params as any)?.items) ? (ev.params as any).items : []
@@ -62,30 +59,76 @@ function buildUpdates$(events$: Observable<WsEvent>): Observable<RuntimeUpdate> 
             if (!key) return null
             const eid = parseEventId(item)
             const generating = !!item?.generating
-            return { key, eid, generating } as RuntimeUpdate
+            return { kind: 'runtime', key, eid, generating } as RuntimeUpdate
           })
           .filter((entry: RuntimeUpdate | null): entry is RuntimeUpdate => entry !== null)
       }
-      return [] as RuntimeUpdate[]
+      if (method === 'chat.message.aborted') {
+        const key = convKey(ev.params)
+        if (!key) return []
+        const eid = parseEventId(ev.params)
+        return [
+          { kind: 'pending', key, eid, pending: false },
+          { kind: 'runtime', key, eid, generating: false }
+        ]
+      }
+      if (
+        method === 'chat.turn.started' ||
+        method === 'chat.message.delta' ||
+        method === 'chat.message.completed' ||
+        method === 'chat.message.failed'
+      ) {
+        const key = convKey(ev.params)
+        if (!key) return []
+        const eid = parseEventId(ev.params)
+        return [{ kind: 'pending', key, eid, pending: true }]
+      }
+      if (method === 'chat.turn.complete') {
+        const key = convKey(ev.params)
+        if (!key) return []
+        const eid = parseEventId(ev.params)
+        return [{ kind: 'pending', key, eid, pending: false }]
+      }
+      return [] as UpdateEvent[]
     }),
     share()
   )
 }
 
-const state$ = new BehaviorSubject<GenState>({ byKey: {}, version: 0 })
 let sub: Subscription | null = null
-const seeds$ = new Subject<{ key: string; generating: boolean; lastEventId?: number }>()
+let globalRuntimeSub: Subscription | null = null
 
 export function initGlobalGeneratingAggregator() {
   if (sub) return () => stopGlobalGeneratingAggregator()
   const src = (ws as any).events$ as Observable<WsEvent>
   if (!src || typeof (src as any).pipe !== 'function') return () => {}
 
+  if (!globalRuntimeSub) {
+    try {
+      globalRuntimeSub = ws
+        .subscribeTopic$('chat', {
+          methods: [
+            'chat.info.runtime.generating',
+            'session.runtime',
+            'chat.turn.started',
+            'chat.turn.complete',
+            'chat.message.delta',
+            'chat.message.completed',
+            'chat.message.failed',
+            'chat.message.aborted'
+          ]
+        })
+        .subscribe(() => {})
+    } catch {
+      globalRuntimeSub = null
+    }
+  }
+
   const updates$ = buildUpdates$(src)
-  const merged$ = new Observable<RuntimeUpdate | SeedUpdate>((subscriber) => {
+  const merged$ = new Observable<UpdateEvent>((subscriber) => {
     const a = updates$.subscribe((value) => subscriber.next(value))
-    const b = seeds$.subscribe((seed) =>
-      subscriber.next({ seed: true, ...seed } as SeedUpdate)
+    const b = generatingSeed$$.subscribe((seed) =>
+      subscriber.next({ kind: 'seed', ...seed } as SeedUpdate)
     )
     return () => {
       a.unsubscribe()
@@ -93,53 +136,107 @@ export function initGlobalGeneratingAggregator() {
     }
   })
 
+  const runtimeMap = new Map<string, { generating: boolean; lastEventId: number }>()
+  const pendingMap = new Map<string, { pending: boolean; lastEventId: number }>()
+
   sub = merged$
     .pipe(
       scan((prev, cur) => {
         const next: GenState = { byKey: { ...prev.byKey }, version: prev.version }
-        if ('seed' in cur && cur.seed) {
-          const { key, generating, lastEventId } = cur
-          const old = next.byKey[key]
-          const eid = Math.max(0, Number(lastEventId || old?.lastEventId || 0))
-          if (generating) {
-            const entry: GenEntry = {
-              generating: true,
-              lastEventId: eid,
-              updatedAt: now()
+        const touched = new Set<string>()
+
+        const applyStateForKey = (key: string) => {
+          touched.add(key)
+        }
+
+        const setRuntime = (key: string, eid: number, generating: boolean) => {
+          const prevEntry = runtimeMap.get(key)
+          if (eid > 0 && prevEntry && prevEntry.lastEventId >= eid) return
+          runtimeMap.set(key, { generating, lastEventId: eid > 0 ? eid : prevEntry?.lastEventId ?? 0 })
+          if (!generating) {
+            const pending = pendingMap.get(key)
+            if (pending && !pending.pending) {
+              // keep last eid but ensure pending flagged as false
+              pendingMap.set(key, { pending: false, lastEventId: pending.lastEventId })
             }
-            next.byKey[key] = entry
-          } else {
-            delete next.byKey[key]
           }
+          applyStateForKey(key)
+        }
+
+        const setPending = (key: string, eid: number, pending: boolean) => {
+          const prevEntry = pendingMap.get(key)
+          if (eid > 0 && prevEntry && prevEntry.lastEventId > eid) {
+            return
+          }
+          pendingMap.set(key, {
+            pending,
+            lastEventId: eid > 0 ? eid : prevEntry?.lastEventId ?? 0
+          })
+          if (!pending) {
+            const prevRuntime = runtimeMap.get(key)
+            const baseEid = Math.max(prevRuntime?.lastEventId ?? 0, eid > 0 ? eid : 0)
+            if (!prevRuntime || prevRuntime.generating || prevRuntime.lastEventId < baseEid) {
+              runtimeMap.set(key, { generating: false, lastEventId: baseEid })
+            }
+          }
+          applyStateForKey(key)
+        }
+
+        if (cur.kind === 'seed') {
+          const { key, generating, lastEventId } = cur
+          const eid = Math.max(0, Number(lastEventId || runtimeMap.get(key)?.lastEventId || 0))
+          setRuntime(key, eid, generating)
+          if (!generating) {
+            setPending(key, eid, false)
+          }
+        } else if (cur.kind === 'runtime') {
+          setRuntime(cur.key, cur.eid, cur.generating)
+        } else if (cur.kind === 'pending') {
+          setPending(cur.key, cur.eid, cur.pending)
+        }
+
+        if (touched.size === 0) return prev
+
+        let versionChanged = false
+        touched.forEach((key) => {
+          const runtimeState = runtimeMap.get(key)
+          const pendingState = pendingMap.get(key)
+          const shouldGenerate = !!(runtimeState?.generating) || !!(pendingState?.pending)
+          const runtimeEid = runtimeState?.lastEventId ?? 0
+          const pendingEid =
+            pendingState && pendingState.pending ? pendingState.lastEventId ?? 0 : 0
+          const lastEventId = Math.max(runtimeEid, pendingEid)
+          const old = next.byKey[key]
+          if (shouldGenerate) {
+            const effectiveEid = lastEventId > 0 ? lastEventId : old?.lastEventId ?? 0
+            if (!old || !old.generating || old.lastEventId !== effectiveEid) {
+              const entry: GenEntry = {
+                generating: true,
+                lastEventId: effectiveEid,
+                updatedAt: now()
+              }
+              next.byKey[key] = entry
+              versionChanged = true
+            }
+          } else if (old) {
+            delete next.byKey[key]
+            versionChanged = true
+          }
+          if (!shouldGenerate) {
+            runtimeMap.set(key, { generating: false, lastEventId: runtimeEid })
+            pendingMap.set(key, { pending: false, lastEventId: pendingState?.lastEventId ?? 0 })
+          }
+        })
+
+        if (versionChanged) {
           next.version += 1
           return next
         }
-        const { key, eid, generating } = cur as RuntimeUpdate
-        const old = next.byKey[key]
-        const oldEid = old?.lastEventId || 0
-        if (eid > 0 && eid <= oldEid) return prev
-        if (generating) {
-          const entry: GenEntry = {
-            generating: true,
-            lastEventId: eid > 0 ? eid : oldEid,
-            updatedAt: now()
-          }
-          if (old && old.generating === entry.generating && entry.lastEventId === old.lastEventId) {
-            return prev
-          }
-          next.byKey[key] = entry
-          next.version += 1
-        } else {
-          if (old) {
-            delete next.byKey[key]
-            next.version += 1
-          }
-        }
         return next
-      }, state$.getValue()),
+      }, generatingState$$.getValue()),
       distinctUntilChanged((a, b) => a.version === b.version)
     )
-    .subscribe((s) => state$.next(s))
+    .subscribe((s) => generatingState$$.next(s))
 
   chatTrace('gen-agg.init', {})
   return () => stopGlobalGeneratingAggregator()
@@ -150,16 +247,20 @@ export function stopGlobalGeneratingAggregator() {
     sub?.unsubscribe()
   } catch {}
   sub = null
+  try {
+    globalRuntimeSub?.unsubscribe()
+  } catch {}
+  globalRuntimeSub = null
 }
 
 export function seedGenerating(key: string, generating: boolean, lastEventId?: number) {
-  seeds$.next({ key, generating, lastEventId })
+  generatingSeed$$.next({ key, generating, lastEventId })
 }
 
 export function generatingState$(): Observable<GenState> {
-  return state$.asObservable()
+  return generatingState$$.asObservable()
 }
 
 export function getGeneratingSnapshot(): GenState {
-  return state$.getValue()
+  return generatingState$$.getValue()
 }

@@ -265,8 +265,16 @@ export const useStore = create<FinalStore>()(
   - Service Hook：组合 Query/Rx 与 Store Action，导出最小接口供页面调用。
   - 页面组件：仅读取 Store 状态，调用 Service Hook 提供的动作，不自行拼装副作用。
 - 命名与可读性：
-  - 动作用动词短语；Observable 以 `$` 结尾（如 `poll$`）。
+  - 动作用动词短语；Observable 以 `$` 结尾（如 `poll$`），Subject **必须** 以 `$$` 结尾（如 `events$$`）。
+  - 同名 Subject/Observable 不得在不同文件起别名；跨模块复用时直接导入原符号。
   - 避免长 `useEffect`；若逻辑超过 10 行，优先下沉到 Store/Service。
+
+### 11.1 RxJS 管道与 Subject 管控（新增）
+
+- 单一事实源：跨模块共享的 Subject 统一集中在 `@/lib/ws/runtime-subjects` 或对应 `@/lib` 目录下的领域文件，由该文件导出 `$$` 结尾的 Subject 与工厂函数。Feature 内不得随意在模块顶层 `new Subject()`。
+- 组合式偏好：所有 WS/流式逻辑需以 RxJS 管道组合完成（`pipe` + 运算符），禁止在订阅外额外维护 `Map/Set` 计数或散落的定时器；必要状态封装成 `Observable` 再由订阅端消费。
+- 生命周期：`subscribe()` 返回的 `Subscription` 须在同一作用域统一 `unsubscribe()`，或改写为 `Observable` → `tap` → `finalize` 的组合式管道。
+- 测试场景：仅在 Vitest/RTL 场景允许使用临时 `new Subject()` 构造源流，命名仍遵循 `source$$`、`begin$$` 等约定，并确保在用例结束前显式 `unsubscribe()`。
 
 ## 12. 开发与验证
 
@@ -300,7 +308,7 @@ export const useStore = create<FinalStore>()(
 ## 13. WS 订阅与缓存失效（Explorer）
 
 - 策略约定：优先 WS（`wsPrefer`），短窗熔断回退 REST；写入默认 REST，写后由服务端广播事件维持一致性（详见 AGENTS.md“WS 开发策略”）。
-- 订阅桥（按特性组织）：`src/features/explorer/subscriptions.ts` 仅维护 Explorer 所需的 `tree/file/annotations` 订阅，随页面挂载/卸载自动重建。
+- 订阅桥（按特性组织）：`src/features/explorer/subscriptions.ts` 仅维护 Explorer 所需的 `tree/file/annotations` 订阅，随页面挂载/卸载自动重建。聊天模块另行维护全局事件处理器（`subscribeChatEvents`），默认只保留运行时专用订阅（`methods: ['chat.info.runtime.generating', 'session.runtime']`），会话级订阅按需由页面/组件引入。
 - 领域化 invalidators：
   - 文件：`src/features/explorer/ws-invalidators/file-invalidator.ts`（digest 短窗去重 + RAF 合批，失效 `['file', path]` 与所属目录树）
   - 目录树：`src/features/explorer/ws-invalidators/tree-invalidator.ts`（`impactedPaths` 最小目录集，`truncated/缺摘要` 粗粒度刷新当前视图根）

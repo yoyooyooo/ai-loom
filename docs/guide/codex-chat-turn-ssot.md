@@ -23,7 +23,7 @@
   - `chat.turn.started` → `markTurnStarted`（不入环，仅提示；避免乱序误开新轮）
   - `chat.message.delta` → `appendAssistantDelta`（Rx 微批在 `delta-streams.ts` 中完成）
   - `chat.message.completed` → `completeAssistant`
-  - `chat.reasoning.end` → `endReasoning`（并生成 thinking 步骤，去冗余）
+- `chat.reasoning.end` → `endReasoning(text, { itemId, rawContent })`（并生成 thinking 步骤，去冗余）
   - `chat.tool.*`（exec/patch/mcp）→ `addStep/appendStep/endStep`
   - `chat.turn.complete` → `completeTurn`
 
@@ -116,8 +116,11 @@ Hydration 提示：
     - 代码：packages/web/src/features/codex-chat/services/processors/tools.ts
 
 - 推理（Reasoning）
-  - `chat.reasoning.delta` → `appendReasoning(delta)`
-  - `chat.reasoning.end` → 生成/更新 thinking 步骤（避免重复）
+  - `chat.reasoning.delta` → `appendReasoning(delta, { itemId, source: 'content' })`
+  - `chat.reasoning.raw_delta` → `appendReasoning(delta, { itemId, source: 'raw' })`
+  - `chat.reasoning.item_started` → `markReasoningItemStarted(itemId)`
+  - `chat.reasoning.item_completed` → `markReasoningItemCompleted(itemId, { summary?, rawContent? })`
+  - `chat.reasoning.end` → `endReasoning(text, { itemId, rawContent })` 并生成/更新 thinking 步骤（避免重复）
     - 代码：packages/web/src/features/codex-chat/services/processors/turn.ts，packages/web/src/features/codex-chat/stores/chat-turns.ts:372, 404
 
 - 工具步骤（Steps）
@@ -197,7 +200,7 @@ Hydration 提示：
 
 平台层 `chat.*`（部分列举）：
 - 文本：`chat.message.delta`、`chat.message.completed`、`chat.message.failed`、`chat.message.aborted`
-- 推理：`chat.reasoning.delta`、`chat.reasoning.end`
+- 推理：`chat.reasoning.delta`、`chat.reasoning.raw_delta`、`chat.reasoning.item_started`、`chat.reasoning.item_completed`、`chat.reasoning.end`
 - 工具：`chat.tool.exec.begin/output/end`、`chat.tool.patch.begin/end`、`chat.tool.mcp.begin/end`
 - 回合：`chat.turn.started`（建议新增）、`chat.turn.complete`
 - 会话：`chat.session.new`、`chat.session.resumed`、`chat.session.history`（仅首次回放骨架/回退用途）
@@ -252,11 +255,17 @@ Provider 常见事件到 `chat.*` 的映射（WS、resume 同源）：
   - params：`{ text }`。
   - 说明：若同一 turn 连续出现多条 `agent_message`，按出现顺序各自渲染为该 turn 下的独立 assistant 气泡；最后一条视为该 turn 的最终输出。
 
-- agent_reasoning_delta（event_msg） → chat.reasoning.delta
-  - params：`{ delta }`。
+- reasoning_content_delta（event_msg） → chat.reasoning.delta
+  - params：`{ delta, item_id? }`。legacy `agent_reasoning_delta` 亦映射至此。
 
-- agent_reasoning（event_msg） → chat.reasoning.end
-  - params：`{ text }`。
+- reasoning_raw_content_delta（event_msg） → chat.reasoning.raw_delta
+  - params：`{ delta, item_id? }`。legacy `agent_reasoning_raw_content` 亦映射至此。
+
+- item_started（event_msg, TurnItem::Reasoning）→ chat.reasoning.item_started
+  - params：`{ item_id }`。声明推理 item 生命周期起点。
+
+- item_completed（event_msg, TurnItem::Reasoning）→ chat.reasoning.item_completed + chat.reasoning.end
+  - params：`{ item_id, summary_text?, raw_content? }`。legacy `agent_reasoning` 同样映射为 `chat.reasoning.end`。
 
 - agent_reasoning_section_break（event_msg） → chat.reasoning.section_break（推荐）
   - 现状：若后端未产出该平台事件，可退化为向 `chat.reasoning.delta` 写入分隔符（例如 `"\n\n---\n\n"`）。
@@ -474,7 +483,7 @@ Store API（面向事件，简要）：
 - 会话：`setConversationId`、`reset`
 - Turn：`markTurnStarted(opts?)`、`completeTurn()`
 - 用户/助手：`setUserText(text)`、`appendAssistantDelta(delta)`、`completeAssistant(text?)`、`failAssistant(msg?)`、`abortAssistant()`
-- Reasoning：`appendReasoning(delta)`、`endReasoning(summary)`（`title=summarizeFirstLine(summary)`）
+- Reasoning：`appendReasoning(delta, { itemId, source })`、`markReasoningItemStarted(itemId)`、`markReasoningItemCompleted(itemId, { summary?, rawContent? })`、`endReasoning(summary, { itemId, rawContent })`（`title=summarizeFirstLine(summary)`）
 - 步骤：`addStep(kind, callId, title, {meta,tags,status,body})`、`appendStep(callId, text)`、`endStep(callId, patch)`
 - 快照：`loadFromHistory(history)`、`loadSnapshot(history, events)`（events 为归一化后的 `chat.*` 序列）
 

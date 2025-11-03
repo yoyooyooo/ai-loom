@@ -3,8 +3,8 @@ import { filter, map } from 'rxjs/operators'
 
 type SubRecord = { topic: string; filter: Record<string, unknown> }
 
-const eventsSubject = new Subject<{ method: string; params: any }>()
-const online$ = new BehaviorSubject<boolean>(true)
+const events$$ = new Subject<{ method: string; params: any }>()
+const online$$ = new BehaviorSubject<boolean>(true)
 let filters: SubRecord[] = []
 let subs: Array<{ unsubscribe: () => void }> = []
 // 在没有任何订阅者时发出的事件，暂存以便首个订阅者安装后立即回放，避免竞态丢失
@@ -23,7 +23,7 @@ function reset() {
 
 function setOnline(up: boolean) {
   onlineState = up ? 'up' : 'down'
-  online$.next(up)
+  online$$.next(up)
 }
 
 function matchTopic(topic: 'file' | 'tree' | 'annotations' | 'chat', ev: { method: string }) {
@@ -42,7 +42,7 @@ export const ws = {
     return onlineState
   },
   get online$() {
-    return online$.asObservable()
+    return online$$.asObservable()
   },
   get events$() {
     return new Observable<{ method: string; params: any }>((subscriber) => {
@@ -54,7 +54,7 @@ export const ws = {
           pendingWhenNoSubs = []
         }
       }
-      const sub = eventsSubject.asObservable().subscribe(subscriber)
+      const sub = events$$.asObservable().subscribe(subscriber)
       return () => sub.unsubscribe()
     })
   },
@@ -111,7 +111,7 @@ export const ws = {
   subscribeTopic$(topic: 'file' | 'tree' | 'annotations' | 'chat', filterObj?: any) {
     filters.push({ topic, filter: filterObj || {} })
     return new Observable<{ method: string; params: any }>((subscriber) => {
-      const sub = eventsSubject.subscribe((ev) => {
+      const sub = events$$.subscribe((ev) => {
         if (matchTopic(topic, ev)) subscriber.next(ev)
       })
       subs.push({ unsubscribe: () => sub.unsubscribe() })
@@ -120,14 +120,14 @@ export const ws = {
   },
 
   notification$(method: string) {
-    return eventsSubject.asObservable().pipe(
+    return events$$.asObservable().pipe(
       filter((ev) => ev.method === method),
       map((ev) => ev.params)
     )
   },
 
   codex$() {
-    return eventsSubject.asObservable().pipe(filter((ev) => ev.method.startsWith('codex/')))
+    return events$$.asObservable().pipe(filter((ev) => ev.method.startsWith('codex/')))
   },
   chat$() {
     return this.codex$()
@@ -137,7 +137,7 @@ export const ws = {
   __emit(method: string, params: any) {
     const ev = { method, params }
     if (subs.length === 0) pendingWhenNoSubs.push(ev)
-    eventsSubject.next(ev)
+    events$$.next(ev)
   },
   __queueResume(events: Array<{ method: string; params?: any }>) {
     resumeQueue = Array.isArray(events) ? events.slice() : []

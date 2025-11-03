@@ -4,11 +4,17 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use codex_app_server_protocol::{NewConversationParams, ResumeConversationParams};
-use codex_protocol::protocol::AskForApproval;
+use codex_app_server_protocol::{
+    InputItem, NewConversationParams, ResumeConversationParams, SendUserTurnParams,
+};
+use codex_protocol::{
+    config_types::{ReasoningEffort, ReasoningSummary, SandboxMode},
+    protocol::{AskForApproval, SandboxPolicy},
+    ConversationId,
+};
 use serde_json::{json, Map, Value};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, Duration};
 
 use super::{
@@ -25,23 +31,199 @@ struct SessionHandle {
     cwd: PathBuf,
     created_ms: u64,
     last_used_ms: u64,
+    turn: CurrentTurnConfig,
+}
+
+#[derive(Clone)]
+struct CurrentTurnConfig {
+    model: Option<String>,
+    approval_policy: AskForApproval,
+    sandbox_policy: SandboxPolicy,
+    cwd: PathBuf,
+    effort: Option<ReasoningEffort>,
+    summary: ReasoningSummary,
+}
+
+impl CurrentTurnConfig {
+    fn new(
+        cwd: PathBuf,
+        model: Option<String>,
+        approval_policy: Option<AskForApproval>,
+        sandbox_mode: Option<SandboxMode>,
+        effort: Option<ReasoningEffort>,
+    ) -> Self {
+        let approval = approval_policy.unwrap_or(AskForApproval::OnRequest);
+        let sandbox_policy = match sandbox_mode {
+            Some(SandboxMode::DangerFullAccess) => SandboxPolicy::DangerFullAccess,
+            Some(SandboxMode::ReadOnly) => SandboxPolicy::new_read_only_policy(),
+            Some(SandboxMode::WorkspaceWrite) => SandboxPolicy::new_workspace_write_policy(),
+            None => SandboxPolicy::new_workspace_write_policy(),
+        };
+        Self {
+            model,
+            approval_policy: approval,
+            sandbox_policy,
+            cwd,
+            effort,
+            summary: ReasoningSummary::Auto,
+        }
+    }
+
+    fn update_from_resume(
+        cwd: PathBuf,
+        model: Option<String>,
+        effort: Option<ReasoningEffort>,
+    ) -> Self {
+        Self {
+            model,
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            cwd,
+            effort,
+            summary: ReasoningSummary::Auto,
+        }
+    }
+
+    fn merged_with_turn(
+        &self,
+        conversation_id: &str,
+        turn: &crate::ConversationTurn,
+    ) -> Result<(Self, SendUserTurnParams), ProviderError> {
+        let mut next = self.clone();
+
+        if let Some(cwd_override) = turn.cwd.clone() {
+            if !cwd_override.as_os_str().is_empty() {
+                next.cwd = cwd_override;
+            }
+        }
+
+        if let Some(model_override) = normalize_string(turn.model.clone()) {
+            next.model = Some(model_override);
+        }
+
+        if let Some(approval) = turn.approval_policy {
+            next.approval_policy = approval;
+        }
+
+        if let Some(effort) = turn.effort {
+            next.effort = Some(effort);
+        }
+
+        if let Some(summary) = turn.summary.clone() {
+            next.summary = summary;
+        }
+
+        if let Some(sandbox) = &turn.sandbox {
+            next.sandbox_policy = merge_sandbox_policy(&next.sandbox_policy, sandbox, &next.cwd);
+        }
+
+        let model = next.model.clone().ok_or_else(|| {
+            ProviderError::InvalidRequest("model is required for send_user_turn".into())
+        })?;
+
+        let conversation_id = ConversationId::from_string(conversation_id)
+            .map_err(|e| ProviderError::InvalidRequest(format!("invalid conversation id: {e}")))?;
+
+        let params = SendUserTurnParams {
+            conversation_id,
+            items: vec![InputItem::Text {
+                text: turn.text.clone(),
+            }],
+            cwd: next.cwd.clone(),
+            approval_policy: next.approval_policy,
+            sandbox_policy: next.sandbox_policy.clone(),
+            model,
+            effort: next.effort,
+            summary: next.summary,
+        };
+
+        Ok((next, params))
+    }
+}
+
+fn normalize_string(input: Option<String>) -> Option<String> {
+    input.and_then(|value| {
+        let trimmed = value.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    })
+}
+
+fn merge_sandbox_policy(
+    current: &SandboxPolicy,
+    overrides: &crate::SandboxOverrides,
+    cwd: &Path,
+) -> SandboxPolicy {
+    match overrides.mode {
+        SandboxMode::DangerFullAccess => SandboxPolicy::DangerFullAccess,
+        SandboxMode::ReadOnly => SandboxPolicy::new_read_only_policy(),
+        SandboxMode::WorkspaceWrite => {
+            let mut writable_roots =
+                overrides
+                    .writable_roots
+                    .clone()
+                    .unwrap_or_else(|| match current {
+                        SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+                            writable_roots.clone()
+                        }
+                        _ => Vec::new(),
+                    });
+            if writable_roots.is_empty() {
+                writable_roots.push(cwd.to_path_buf());
+            }
+            let (network_access_default, exclude_tmpdir_default, exclude_slash_tmp_default) =
+                match current {
+                    SandboxPolicy::WorkspaceWrite {
+                        network_access,
+                        exclude_tmpdir_env_var,
+                        exclude_slash_tmp,
+                        ..
+                    } => (*network_access, *exclude_tmpdir_env_var, *exclude_slash_tmp),
+                    _ => (false, false, false),
+                };
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots,
+                network_access: overrides.network_access.unwrap_or(network_access_default),
+                exclude_tmpdir_env_var: overrides
+                    .exclude_tmpdir_env_var
+                    .unwrap_or(exclude_tmpdir_default),
+                exclude_slash_tmp: overrides
+                    .exclude_slash_tmp
+                    .unwrap_or(exclude_slash_tmp_default),
+            }
+        }
+    }
 }
 
 struct RuntimeObserverImpl {
     generating: Arc<Mutex<HashMap<String, bool>>>,
     hub: Option<SharedEventHub>,
+    touch_tx: mpsc::UnboundedSender<String>,
 }
 
 impl RuntimeObserverImpl {
-    fn new(generating: Arc<Mutex<HashMap<String, bool>>>, hub: Option<SharedEventHub>) -> Self {
-        Self { generating, hub }
+    fn new(
+        generating: Arc<Mutex<HashMap<String, bool>>>,
+        hub: Option<SharedEventHub>,
+        touch_tx: mpsc::UnboundedSender<String>,
+    ) -> Self {
+        Self {
+            generating,
+            hub,
+            touch_tx,
+        }
     }
 
     pub(crate) fn set(&self, conversation_id: &str, generating: bool) {
         let conversation_id = conversation_id.to_string();
         let generating_map = self.generating.clone();
         let hub = self.hub.clone();
+        let touch_tx = self.touch_tx.clone();
         tokio::spawn(async move {
+            let _ = touch_tx.send(conversation_id.clone());
             let mut guard = generating_map.lock().await;
             let previous = guard.get(&conversation_id).copied().unwrap_or(false);
             if generating {
@@ -89,6 +271,16 @@ impl RuntimeEventObserver for RuntimeObserverImpl {
             | "chat.message.failed"
             | "chat.message.aborted"
             | "chat.turn.complete" => self.set(cid, false),
+            "chat.message.delta"
+            | "chat.reasoning.delta"
+            | "chat.tool.exec.begin"
+            | "chat.tool.exec.output"
+            | "chat.tool.exec.end"
+            | "chat.tool.patch.begin"
+            | "chat.tool.patch.end"
+            | "chat.tool.mcp.begin"
+            | "chat.tool.mcp.end"
+            | "chat.info.plan_update" => self.set(cid, true),
             "chat.info.runtime.generating" => {
                 let value = params
                     .get("generating")
@@ -111,6 +303,7 @@ pub struct CodexProvider {
     gc_interval_ms: u64,
     generating: Arc<Mutex<HashMap<String, bool>>>,
     runtime_observer: Arc<RuntimeObserverImpl>,
+    ensure_guards: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
 }
 
 impl CodexProvider {
@@ -129,7 +322,12 @@ impl CodexProvider {
             .unwrap_or(5_000);
 
         let generating = Arc::new(Mutex::new(HashMap::new()));
-        let runtime_observer = Arc::new(RuntimeObserverImpl::new(generating.clone(), hub.clone()));
+        let (touch_tx, touch_rx) = mpsc::unbounded_channel();
+        let runtime_observer = Arc::new(RuntimeObserverImpl::new(
+            generating.clone(),
+            hub.clone(),
+            touch_tx,
+        ));
         let provider = Arc::new(Self {
             workspace_root,
             hub,
@@ -139,8 +337,10 @@ impl CodexProvider {
             gc_interval_ms,
             generating,
             runtime_observer,
+            ensure_guards: Arc::new(Mutex::new(HashMap::new())),
         });
         provider.spawn_background_tasks();
+        provider.spawn_touch_worker(touch_rx);
         provider
     }
 
@@ -155,6 +355,15 @@ impl CodexProvider {
                 sleep(interval).await;
                 provider.gc_tick().await;
                 provider.broadcast_session_runtime().await;
+            }
+        });
+    }
+
+    fn spawn_touch_worker(self: &Arc<Self>, mut rx: mpsc::UnboundedReceiver<String>) {
+        let provider = Arc::clone(self);
+        tokio::spawn(async move {
+            while let Some(conversation_id) = rx.recv().await {
+                provider.mark_used(&conversation_id).await;
             }
         });
     }
@@ -258,6 +467,51 @@ impl CodexProvider {
         removed
     }
 
+    async fn drop_handle_with_reason(
+        &self,
+        conversation_id: &str,
+        reason: &str,
+    ) -> Option<SessionHandle> {
+        if let Some(handle) = self.remove_handle(conversation_id).await {
+            self.broadcast_child_down(&handle, conversation_id, reason)
+                .await;
+            Some(handle)
+        } else {
+            None
+        }
+    }
+
+    async fn alive_handles(&self) -> Vec<(String, SessionHandle)> {
+        let snapshot: Vec<(String, SessionHandle)> = {
+            let guard = self.sessions.lock().await;
+            guard
+                .iter()
+                .map(|(cid, handle)| (cid.clone(), handle.clone()))
+                .collect()
+        };
+        if snapshot.is_empty() {
+            return Vec::new();
+        }
+
+        let mut alive = Vec::with_capacity(snapshot.len());
+        for (cid, handle) in snapshot.into_iter() {
+            if handle.client.is_alive().await {
+                alive.push((cid, handle));
+            } else {
+                self.drop_handle_with_reason(&cid, "process_gone").await;
+            }
+        }
+        alive
+    }
+
+    async fn conversation_mutex(&self, conversation_id: &str) -> Arc<Mutex<()>> {
+        let mut guard = self.ensure_guards.lock().await;
+        guard
+            .entry(conversation_id.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
     async fn handle(&self, conversation_id: &str) -> Option<SessionHandle> {
         let guard = self.sessions.lock().await;
         guard.get(conversation_id).cloned()
@@ -296,10 +550,10 @@ impl CodexProvider {
     }
 
     async fn ensure_internal(&self, conversation_id: &str) -> Result<(), ProviderError> {
+        let convo_lock = self.conversation_mutex(conversation_id).await;
+        let _guard = convo_lock.lock().await;
         if let Some(mut handle) = self.handle(conversation_id).await {
-            if !handle.client.is_alive().await {
-                self.remove_handle(conversation_id).await;
-            } else {
+            if handle.client.is_alive().await {
                 let app = handle.client.app();
                 app.ensure_listener_resilient(conversation_id)
                     .await
@@ -308,6 +562,9 @@ impl CodexProvider {
                 self.insert_handle(conversation_id.to_string(), handle)
                     .await;
                 return Ok(());
+            } else {
+                self.drop_handle_with_reason(conversation_id, "process_gone")
+                    .await;
             }
         }
 
@@ -329,7 +586,7 @@ impl CodexProvider {
         workspace_root: &Path,
     ) -> Result<(String, SessionHandle), ProviderError> {
         let app = client.app();
-        let path = lookup_path_by_conversation_id(&app, conversation_id)
+        let path = lookup_path_by_conversation_id(Some(app.clone()), conversation_id)
             .await
             .ok_or_else(|| {
                 ProviderError::Other(format!(
@@ -362,26 +619,34 @@ impl CodexProvider {
                 cwd: workspace_root.to_path_buf(),
                 created_ms: Self::now_millis(),
                 last_used_ms: Self::now_millis(),
+                turn: CurrentTurnConfig::update_from_resume(
+                    workspace_root.to_path_buf(),
+                    Some(resp.model.clone()),
+                    None,
+                ),
             },
         ))
     }
 
     async fn gc_tick(&self) {
-        let now = Self::now_millis();
-        let handles: Vec<(String, SessionHandle)> = {
-            let guard = self.sessions.lock().await;
-            guard
-                .iter()
-                .map(|(cid, handle)| (cid.clone(), handle.clone()))
-                .collect()
-        };
+        let handles = self.alive_handles().await;
         if handles.is_empty() {
             return;
         }
 
+        let now = Self::now_millis();
+        let generating_map = {
+            let guard = self.generating.lock().await;
+            guard.clone()
+        };
         let mut to_remove: Vec<(String, SessionHandle)> = handles
             .iter()
-            .filter(|(_, handle)| now.saturating_sub(handle.last_used_ms) > self.idle_ms_threshold)
+            .filter(|(cid, handle)| {
+                if generating_map.get(cid).copied().unwrap_or(false) {
+                    return false;
+                }
+                now.saturating_sub(handle.last_used_ms) > self.idle_ms_threshold
+            })
             .cloned()
             .collect();
 
@@ -389,6 +654,9 @@ impl CodexProvider {
             let mut sorted = handles.clone();
             sorted.sort_by_key(|(_, handle)| handle.last_used_ms);
             for item in sorted.into_iter() {
+                if generating_map.get(&item.0).copied().unwrap_or(false) {
+                    continue;
+                }
                 if to_remove.iter().any(|(cid, _)| cid == &item.0) {
                     continue;
                 }
@@ -403,33 +671,20 @@ impl CodexProvider {
             return;
         }
 
-        {
-            let mut guard = self.sessions.lock().await;
-            for (cid, _) in to_remove.iter() {
-                guard.remove(cid);
+        for (cid, _) in to_remove.into_iter() {
+            if let Some(handle) = self.drop_handle_with_reason(&cid, "idle_gc").await {
+                let _ = handle.client.terminate().await;
             }
-        }
-
-        for (cid, handle) in to_remove.into_iter() {
-            self.runtime_observer.set(&cid, false);
-            self.broadcast_child_down(&handle, &cid, "idle_gc").await;
-            let _ = handle.client.terminate().await;
         }
     }
 
     async fn broadcast_session_runtime(&self) {
         if let Some(h) = &self.hub {
-            let now = Self::now_millis();
-            let handles: Vec<(String, SessionHandle)> = {
-                let guard = self.sessions.lock().await;
-                guard
-                    .iter()
-                    .map(|(cid, handle)| (cid.clone(), handle.clone()))
-                    .collect()
-            };
+            let handles = self.alive_handles().await;
             if handles.is_empty() {
                 return;
             }
+            let now = Self::now_millis();
             let generating_map = {
                 let guard = self.generating.lock().await;
                 guard.clone()
@@ -474,20 +729,29 @@ impl StandardProvider for CodexProvider {
         let workspace_root = self.workspace_root(None);
         let client = self.codex_client(&workspace_root).await?;
         let params = self.build_params(config, &workspace_root);
+        let spawn_params = params.clone();
         let app = client.app();
         let resp = app
-            .new_conversation(params)
+            .new_conversation(spawn_params)
             .await
             .map_err(|e| ProviderError::Other(e.to_string()))?;
         let conversation_id = resp.conversation_id.to_string();
         app.ensure_listener_resilient(&conversation_id)
             .await
             .map_err(|e| ProviderError::Other(e.to_string()))?;
+        let turn_config = CurrentTurnConfig::new(
+            workspace_root.clone(),
+            Some(resp.model.clone()),
+            params.approval_policy,
+            params.sandbox,
+            resp.reasoning_effort,
+        );
         let handle = SessionHandle {
             client: client.clone(),
             cwd: workspace_root.clone(),
             created_ms: Self::now_millis(),
             last_used_ms: Self::now_millis(),
+            turn: turn_config,
         };
         self.insert_handle(conversation_id.clone(), handle).await;
         store_conversation_id(&conversation_id);
@@ -521,6 +785,31 @@ impl StandardProvider for CodexProvider {
         }
     }
 
+    async fn send_user_turn(
+        &self,
+        conversation_id: &str,
+        turn: crate::ConversationTurn,
+    ) -> Result<(), ProviderError> {
+        self.ensure_internal(conversation_id).await?;
+        if let Some(mut handle) = self.handle(conversation_id).await {
+            let (next_config, params) = handle.turn.merged_with_turn(conversation_id, &turn)?;
+            let app = handle.client.app();
+            app.send_user_turn(params)
+                .await
+                .map_err(|e| ProviderError::Other(e.to_string()))?;
+            handle.turn = next_config;
+            handle.last_used_ms = Self::now_millis();
+            self.insert_handle(conversation_id.to_string(), handle)
+                .await;
+            Ok(())
+        } else {
+            Err(ProviderError::Unavailable(format!(
+                "conversation {:?} not available",
+                conversation_id
+            )))
+        }
+    }
+
     async fn interrupt(&self, conversation_id: &str) -> Result<(), ProviderError> {
         if let Some(handle) = self.handle(conversation_id).await {
             handle
@@ -539,9 +828,10 @@ impl StandardProvider for CodexProvider {
     }
 
     async fn terminate(&self, conversation_id: &str) -> Result<(), ProviderError> {
-        if let Some(handle) = self.remove_handle(conversation_id).await {
-            self.broadcast_child_down(&handle, conversation_id, "terminate")
-                .await;
+        if let Some(handle) = self
+            .drop_handle_with_reason(conversation_id, "terminate")
+            .await
+        {
             handle.client.terminate().await;
             Ok(())
         } else {
@@ -550,23 +840,27 @@ impl StandardProvider for CodexProvider {
     }
 
     async fn is_alive(&self, conversation_id: &str) -> Result<bool, ProviderError> {
-        Ok(self.handle(conversation_id).await.is_some())
+        if let Some(handle) = self.handle(conversation_id).await {
+            if handle.client.is_alive().await {
+                Ok(true)
+            } else {
+                self.drop_handle_with_reason(conversation_id, "process_gone")
+                    .await;
+                Ok(false)
+            }
+        } else {
+            Ok(false)
+        }
     }
 
     async fn runtime_snapshots(&self) -> Vec<RuntimeSnapshot> {
-        let now = Self::now_millis();
-        let handles: Vec<(String, SessionHandle)> = {
-            let guard = self.sessions.lock().await;
-            guard
-                .iter()
-                .map(|(cid, handle)| (cid.clone(), handle.clone()))
-                .collect()
-        };
+        let handles = self.alive_handles().await;
         let generating_map = {
             let guard = self.generating.lock().await;
             guard.clone()
         };
         let mut out = Vec::with_capacity(handles.len());
+        let now = Self::now_millis();
         for (cid, handle) in handles.into_iter() {
             let idle_ms = now.saturating_sub(handle.last_used_ms);
             let pid = handle.client.pid().await;

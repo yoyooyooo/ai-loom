@@ -4,9 +4,14 @@
 //! 能够以同样的生命周期接口被 RuntimeRegistry 管理。
 
 use async_trait::async_trait;
+use codex_protocol::{
+    config_types::{ReasoningEffort, ReasoningSummary, SandboxMode},
+    protocol::AskForApproval,
+};
 use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
@@ -79,6 +84,27 @@ pub struct SpawnConfig {
     pub options: Value,
 }
 
+/// 回合级覆盖配置。
+#[derive(Debug, Clone)]
+pub struct SandboxOverrides {
+    pub mode: SandboxMode,
+    pub writable_roots: Option<Vec<PathBuf>>,
+    pub network_access: Option<bool>,
+    pub exclude_tmpdir_env_var: Option<bool>,
+    pub exclude_slash_tmp: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConversationTurn {
+    pub text: String,
+    pub model: Option<String>,
+    pub approval_policy: Option<AskForApproval>,
+    pub sandbox: Option<SandboxOverrides>,
+    pub effort: Option<ReasoningEffort>,
+    pub summary: Option<ReasoningSummary>,
+    pub cwd: Option<PathBuf>,
+}
+
 /// 统一 Provider 接口。
 #[async_trait]
 pub trait StandardProvider: Send + Sync {
@@ -97,6 +123,19 @@ pub trait StandardProvider: Send + Sync {
         conversation_id: &str,
         text: &str,
     ) -> Result<(), ProviderError>;
+
+    /// 发送带有配置覆盖的用户回合。
+    async fn send_user_turn(
+        &self,
+        conversation_id: &str,
+        turn: ConversationTurn,
+    ) -> Result<(), ProviderError> {
+        let _ = conversation_id;
+        let _ = turn;
+        Err(ProviderError::Unsupported(
+            "send_user_turn not supported".into(),
+        ))
+    }
 
     /// 中断会话。
     async fn interrupt(&self, conversation_id: &str) -> Result<(), ProviderError>;

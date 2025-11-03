@@ -1,7 +1,7 @@
 'use client'
 
 import { createContext, useContext, useMemo, useState, useEffect, type ReactNode } from 'react'
-import { Command } from 'lucide-react'
+import { Command, Settings } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ModuleNavItem, SidebarModuleConfig } from '@/components/app-sidebar-config'
 import { isModuleEnabled } from '@/components/app-sidebar-config'
@@ -13,6 +13,8 @@ export type AppSidebarProps = {
   modules: SidebarModuleConfig
   activeModuleId?: string
   onNavigate: (path: string, item: ModuleNavItem) => void
+  onOpenSettings?: () => void
+  settingsActive?: boolean
   children?: ReactNode
   className?: string
 }
@@ -36,17 +38,24 @@ export function AppSidebar({
   modules,
   activeModuleId,
   onNavigate,
+  onOpenSettings,
+  settingsActive,
   children,
   className
 }: AppSidebarProps) {
   const enabledModules = modules.filter(isModuleEnabled)
-  const active = enabledModules.find((item) => item.id === activeModuleId) ?? enabledModules[0]
   const isMobile = useIsMobile()
   const [openMobile, setOpenMobile] = useState(false)
 
   useEffect(() => {
     if (!isMobile) setOpenMobile(false)
   }, [isMobile])
+
+  const handleOpenSettings = () => {
+    if (!onOpenSettings) return
+    if (isMobile) setOpenMobile(false)
+    onOpenSettings()
+  }
 
   const context = useMemo<AppSidebarContextValue>(
     () => ({
@@ -77,7 +86,7 @@ export function AppSidebar({
         >
           <PrimaryNavigation
             modules={enabledModules}
-            activeModuleId={active?.id}
+            activeModuleId={activeModuleId}
             onNavigate={(path, item) => {
               if (isMobile) setOpenMobile(false)
               onNavigate(path, item)
@@ -89,6 +98,15 @@ export function AppSidebar({
             <div className={cn('mb-2 flex', isMobile ? '' : 'justify-center')}>
               <GlobalGeneratingIndicator showLabel={isMobile} />
             </div>
+            {onOpenSettings ? (
+              <div className={cn('mb-2 flex', isMobile ? '' : 'justify-center')}>
+                <SettingsButton
+                  active={Boolean(settingsActive)}
+                  showLabel={isMobile}
+                  onClick={handleOpenSettings}
+                />
+              </div>
+            ) : null}
             <ThemeToggle showLabel={isMobile} className={isMobile ? undefined : 'mx-auto'} />
           </div>
         </aside>
@@ -176,8 +194,30 @@ function PrimaryNavigation({
   )
 }
 
-type ThemeToggleButtonProps = {
-  isMobile: boolean
+type SettingsButtonProps = {
+  active: boolean
+  showLabel: boolean
+  onClick: () => void
+}
+
+function SettingsButton({ active, showLabel, onClick }: SettingsButtonProps) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      aria-label="设置"
+      className={cn(
+        'inline-flex items-center justify-center gap-2 rounded-full border border-border/60 bg-background text-xs text-muted-foreground shadow-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        showLabel ? 'w-full justify-start px-3 py-2' : 'size-10',
+        active ? 'border-primary/70 text-foreground shadow-md' : ''
+      )}
+      title="设置"
+    >
+      <Settings className={showLabel ? 'size-4' : 'size-5'} />
+      {showLabel ? <span className="text-xs font-medium">设置</span> : null}
+    </button>
+  )
 }
 
 export default AppSidebar

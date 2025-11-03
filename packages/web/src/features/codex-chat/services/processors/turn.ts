@@ -10,6 +10,8 @@ function parseTs(s?: string): number {
 }
 
 export function handleTurn(method: string, params: any) {
+  const eventCid =
+    typeof (params as any)?.conversationId === 'string' ? (params as any).conversationId : undefined
   switch (method) {
     case 'chat.turn.started': {
       const startedAt =
@@ -18,6 +20,26 @@ export function handleTurn(method: string, params: any) {
           : typeof params?.ts === 'string'
             ? params.ts
             : undefined
+      const turnSeqRaw = (params as any)?.turnSeq
+      const turnSeq = typeof turnSeqRaw === 'number' ? turnSeqRaw : Number(turnSeqRaw)
+      if (Number.isFinite(turnSeq)) {
+        try {
+          const store: any = (useChatTurnStore as any).getState?.()
+          const slice = store
+            ? eventCid
+              ? chatTurnSelectors.sliceById(eventCid)(store)
+              : chatTurnSelectors.currentSlice(store)
+            : undefined
+          const turns: any[] = Array.isArray(slice?.turns) ? slice.turns : []
+          const existing = turns.find((t: any) => Number(t?.seq) === Number(turnSeq))
+          if (existing) {
+            const status = String(existing.status || '').toLowerCase()
+            const isClosed = ['completed', 'failed', 'aborted'].includes(status)
+            if (isClosed) return true
+          }
+        } catch {}
+      }
+
       try {
         const store: any = (useChatTurnStore as any).getState?.()
         const slice = store ? chatTurnSelectors.currentSlice(store) : undefined
@@ -28,13 +50,13 @@ export function handleTurn(method: string, params: any) {
 
         // 已有活跃/streaming → 仅补 startedAt
         if (hasActive || hasStreaming) {
-          chatTurnActions.markTurnStarted({ startedAt })
+          chatTurnActions.markTurnStarted({ startedAt, turnSeq })
           return true
         }
 
         // 无任何 turn → 开启一轮
         if (!last) {
-          chatTurnActions.markTurnStarted({ startedAt })
+          chatTurnActions.markTurnStarted({ startedAt, turnSeq })
           return true
         }
 
@@ -51,11 +73,11 @@ export function handleTurn(method: string, params: any) {
         }
 
         // 其它情况：开启新一轮
-        chatTurnActions.markTurnStarted({ startedAt })
+        chatTurnActions.markTurnStarted({ startedAt, turnSeq })
         return true
       } catch {
         // 异常时保守开启
-        chatTurnActions.markTurnStarted({ startedAt })
+        chatTurnActions.markTurnStarted({ startedAt, turnSeq })
         return true
       }
     }

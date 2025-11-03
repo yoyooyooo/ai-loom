@@ -15,12 +15,17 @@ import { __emit, __resetWsMock } from '@/lib/ws/singleton'
 
 describe('UI：Working 区中的 thinking 预览（实时路径）', () => {
   let stop: (() => void) | undefined
+  let deltaSub: ReturnType<typeof ensureDeltaPipelines> | null = null
   beforeEach(() => {
     chatTurnActions.reset()
     __resetWsMock()
+    deltaSub?.unsubscribe?.()
+    deltaSub = null
   })
   afterEach(() => {
     if (stop) stop()
+    deltaSub?.unsubscribe?.()
+    deltaSub = null
     chatTurnActions.reset()
     __resetWsMock()
   })
@@ -28,7 +33,7 @@ describe('UI：Working 区中的 thinking 预览（实时路径）', () => {
   it('仅 reasoning.delta（无步骤）→ Working 折叠区内显示 thinking（不显示 [streaming] 文本）', async () => {
     stop = subscribeChatEvents()
     chatTurnActions.setConversationId('conv-think-prev')
-    ensureDeltaPipelines()
+    deltaSub = ensureDeltaPipelines()
     __emit('chat.reasoning.delta', { conversationId: 'conv-think-prev', delta: 'Outline' })
     await new Promise((r) => setTimeout(r, 60))
     let st = useChatTurnStore.getState()
