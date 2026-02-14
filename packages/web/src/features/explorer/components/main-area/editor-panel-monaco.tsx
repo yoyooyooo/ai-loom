@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import MonacoViewer, { ViewerHandle } from '@/components/editor/MonacoViewer'
 import { Textarea } from '@/components/ui/textarea'
 import type { AnchorRect, ViewerSelection } from '@/components/editor/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { listAnnotations, verifyAnnotations, createAnnotation, updateAnnotation, deleteAnnotation } from '@/features/explorer/api/annotations'
-import { fetchFileChunk } from '@/features/explorer/api/files'
+import { fetchFileChunk, saveFile } from '@/features/explorer/api/files'
 import type { Annotation, FileChunk } from '@/lib/api/types'
 import { useAppStore } from '@/stores/app'
 import { useExplorerStore } from '@/stores/explorer'
@@ -52,6 +52,12 @@ export default function EditorPanelMonaco() {
   const lastEditedRef = useRef<Map<string, Annotation>>(new Map())
   const activeAnnIdRef = useRef<string | null>(null)
   const [toolbarMeasureTick, setToolbarMeasureTick] = useState(0)
+  
+  // 可编辑模式的状态
+  const [editorMode, setEditorMode] = useState<'view' | 'edit'>('view')
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  const [originalContent, setOriginalContent] = useState<string>('')
+  const [currentContent, setCurrentContent] = useState<string>('')
 
   // Editor 模式：锁定一次性放置方向，避免滚动/测量细微变化导致上下翻转
   const editorPlacementRef = useRef<'above' | 'below' | null>(null)
@@ -89,6 +95,16 @@ export default function EditorPanelMonaco() {
 
   const onLoaded = (chunk: FileChunk) => {
     setChunkInfo({ start: chunk.startLine, end: chunk.endLine, total: chunk.totalLines })
+    
+    // 在可编辑模式下，跟踪内容变化
+    if (editorMode === 'edit') {
+      if (originalContent === '') {
+        setOriginalContent(chunk.content)
+        setCurrentContent(chunk.content)
+        setHasUnsavedChanges(false)
+      }
+    }
+    
     const pj = consumePendingJump()
     if (pj && selectedPath) {
       viewerRef.current?.reveal?.(pj.startLine, pj.endLine, pj.startColumn, pj.endColumn)
@@ -267,6 +283,78 @@ export default function EditorPanelMonaco() {
     setActiveAnnId(null)
   }
 
+  // 内容变更处理
+  const onContentChange = (content: string) => {
+    setCurrentContent(content)
+    setHasUnsavedChanges(content !== originalContent)
+  }
+
+  // 保存文件
+  const doSave = useCallback(async () => {
+    if (!selectedPath || !hasUnsavedChanges) return
+    try {
+      await saveFile({ path: selectedPath, content: currentContent })
+      setOriginalContent(currentContent)
+      setHasUnsavedChanges(false)
+      toast.success('保存成功')
+      // 刷新相关查询
+      await qc.invalidateQueries({ queryKey: ['file', selectedPath] })
+    } catch (err: any) {
+      const msg = String(err?.message || '')
+      if (msg.startsWith('CONFLICT:')) {
+        toast.error('保存冲突：文件已被外部修改，请刷新后重试')
+      } else {
+        toast.error('保存失败：' + msg)
+      }
+    }
+  }, [selectedPath, hasUnsavedChanges, currentContent, qc])
+
+  // 切换编辑模式
+  const toggleEditMode = () => {
+    if (editorMode === 'view') {
+      setEditorMode('edit')
+      setOriginalContent('')  // 下次加载时会重新设置
+    } else {
+      if (hasUnsavedChanges) {
+        if (confirm('有未保存的更改，确定要退出编辑模式吗？')) {
+          setEditorMode('view')
+          setHasUnsavedChanges(false)
+          setOriginalContent('')
+          setCurrentContent('')
+        }
+      } else {
+        setEditorMode('view')
+        setOriginalContent('')
+        setCurrentContent('')
+      }
+    }
+  }
+
+  // 重置文件时重置编辑状态
+  useEffect(() => {
+    setEditorMode('view')
+    setHasUnsavedChanges(false)
+    setOriginalContent('')
+    setCurrentContent('')
+  }, [selectedPath])
+
+  // 监听Ctrl+S保存快捷键
+  useEffect(() => {
+    if (editorMode !== 'edit') return
+    
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault()
+        if (hasUnsavedChanges) {
+          void doSave()
+        }
+      }
+    }
+    
+    document.addEventListener('keydown', onKeyDown, { capture: true })
+    return () => document.removeEventListener('keydown', onKeyDown, { capture: true })
+  }, [editorMode, hasUnsavedChanges, doSave])
+
   if (!selectedPath) return null
 
   return (
@@ -377,6 +465,50 @@ export default function EditorPanelMonaco() {
         </div>
       )}
 
+      {/* 编辑模式控制栏 */}
+      {editorMode === 'edit' && (
+        <div className="shrink-0 flex items-center justify-between bg-muted/30 px-3 py-2 border-b">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">编辑模式</span>
+            {hasUnsavedChanges && (
+              <span className="text-xs text-orange-600 dark:text-orange-400">有未保存的更改</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              className="px-2 py-1 text-sm border rounded hover:bg-background/80"
+              onClick={doSave}
+              disabled={!hasUnsavedChanges}
+            >
+              保存 (Ctrl+S)
+            </button>
+            <button
+              className="px-2 py-1 text-sm border rounded hover:bg-background/80"
+              onClick={toggleEditMode}
+            >
+              退出编辑
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 查看模式控制栏 */}
+      {editorMode === 'view' && (
+        <div className="shrink-0 flex items-center justify-between bg-muted/10 px-3 py-2 border-b">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">查看+标注模式</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              className="px-2 py-1 text-sm border rounded hover:bg-background/80"
+              onClick={toggleEditMode}
+            >
+              进入编辑
+            </button>
+          </div>
+        </div>
+      )}
+
       <MonacoViewer
         ref={viewerRef}
         path={selectedPath}
@@ -384,6 +516,8 @@ export default function EditorPanelMonaco() {
         maxLines={pageSize}
         reloadToken={revealNonce}
         topPadLines={3}
+        editable={editorMode === 'edit'}
+        onContentChange={onContentChange}
         fetchChunk={fetchFileChunk}
         onLoaded={onLoaded}
         onSelectionChange={onSelectionChange}
